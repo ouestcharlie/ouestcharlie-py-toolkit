@@ -56,6 +56,59 @@ def _exif_rational_to_float(r: str) -> float:
     return int(n) / int(d)
 
 
+# ---------------------------------------------------------------------------
+# EXIF → XMP _extra mapping
+# ---------------------------------------------------------------------------
+
+# Maps pyexiv2 key prefixes to their XMP namespace URIs.
+_EXIF_TO_XMP_NS: dict[str, str] = {
+    "Exif.Image.": "http://ns.adobe.com/tiff/1.0/",
+    "Exif.Photo.": "http://ns.adobe.com/exif/1.0/",
+}
+
+# Keys consumed by typed fields, internal JPEG structure, or binary blobs.
+_EXIF_EXTRA_SKIP: frozenset[str] = frozenset({
+    # Typed fields
+    "Exif.Image.Make",
+    "Exif.Image.Model",
+    "Exif.Image.Orientation",
+    "Exif.Photo.DateTimeOriginal",
+    "Exif.Image.DateTime",
+    "Exif.Photo.SubSecTimeOriginal",
+    "Exif.Photo.SubSecTime",
+    "Exif.Photo.SubSecTimeDigitized",
+    "Exif.Photo.OffsetTimeOriginal",
+    "Exif.Photo.OffsetTime",
+    "Exif.Photo.OffsetTimeDigitized",
+    # Internal JPEG / IFD pointers
+    "Exif.Image.JPEGInterchangeFormat",
+    "Exif.Image.JPEGInterchangeFormatLength",
+    "Exif.Image.ExifTag",
+    "Exif.Image.GPSTag",
+    # Binary blobs
+    "Exif.Photo.MakerNote",
+    "Exif.Photo.UserComment",
+})
+
+
+def _map_exif_extra(exif: dict[str, str]) -> dict[str, str]:
+    """Map remaining EXIF fields to XMP Clark-notation keys for _extra.
+
+    Fields already modelled as typed XmpSidecar attributes, GPS coordinates,
+    internal JPEG structure pointers, and binary blobs are skipped.
+    """
+    extra: dict[str, str] = {}
+    for key, val in exif.items():
+        if key in _EXIF_EXTRA_SKIP or key.startswith("Exif.GPSInfo."):
+            continue
+        for prefix, ns_uri in _EXIF_TO_XMP_NS.items():
+            if key.startswith(prefix):
+                local = key[len(prefix):]
+                extra[f"{{{ns_uri}}}{local}"] = val
+                break
+    return extra
+
+
 def _parse_exif_gps(exif: dict[str, str]) -> tuple[float, float] | None:
     """Extract GPS from a pyexiv2 EXIF dict as (lat, lon) decimal degrees."""
     lat_ref = exif.get("Exif.GPSInfo.GPSLatitudeRef", "")
@@ -161,4 +214,5 @@ class Photo:
             camera_model=camera_model,
             orientation=orientation,
             gps=gps,
+            _extra=_map_exif_extra(exif_data),
         )

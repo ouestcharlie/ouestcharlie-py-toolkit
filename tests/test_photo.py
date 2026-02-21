@@ -156,3 +156,19 @@ async def test_extract_exif_matches_ref():
     assert sidecar.date_taken is not None
     assert sidecar.date_taken.tzinfo is not None
     assert sidecar.date_taken.replace(tzinfo=None) == ref_date
+
+    # Cross-check _extra: compare simple scalar attributes present in both.
+    # Skip ref entries whose value begins with "<" — those are complex XMP
+    # child elements (rdf:Seq, structs) that Exiv2 serializes differently from
+    # raw EXIF strings.  Also skip keys absent from sidecar._extra (Exiv2 may
+    # emit XMP-only attributes that have no direct EXIF counterpart).
+    mismatches = {}
+    for key, ref_val in ref_sidecar._extra.items():
+        if ref_val.startswith("<"):
+            continue  # complex element — format differs
+        our_val = sidecar._extra.get(key)
+        if our_val is None:
+            continue  # key only in ref (XMP-only field)
+        if our_val != ref_val:
+            mismatches[key] = (our_val, ref_val)
+    assert mismatches == {}, f"_extra value mismatches: {mismatches}"
