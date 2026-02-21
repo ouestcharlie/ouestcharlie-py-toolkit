@@ -151,7 +151,11 @@ class XmpSidecar:
     camera_model: str | None = None
     orientation: int | None = None
     tags: list[str] = field(default_factory=list)
-    _raw_xml: str = ""  # preserved for round-tripping unknown fields / namespaces
+    # Unknown XMP attributes and child elements from third-party apps (Lightroom, darktable, …).
+    # Keys use Clark notation: "{ns_uri}localname".
+    # Values are either plain strings (for simple attributes) or XML-serialized strings (for
+    # structured child elements like bags/sequences, identifiable by a leading "<").
+    _extra: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

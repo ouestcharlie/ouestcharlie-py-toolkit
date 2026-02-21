@@ -211,9 +211,68 @@ def test_parse_xmp_tags():
     assert s.tags == ["vacation", "paris"]
 
 
-def test_parse_xmp_preserves_raw_xml():
+def test_parse_xmp_known_fields_not_in_extra():
+    """All fields in the sample XMP are known — _extra should be empty."""
     s = parse_xmp(_SAMPLE_XMP)
-    assert s._raw_xml == _SAMPLE_XMP
+    assert s._extra == {}
+
+
+_SAMPLE_XMP_WITH_EXTRAS = """\
+<?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+  <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+    <rdf:Description rdf:about=''
+      xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'
+      xmlns:xmp='http://ns.adobe.com/xmp/1.0/'
+      xmlns:lr='http://ns.adobe.com/lightroom/1.0/'
+      ouestcharlie:contentHash='sha256:abc123'
+      ouestcharlie:schemaVersion='1'
+      ouestcharlie:metadataVersion='1'
+      xmp:Rating='4'>
+      <lr:hierarchicalSubject>
+        <rdf:Bag>
+          <rdf:li>Europe|France|Paris</rdf:li>
+        </rdf:Bag>
+      </lr:hierarchicalSubject>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>"""
+
+
+def test_parse_xmp_preserves_unknown_attr():
+    """Unknown simple attributes (e.g. xmp:Rating) are stored in _extra."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
+    assert "{http://ns.adobe.com/xmp/1.0/}Rating" in s._extra
+    assert s._extra["{http://ns.adobe.com/xmp/1.0/}Rating"] == "4"
+
+
+def test_parse_xmp_preserves_unknown_child_element():
+    """Unknown child elements (e.g. lr:hierarchicalSubject bag) are stored in _extra."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
+    key = "{http://ns.adobe.com/lightroom/1.0/}hierarchicalSubject"
+    assert key in s._extra
+    assert s._extra[key].startswith("<")
+    assert "Paris" in s._extra[key]
+
+
+def test_serialize_xmp_roundtrip_preserves_extra():
+    """parse → serialize → parse preserves _extra fields.
+
+    Simple attribute values are compared exactly. Child element values are
+    compared by key presence and content, not exact whitespace, because ET
+    normalises indentation on re-serialization.
+    """
+    original = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
+    xml2 = serialize_xmp(original)
+    restored = parse_xmp(xml2)
+
+    assert set(restored._extra.keys()) == set(original._extra.keys())
+    # Simple attribute: exact match
+    assert restored._extra["{http://ns.adobe.com/xmp/1.0/}Rating"] == "4"
+    # Child element: content preserved (whitespace may differ after ET round-trip)
+    lr_key = "{http://ns.adobe.com/lightroom/1.0/}hierarchicalSubject"
+    assert "Paris" in restored._extra[lr_key]
 
 
 def test_parse_xmp_minimal():
@@ -239,7 +298,7 @@ def test_parse_xmp_invalid_xml():
     """Invalid XML returns a default XmpSidecar without raising."""
     s = parse_xmp("not valid xml <<<")
     assert s.content_hash is None
-    assert s._raw_xml == "not valid xml <<<"
+    assert s._extra == {}
 
 
 # ---------------------------------------------------------------------------

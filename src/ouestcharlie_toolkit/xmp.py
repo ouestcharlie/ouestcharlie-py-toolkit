@@ -30,19 +30,48 @@ _NS_DC = "http://purl.org/dc/elements/1.1/"
 _XPACKET_HEADER = "<?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
 _XPACKET_FOOTER = "\n<?xpacket end='w'?>"
 
-# Minimal well-formed XMP shell used when no _raw_xml exists.
+# Minimal well-formed XMP shell — namespaces are declared by ET as fields are added.
 _FRESH_XMP_SHELL = (
     f"<x:xmpmeta xmlns:x='{_NS_X}'>"
     f"<rdf:RDF xmlns:rdf='{_NS_RDF}'>"
-    f"<rdf:Description rdf:about=''"
-    f" xmlns:ouestcharlie='{_NS_OC}'"
-    f" xmlns:exif='{_NS_EXIF}'"
-    f" xmlns:tiff='{_NS_TIFF}'"
-    f" xmlns:dc='{_NS_DC}'"
-    f"/>"
+    f"<rdf:Description rdf:about=''/>"
     f"</rdf:RDF>"
     f"</x:xmpmeta>"
 )
+
+# Known third-party namespaces → their conventional XMP prefix.
+# Used so that ET serializes them with human-readable prefixes rather than ns0, ns1, …
+_WELL_KNOWN_NS: dict[str, str] = {
+    "http://ns.adobe.com/xmp/1.0/": "xmp",
+    "http://ns.adobe.com/photoshop/1.0/": "photoshop",
+    "http://ns.adobe.com/lightroom/1.0/": "lr",
+    "http://ns.adobe.com/camera-raw-settings/1.0/": "crs",
+    "http://ns.adobe.com/xap/1.0/mm/": "xmpMM",
+    "http://darktable.sf.net/": "darktable",
+    "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/": "Iptc4xmpCore",
+    "http://ns.microsoft.com/photo/1.0/": "MicrosoftPhoto",
+}
+
+# Known rdf:Description attributes — not preserved in _extra.
+_KNOWN_ATTRS: frozenset[str] = frozenset({
+    f"{{{_NS_RDF}}}about",
+    f"{{{_NS_OC}}}contentHash",
+    f"{{{_NS_OC}}}schemaVersion",
+    f"{{{_NS_OC}}}metadataVersion",
+    f"{{{_NS_EXIF}}}DateTimeOriginal",
+    f"{{{_NS_EXIF}}}Make",
+    f"{{{_NS_TIFF}}}Make",
+    f"{{{_NS_EXIF}}}Model",
+    f"{{{_NS_TIFF}}}Model",
+    f"{{{_NS_TIFF}}}Orientation",
+})
+
+# Known rdf:Description child element tags — not preserved in _extra.
+_KNOWN_CHILDREN: frozenset[str] = frozenset({
+    f"{{{_NS_EXIF}}}GPSLatitude",
+    f"{{{_NS_EXIF}}}GPSLongitude",
+    f"{{{_NS_DC}}}subject",
+})
 
 
 def _register_et_namespaces() -> None:
@@ -52,6 +81,26 @@ def _register_et_namespaces() -> None:
     ET.register_namespace("exif", _NS_EXIF)
     ET.register_namespace("tiff", _NS_TIFF)
     ET.register_namespace("dc", _NS_DC)
+    for ns_uri, prefix in _WELL_KNOWN_NS.items():
+        ET.register_namespace(prefix, ns_uri)
+
+
+def _register_extra_ns(extra: dict[str, str]) -> None:
+    """Register any namespace URIs found in _extra keys so ET uses proper prefixes."""
+    seen: set[str] = set()
+    counter = 0
+    for key in extra:
+        if not key.startswith("{"):
+            continue
+        ns_uri = key[1 : key.index("}")]
+        if ns_uri in seen:
+            continue
+        seen.add(ns_uri)
+        prefix = _WELL_KNOWN_NS.get(ns_uri)
+        if prefix is None:
+            prefix = f"ns{counter}"
+            counter += 1
+        ET.register_namespace(prefix, ns_uri)
 
 
 # ---------------------------------------------------------------------------
@@ -269,8 +318,9 @@ class XmpStore:
 def parse_xmp(xml: str) -> XmpSidecar:
     """Parse XMP XML into an XmpSidecar.
 
-    Stores the original XML in _raw_xml for round-trip preservation of
-    unknown fields and namespaces.
+    Known fields are mapped to typed XmpSidecar attributes. Unknown attributes
+    and child elements on rdf:Description are stored in _extra for round-trip
+    preservation (same pattern as manifest _extra dicts).
 
     Args:
         xml: XMP XML string (with or without <?xpacket ?> wrappers).
@@ -284,11 +334,11 @@ def parse_xmp(xml: str) -> XmpSidecar:
     try:
         root = ET.fromstring(body)
     except ET.ParseError:
-        return XmpSidecar(_raw_xml=xml)
+        return XmpSidecar()
 
     desc = _find_description(root)
     if desc is None:
-        return XmpSidecar(_raw_xml=xml)
+        return XmpSidecar()
 
     oc = f"{{{_NS_OC}}}"
     exif = f"{{{_NS_EXIF}}}"
@@ -318,6 +368,15 @@ def parse_xmp(xml: str) -> XmpSidecar:
         if bag is not None:
             tags = [li.text or "" for li in bag.findall(f"{rdf}li")]
 
+    # Collect unknown attributes and child elements into _extra.
+    extra: dict[str, str] = {}
+    for attr_key, attr_val in desc.attrib.items():
+        if attr_key not in _KNOWN_ATTRS:
+            extra[attr_key] = attr_val
+    for child in desc:
+        if child.tag not in _KNOWN_CHILDREN:
+            extra[child.tag] = ET.tostring(child, encoding="unicode")
+
     return XmpSidecar(
         content_hash=content_hash,
         schema_version=int(schema_ver_s) if schema_ver_s else SCHEMA_VERSION,
@@ -328,7 +387,7 @@ def parse_xmp(xml: str) -> XmpSidecar:
         orientation=int(orientation_s) if orientation_s else None,
         gps=gps,
         tags=tags,
-        _raw_xml=xml,
+        _extra=extra,
     )
 
 
@@ -340,9 +399,10 @@ def parse_xmp(xml: str) -> XmpSidecar:
 def serialize_xmp(sidecar: XmpSidecar) -> str:
     """Serialize an XmpSidecar to XMP XML.
 
-    When sidecar._raw_xml is set the existing document is used as the base so
-    that unknown fields and namespaces from other applications are preserved.
-    Otherwise a fresh XMP document is produced.
+    Always builds a fresh XMP document from _FRESH_XMP_SHELL. Known fields are
+    written as typed attributes/elements; _extra attributes and child elements
+    are restored verbatim so that third-party fields (Lightroom ratings, darktable
+    settings, …) survive the round-trip.
 
     Args:
         sidecar: XmpSidecar to serialize.
@@ -351,13 +411,9 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
         XMP XML string with <?xpacket ?> wrappers.
     """
     _register_et_namespaces()
+    _register_extra_ns(sidecar._extra)
 
-    base = _strip_xpacket(sidecar._raw_xml) if sidecar._raw_xml else _FRESH_XMP_SHELL
-    try:
-        root = ET.fromstring(base)
-    except ET.ParseError:
-        root = ET.fromstring(_FRESH_XMP_SHELL)
-
+    root = ET.fromstring(_FRESH_XMP_SHELL)
     desc = _find_description(root)
     if desc is None:
         raise ValueError("XMP document is missing rdf:Description")
@@ -393,8 +449,6 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
     )
 
     # GPS as child elements
-    _remove_children(desc, f"{exif_ns}GPSLatitude")
-    _remove_children(desc, f"{exif_ns}GPSLongitude")
     if sidecar.gps is not None:
         lat_e = ET.SubElement(desc, f"{exif_ns}GPSLatitude")
         lat_e.text = _decimal_to_xmp_coord(sidecar.gps[0], is_lat=True)
@@ -402,7 +456,6 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
         lon_e.text = _decimal_to_xmp_coord(sidecar.gps[1], is_lat=False)
 
     # Tags as dc:subject > rdf:Bag > rdf:li
-    _remove_children(desc, f"{dc_ns}subject")
     if sidecar.tags:
         subj = ET.SubElement(desc, f"{dc_ns}subject")
         bag = ET.SubElement(subj, f"{rdf_ns}Bag")
@@ -410,7 +463,17 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
             li = ET.SubElement(bag, f"{rdf_ns}li")
             li.text = tag
 
+    # Restore unknown fields from _extra.
+    # Values that start with "<" are serialized XML child elements; others are attributes.
+    for key, val in sidecar._extra.items():
+        if val.startswith("<"):
+            try:
+                child = ET.fromstring(val)
+                desc.append(child)
+            except ET.ParseError:
+                pass  # skip malformed stored elements
+        else:
+            desc.set(key, val)
+
     body = ET.tostring(root, encoding="unicode")
     return f"{_XPACKET_HEADER}{body}{_XPACKET_FOOTER}"
-
-
