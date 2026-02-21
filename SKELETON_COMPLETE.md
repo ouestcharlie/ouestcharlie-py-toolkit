@@ -55,24 +55,15 @@ See [README.md](README.md) for usage guide and installation instructions.
 
 ## Testing
 
-The toolkit has **67 passing unit tests** covering:
-- Schema and data model operations
-- Backend configuration and initialization
-- XMP path utilities and content hash computation
-- `parse_xmp` / `serialize_xmp` round-trips, GPS, dates, tags, invalid input
-- `extract_exif` with a minimal JPEG
-
 See [README_DEV.md](README_DEV.md) for development setup and testing instructions.
 
 ## Next Steps
 
-1. **Implement bloom filters** — Add bloom filter library and merging logic
+1. **Hierarchical manifest** - min/max date computation
 2. **Build first agent** — Create Whitebeard housekeeping agent using this toolkit
 3. **Add cloud backends** — Implement S3, GCS, ADLS Gen2 backends
 4. **Integration tests** — Test agent ↔ Woof communication via MCP
 
-## Summary
+## Descoped
 
-✅ **XMP stubs implemented and tested (67 passing tests)**
-
-All interfaces, protocols, type signatures, data models, and XMP operations are in place. The toolkit provides a clean, type-safe foundation for building OuEstCharlie agents.
+- **Implement bloom filters** — Add bloom filter library and merging logic

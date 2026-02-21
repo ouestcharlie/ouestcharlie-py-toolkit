@@ -135,9 +135,7 @@ export WOOF_BACKEND_CONFIG='{"type": "filesystem", "root": "/Users/alice/Photos"
 
 - Cloud backend implementations (S3, GCS, ADLS Gen2, OneDrive, Kdrive)
 - Bloom filter implementation for partition summaries
-- Full pyexiv2 integration for XMP/EXIF operations
 - Image thumbnail generation helpers
-- Unit tests and integration tests
 
 ## Architecture
 
