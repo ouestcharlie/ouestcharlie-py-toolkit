@@ -73,9 +73,13 @@ class LocalBackend:
         if full_path.exists():
             raise FileExistsError(f"File already exists: {path}")
 
-        # Ensure parent directory exists
+        # Ensure parent directory exists (parents=True, exist_ok=True).
+        # Note: run_in_executor only accepts positional args, so we use a lambda
+        # to pass keyword arguments correctly.
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, full_path.parent.mkdir, True, True)
+        await loop.run_in_executor(
+            None, lambda: full_path.parent.mkdir(parents=True, exist_ok=True)
+        )
 
         # Write the file
         await loop.run_in_executor(None, full_path.write_bytes, data)

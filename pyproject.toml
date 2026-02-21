@@ -11,10 +11,13 @@ dependencies = [
     "mcp>=1.0",
     "pyexiv2>=2.8",
     "Pillow>=10.0",
-    "rawpy>=0.19",
 ]
 
 [project.optional-dependencies]
+# rawpy has no wheel for macOS x86_64; agents that need RAW pixel access opt in.
+raw = [
+    "rawpy>=0.19",
+]
 dev = [
     "mypy>=1.0",
     "pytest>=8.0",
