@@ -1,15 +1,9 @@
-"""Test XMP utilities, parsing, serialization, and EXIF extraction."""
+"""Test XMP utilities, parsing, and serialization."""
 
-import tempfile
 from datetime import datetime
-from pathlib import Path
-
-import pytest
 
 from ouestcharlie_toolkit.xmp import (
     _decimal_to_xmp_coord,
-    _parse_exif_datetime,
-    _parse_exif_gps,
     _parse_iso_datetime,
     _parse_xmp_gps,
     _xmp_coord_to_decimal,
@@ -17,9 +11,7 @@ from ouestcharlie_toolkit.xmp import (
     serialize_xmp,
     xmp_path_for,
 )
-from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.schema import SCHEMA_VERSION, XmpSidecar
-from ouestcharlie_toolkit.xmp import extract_exif
+from ouestcharlie_toolkit.schema import XmpSidecar
 
 # ---------------------------------------------------------------------------
 # Path helpers
@@ -90,14 +82,6 @@ def test_parse_iso_datetime_invalid():
     assert _parse_iso_datetime("not-a-date") is None
 
 
-def test_parse_exif_datetime_valid():
-    assert _parse_exif_datetime("2024:07:15 14:30:00") == datetime(2024, 7, 15, 14, 30, 0)
-
-
-def test_parse_exif_datetime_none():
-    assert _parse_exif_datetime(None) is None
-
-
 # ---------------------------------------------------------------------------
 # GPS helpers
 # ---------------------------------------------------------------------------
@@ -152,27 +136,10 @@ def test_parse_xmp_gps_none_when_missing():
     assert _parse_xmp_gps(None, None) is None
 
 
-def test_parse_exif_gps_missing():
-    assert _parse_exif_gps({}) is None
-
-
-def test_parse_exif_gps_valid():
-    exif = {
-        "Exif.GPSInfo.GPSLatitudeRef": "N",
-        "Exif.GPSInfo.GPSLongitudeRef": "E",
-        "Exif.GPSInfo.GPSLatitude": "48/1 30/1 0/1",
-        "Exif.GPSInfo.GPSLongitude": "2/1 21/1 792/1000",
-    }
-    result = _parse_exif_gps(exif)
-    assert result is not None
-    lat, lon = result
-    assert abs(lat - 48.5) < 1e-3
-    assert lon > 2.0
-
-
 # ---------------------------------------------------------------------------
 # parse_xmp
 # ---------------------------------------------------------------------------
+
 
 _SAMPLE_XMP = """\
 <?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>
@@ -342,60 +309,3 @@ def test_serialize_xmp_empty_tags_omits_subject():
     s = XmpSidecar(content_hash="sha256:ccc", tags=[])
     xml = serialize_xmp(s)
     assert "<rdf:li>" not in xml
-
-
-# ---------------------------------------------------------------------------
-# extract_exif
-# ---------------------------------------------------------------------------
-
-# Minimal valid JPEG (SOI + JFIF APP0 + EOI) — no EXIF data.
-_MINIMAL_JPEG = (
-    b"\xff\xd8"  # SOI
-    b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"  # APP0
-    b"\xff\xd9"  # EOI
-)
-
-
-@pytest.mark.asyncio
-async def test_extract_exif_returns_sidecar():
-    """extract_exif returns an XmpSidecar with content_hash for any readable image."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        img_path = Path(tmpdir) / "test.jpg"
-        img_path.write_bytes(_MINIMAL_JPEG)
-
-        backend = LocalBackend(root=tmpdir)
-        sidecar = await extract_exif(backend, "test.jpg")
-
-    assert isinstance(sidecar, XmpSidecar)
-    assert sidecar.content_hash is not None
-    assert sidecar.content_hash.startswith("sha256:")
-
-
-@pytest.mark.asyncio
-async def test_extract_exif_content_hash_matches_file():
-    """Content hash in extracted sidecar matches compute_content_hash."""
-    import hashlib
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        img_path = Path(tmpdir) / "test.jpg"
-        img_path.write_bytes(_MINIMAL_JPEG)
-
-        backend = LocalBackend(root=tmpdir)
-        sidecar = await extract_exif(backend, "test.jpg")
-
-    expected = "sha256:" + hashlib.sha256(_MINIMAL_JPEG).hexdigest()
-    assert sidecar.content_hash == expected
-
-
-@pytest.mark.asyncio
-async def test_extract_exif_no_exif_returns_none_fields():
-    """A JPEG with no EXIF data yields None for all metadata fields."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        (Path(tmpdir) / "test.jpg").write_bytes(_MINIMAL_JPEG)
-        backend = LocalBackend(root=tmpdir)
-        sidecar = await extract_exif(backend, "test.jpg")
-
-    assert sidecar.date_taken is None
-    assert sidecar.camera_make is None
-    assert sidecar.camera_model is None
-    assert sidecar.gps is None

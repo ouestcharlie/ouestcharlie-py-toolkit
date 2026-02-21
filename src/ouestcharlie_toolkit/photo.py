@@ -1,0 +1,143 @@
+"""Photo domain object — identity and EXIF extraction for a single photo file."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+from .backend import Backend
+from .schema import XmpSidecar
+
+
+# ---------------------------------------------------------------------------
+# EXIF helpers (pyexiv2 key parsing)
+# ---------------------------------------------------------------------------
+
+
+def _parse_exif_datetime(s: str | None) -> datetime | None:
+    """Parse EXIF datetime string (2024:07:15 14:30:00) to datetime."""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s.strip(), "%Y:%m:%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _exif_rational_to_float(r: str) -> float:
+    """Convert EXIF rational string '12345/1000' to float."""
+    n, d = r.split("/")
+    return int(n) / int(d)
+
+
+def _parse_exif_gps(exif: dict[str, str]) -> tuple[float, float] | None:
+    """Extract GPS from a pyexiv2 EXIF dict as (lat, lon) decimal degrees."""
+    lat_ref = exif.get("Exif.GPSInfo.GPSLatitudeRef", "")
+    lon_ref = exif.get("Exif.GPSInfo.GPSLongitudeRef", "")
+    lat_raw = exif.get("Exif.GPSInfo.GPSLatitude")
+    lon_raw = exif.get("Exif.GPSInfo.GPSLongitude")
+    if not (lat_ref and lon_ref and lat_raw and lon_raw):
+        return None
+    try:
+        def dms_to_decimal(dms: str, ref: str) -> float:
+            parts = dms.split()
+            total = sum(_exif_rational_to_float(p) / (60.0 ** i) for i, p in enumerate(parts))
+            return -total if ref in ("S", "W") else total
+
+        return (dms_to_decimal(lat_raw, lat_ref), dms_to_decimal(lon_raw, lon_ref))
+    except (ValueError, ZeroDivisionError, IndexError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Photo class
+# ---------------------------------------------------------------------------
+
+
+class Photo:
+    """Represents a single photo file in a backend.
+
+    Provides two operations used together at ingestion:
+
+    - ``create_identity()`` — SHA-256 content hash (stable, format-agnostic ID)
+    - ``extract_exif()``    — EXIF metadata extracted into an XmpSidecar
+
+    Both operations read the photo file.  Calling ``extract_exif()`` first
+    caches the hash so a subsequent ``create_identity()`` call is free.
+    """
+
+    def __init__(self, backend: Backend, path: str) -> None:
+        """
+        Args:
+            backend: Backend that owns the photo file.
+            path: Relative path to the photo within the backend root.
+        """
+        self.backend = backend
+        self.path = path
+        self._content_hash: str | None = None
+
+    async def create_identity(self) -> str:
+        """Return the SHA-256 content hash of this photo.
+
+        If ``extract_exif()`` was already called, the cached hash is returned
+        without re-reading the file.
+
+        Returns:
+            Hash string in the format ``"sha256:<hex>"``.
+        """
+        if self._content_hash is None:
+            data, _ = await self.backend.read(self.path)
+            self._content_hash = f"sha256:{hashlib.sha256(data).hexdigest()}"
+        return self._content_hash
+
+    async def extract_exif(self) -> XmpSidecar:
+        """Extract EXIF metadata from this photo into an XmpSidecar.
+
+        Reads the photo via the backend, writes it to a temporary file, then
+        uses pyexiv2 to parse EXIF data. The original image is never modified.
+
+        Also caches the content hash so a subsequent ``create_identity()``
+        call does not re-read the file.
+
+        Returns:
+            XmpSidecar populated with EXIF fields and ``content_hash``.
+        """
+        import pyexiv2  # lazy: native C extension with system library dependency
+
+        data, _ = await self.backend.read(self.path)
+        content_hash = f"sha256:{hashlib.sha256(data).hexdigest()}"
+        suffix = Path(self.path).suffix or ".jpg"
+
+        fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+        try:
+            os.write(fd, data)
+            os.close(fd)
+
+            img = pyexiv2.Image(tmp_path)
+            exif_data: dict[str, str] = img.read_exif()
+            img.close()
+        finally:
+            os.unlink(tmp_path)
+
+        self._content_hash = content_hash
+
+        date_taken = _parse_exif_datetime(
+            exif_data.get("Exif.Photo.DateTimeOriginal") or exif_data.get("Exif.Image.DateTime")
+        )
+        camera_make = (exif_data.get("Exif.Image.Make") or "").strip() or None
+        camera_model = (exif_data.get("Exif.Image.Model") or "").strip() or None
+        orientation_s = exif_data.get("Exif.Image.Orientation")
+        orientation = int(orientation_s) if orientation_s else None
+        gps = _parse_exif_gps(exif_data)
+
+        return XmpSidecar(
+            content_hash=content_hash,
+            date_taken=date_taken,
+            camera_make=camera_make,
+            camera_model=camera_model,
+            orientation=orientation,
+            gps=gps,
+        )

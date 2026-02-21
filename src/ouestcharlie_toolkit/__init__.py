@@ -14,8 +14,9 @@ from .schema import (
     VersionToken,
     XmpSidecar,
 )
+from .photo import Photo
 from .server import AgentBase
-from .xmp import XmpStore, compute_content_hash, extract_exif, xmp_path_for
+from .xmp import XmpStore, xmp_path_for
 
 __version__ = "0.1.0"
 
@@ -24,6 +25,7 @@ __all__ = [
     "AgentBase",
     "Backend",
     "ManifestStore",
+    "Photo",
     "XmpStore",
     "ProgressReporter",
     # Data models
@@ -40,6 +42,4 @@ __all__ = [
     # Utilities
     "backend_from_config",
     "xmp_path_for",
-    "extract_exif",
-    "compute_content_hash",
 ]

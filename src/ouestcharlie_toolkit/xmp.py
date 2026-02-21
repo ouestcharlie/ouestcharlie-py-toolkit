@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-import tempfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
@@ -90,16 +87,6 @@ def _parse_iso_datetime(s: str | None) -> datetime | None:
         return None
 
 
-def _parse_exif_datetime(s: str | None) -> datetime | None:
-    """Parse EXIF datetime string (2024:07:15 14:30:00)."""
-    if not s:
-        return None
-    try:
-        return datetime.strptime(s.strip(), "%Y:%m:%d %H:%M:%S")
-    except ValueError:
-        return None
-
-
 # ---------------------------------------------------------------------------
 # GPS helpers
 # ---------------------------------------------------------------------------
@@ -133,31 +120,6 @@ def _parse_xmp_gps(lat_str: str | None, lon_str: str | None) -> tuple[float, flo
     try:
         return (_xmp_coord_to_decimal(lat_str), _xmp_coord_to_decimal(lon_str))
     except (ValueError, IndexError):
-        return None
-
-
-def _exif_rational_to_float(r: str) -> float:
-    """Convert EXIF rational string '12345/1000' to float."""
-    n, d = r.split("/")
-    return int(n) / int(d)
-
-
-def _parse_exif_gps(exif: dict[str, str]) -> tuple[float, float] | None:
-    """Extract GPS from a pyexiv2 EXIF dict as (lat, lon) decimal degrees."""
-    lat_ref = exif.get("Exif.GPSInfo.GPSLatitudeRef", "")
-    lon_ref = exif.get("Exif.GPSInfo.GPSLongitudeRef", "")
-    lat_raw = exif.get("Exif.GPSInfo.GPSLatitude")
-    lon_raw = exif.get("Exif.GPSInfo.GPSLongitude")
-    if not (lat_ref and lon_ref and lat_raw and lon_raw):
-        return None
-    try:
-        def dms_to_decimal(dms: str, ref: str) -> float:
-            parts = dms.split()
-            total = sum(_exif_rational_to_float(p) / (60.0 ** i) for i, p in enumerate(parts))
-            return -total if ref in ("S", "W") else total
-
-        return (dms_to_decimal(lat_raw, lat_ref), dms_to_decimal(lon_raw, lon_ref))
-    except (ValueError, ZeroDivisionError, IndexError):
         return None
 
 
@@ -452,70 +414,3 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
     return f"{_XPACKET_HEADER}{body}{_XPACKET_FOOTER}"
 
 
-# ---------------------------------------------------------------------------
-# EXIF extraction and content hashing
-# ---------------------------------------------------------------------------
-
-
-async def extract_exif(backend: Backend, photo_path: str) -> XmpSidecar:
-    """Extract EXIF metadata from a photo file and return an XmpSidecar.
-
-    Reads the photo via the backend, writes it to a temporary file, then uses
-    pyexiv2 to parse EXIF data. The original image is never modified.
-
-    Args:
-        backend: Backend to read the photo file.
-        photo_path: Path to the photo file.
-
-    Returns:
-        XmpSidecar populated with EXIF fields and content_hash.
-    """
-    data, _ = await backend.read(photo_path)
-    content_hash = f"sha256:{hashlib.sha256(data).hexdigest()}"
-    suffix = Path(photo_path).suffix or ".jpg"
-
-    import pyexiv2  # lazy: native C extension with system library dependency
-
-    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-    try:
-        os.write(fd, data)
-        os.close(fd)
-
-        img = pyexiv2.Image(tmp_path)
-        exif_data: dict[str, str] = img.read_exif()
-        img.close()
-    finally:
-        os.unlink(tmp_path)
-
-    date_taken = _parse_exif_datetime(
-        exif_data.get("Exif.Photo.DateTimeOriginal") or exif_data.get("Exif.Image.DateTime")
-    )
-    camera_make = (exif_data.get("Exif.Image.Make") or "").strip() or None
-    camera_model = (exif_data.get("Exif.Image.Model") or "").strip() or None
-    orientation_s = exif_data.get("Exif.Image.Orientation")
-    orientation = int(orientation_s) if orientation_s else None
-    gps = _parse_exif_gps(exif_data)
-
-    return XmpSidecar(
-        content_hash=content_hash,
-        date_taken=date_taken,
-        camera_make=camera_make,
-        camera_model=camera_model,
-        orientation=orientation,
-        gps=gps,
-    )
-
-
-async def compute_content_hash(backend: Backend, photo_path: str) -> str:
-    """Compute SHA-256 content hash of a photo file.
-
-    Args:
-        backend: Backend to read the photo file.
-        photo_path: Path to the photo file.
-
-    Returns:
-        Content hash string in the format "sha256:hexdigest".
-    """
-    data, _ = await backend.read(photo_path)
-    digest = hashlib.sha256(data).hexdigest()
-    return f"sha256:{digest}"

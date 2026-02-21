@@ -131,16 +131,6 @@ export WOOF_BACKEND_CONFIG='{"type": "filesystem", "root": "/Users/alice/Photos"
 - ProgressReporter with rate limiting
 - AgentBase with MCP server lifecycle
 
-### 🚧 Stub/TODO
-
-The following functions have stub implementations that raise `NotImplementedError`:
-
-- `xmp.parse_xmp()` — needs pyexiv2 implementation
-- `xmp.serialize_xmp()` — needs pyexiv2 implementation
-- `xmp.extract_exif()` — needs pyexiv2 implementation
-- `manifest.rebuild_parent()` — needs bloom filter merging
-- `schema` bloom filter serialization — currently uses hex encoding
-
 ### 📋 Future Work
 
 - Cloud backend implementations (S3, GCS, ADLS Gen2, OneDrive, Kdrive)
