@@ -42,79 +42,37 @@ See [README.md](README.md) for usage guide and installation instructions.
 - Error isolation with `per_photo()` context manager
 - FastMCP integration
 
+**XmpStore** — XMP parsing and serialization ([xmp.py](src/ouestcharlie_toolkit/xmp.py))
+- `parse_xmp(xml: str) -> XmpSidecar` — stdlib ElementTree; preserves `_raw_xml` for round-tripping
+- `serialize_xmp(sidecar: XmpSidecar) -> str` — updates known fields, preserves unknown fields/namespaces from `_raw_xml`
+- `extract_exif(backend, photo_path) -> XmpSidecar` — pyexiv2 via temp file; requires `inih` Homebrew formula
+
 ### 🚧 Stub Implementations (TODO)
 
-The following functions have correct signatures and docstrings but raise `NotImplementedError`:
-
-**XMP Parsing** ([xmp.py](src/ouestcharlie/xmp.py)):
-- `parse_xmp(xml: str) -> XmpSidecar` — needs pyexiv2 implementation
-- `serialize_xmp(sidecar: XmpSidecar) -> str` — needs pyexiv2 implementation
-- `extract_exif(backend, photo_path) -> XmpSidecar` — needs pyexiv2 implementation
-
-**Bloom Filters** ([manifest.py](src/ouestcharlie/manifest.py)):
+**Bloom Filters** ([manifest.py](src/ouestcharlie_toolkit/manifest.py)):
 - `rebuild_parent()` — needs bloom filter merging logic
 - `_recompute_summary()` — needs bloom filter computation
 
-## How to Complete the Stubs
-
-### XMP Operations
-
-Use `pyexiv2` library (wraps Exiv2):
-
-```python
-import pyexiv2
-
-def parse_xmp(xml: str) -> XmpSidecar:
-    # Use pyexiv2.ImageMetadata.from_buffer() to parse XMP
-    # Extract fields: ouestcharlie:*, exif:*, dc:subject
-    # Preserve _raw_xml for round-tripping
-    ...
-
-def serialize_xmp(sidecar: XmpSidecar) -> str:
-    # Parse _raw_xml as baseline
-    # Update known fields using pyexiv2
-    # Return serialized XML
-    ...
-```
-
-### Bloom Filters
-
-Use a simple bloom filter library or implement manually:
-
-```python
-from pybloom_live import BloomFilter
-
-def _compute_bloom(items: list[str]) -> bytes:
-    bf = BloomFilter(capacity=1000, error_rate=0.01)
-    for item in items:
-        bf.add(item)
-    return bf.bitarray.tobytes()
-
-def _merge_blooms(blooms: list[bytes]) -> bytes:
-    # Union of bloom filters = bitwise OR
-    ...
-```
-
 ## Testing
 
-The toolkit now has 32 passing unit tests covering:
+The toolkit has **67 passing unit tests** covering:
 - Schema and data model operations
 - Backend configuration and initialization
-- XMP path utilities
-- Content hash computation
+- XMP path utilities and content hash computation
+- `parse_xmp` / `serialize_xmp` round-trips, GPS, dates, tags, invalid input
+- `extract_exif` with a minimal JPEG
 
 See [README_DEV.md](README_DEV.md) for development setup and testing instructions.
 
 ## Next Steps
 
-1. **Implement XMP stubs** — Use pyexiv2 for parsing and serialization
-2. **Implement bloom filters** — Add bloom filter library and merging logic
-3. **Build first agent** — Create Whitebeard housekeeping agent using this toolkit
-4. **Add cloud backends** — Implement S3, GCS, ADLS Gen2 backends
-5. **Integration tests** — Test agent ↔ Woof communication via MCP
+1. **Implement bloom filters** — Add bloom filter library and merging logic
+2. **Build first agent** — Create Whitebeard housekeeping agent using this toolkit
+3. **Add cloud backends** — Implement S3, GCS, ADLS Gen2 backends
+4. **Integration tests** — Test agent ↔ Woof communication via MCP
 
 ## Summary
 
-✅ **Skeleton complete and tested**
+✅ **XMP stubs implemented and tested (67 passing tests)**
 
-All interfaces, protocols, type signatures, and data models are in place with 32 passing tests. The toolkit provides a clean, type-safe foundation for building OuEstCharlie agents. Agents can be developed against this API immediately, with stub functions filled in as needed.
+All interfaces, protocols, type signatures, data models, and XMP operations are in place. The toolkit provides a clean, type-safe foundation for building OuEstCharlie agents.

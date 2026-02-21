@@ -42,11 +42,11 @@ uv pip install -e ".[dev]"
 ## Dependencies
 
 - `mcp>=1.0` — Official MCP Python SDK
-- `pyexiv2>=2.8` — EXIF/XMP read-write (wraps Exiv2)
+- `pyexiv2>=2.8` — EXIF extraction from image files (wraps Exiv2); requires `brew install inih` on macOS
 - `Pillow>=10.0` — Image processing
 - `rawpy>=0.19` — RAW format support (wraps LibRaw)
 
-**Note:** Some stub methods (XMP parsing, EXIF extraction) are not yet implemented and will raise `NotImplementedError`.
+XMP parsing and serialization (`parse_xmp`, `serialize_xmp`) use stdlib only and have no native dependencies.
 
 ## Usage
 

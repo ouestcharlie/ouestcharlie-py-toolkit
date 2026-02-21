@@ -2,6 +2,16 @@
 
 ## Setup
 
+### System dependencies (macOS)
+
+`pyexiv2` links against `libexiv2` which requires `inih` on macOS:
+
+```bash
+brew install inih
+```
+
+This is only needed for `extract_exif` (EXIF extraction from image files). `parse_xmp` and `serialize_xmp` have no native dependencies. On Linux, `pyexiv2` wheels bundle their dependencies.
+
 ### Create virtual environment and install dependencies
 
 ```bash
@@ -36,7 +46,7 @@ pytest tests/
 .venv/bin/pytest tests/test_schema.py
 
 # Run with coverage (if coverage is installed)
-.venv/bin/pytest --cov=ouestcharlie tests/
+.venv/bin/pytest --cov=ouestcharlie_toolkit tests/
 ```
 
 ## Project Structure
@@ -51,10 +61,6 @@ ouestcharlie-py-toolkit/
 └── README.md                 # Usage documentation
 ```
 
-## Current Test Status
+## Implementation Status
 
-2 tests running OK
-
-## Known Stubs
-
-See [SKELETON_COMPLETE.md](SKELETON_COMPLETE.md) for implementation status.
+See [SKELETON_COMPLETE.md](SKELETON_COMPLETE.md) for what is implemented and what remains.
