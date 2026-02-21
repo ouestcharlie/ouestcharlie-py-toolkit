@@ -17,12 +17,35 @@ from .schema import XmpSidecar
 # ---------------------------------------------------------------------------
 
 
-def _parse_exif_datetime(s: str | None) -> datetime | None:
-    """Parse EXIF datetime string (2024:07:15 14:30:00) to datetime."""
-    if not s:
+def _parse_exif_datetime(exif: dict[str, str]) -> datetime | None:
+    """Parse a timezone-aware datetime from EXIF DateTimeOriginal, SubSec, and OffsetTime.
+
+    Combines three EXIF fields into a single datetime:
+    - ``DateTimeOriginal``  / ``DateTime``       — base date and time
+    - ``SubSecTimeOriginal``/ ``SubSecTime``      — fractional seconds (optional)
+    - ``OffsetTimeOriginal``/ ``OffsetTime``      — UTC offset, e.g. "+01:00" (optional)
+
+    Returns a timezone-aware datetime when an offset is present, naive otherwise.
+    """
+    date_str = (
+        exif.get("Exif.Photo.DateTimeOriginal") or exif.get("Exif.Image.DateTime")
+    )
+    if not date_str:
         return None
     try:
-        return datetime.strptime(s.strip(), "%Y:%m:%d %H:%M:%S")
+        # "2026:02:21 13:03:10" → "2026-02-21T13:03:10"
+        iso = date_str.strip().replace(":", "-", 2).replace(" ", "T")
+        subsec = (
+            exif.get("Exif.Photo.SubSecTimeOriginal") or exif.get("Exif.Photo.SubSecTime") or ""
+        ).strip()
+        if subsec:
+            iso += f".{subsec[:6]}"  # cap at microsecond precision
+        tz = (
+            exif.get("Exif.Photo.OffsetTimeOriginal") or exif.get("Exif.Photo.OffsetTime") or ""
+        ).strip()
+        if tz:
+            iso += tz
+        return datetime.fromisoformat(iso)
     except ValueError:
         return None
 
@@ -124,9 +147,7 @@ class Photo:
 
         self._content_hash = content_hash
 
-        date_taken = _parse_exif_datetime(
-            exif_data.get("Exif.Photo.DateTimeOriginal") or exif_data.get("Exif.Image.DateTime")
-        )
+        date_taken = _parse_exif_datetime(exif_data)
         camera_make = (exif_data.get("Exif.Image.Make") or "").strip() or None
         camera_model = (exif_data.get("Exif.Image.Model") or "").strip() or None
         orientation_s = exif_data.get("Exif.Image.Orientation")

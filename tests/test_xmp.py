@@ -1,6 +1,9 @@
 """Test XMP utilities, parsing, and serialization."""
 
 from datetime import datetime
+from pathlib import Path
+
+_SAMPLES = Path(__file__).parent / "sample-images"
 
 from ouestcharlie_toolkit.xmp import (
     _decimal_to_xmp_coord,
@@ -65,9 +68,14 @@ def test_parse_iso_datetime_valid():
     assert _parse_iso_datetime("2024-07-15T14:30:00") == datetime(2024, 7, 15, 14, 30, 0)
 
 
-def test_parse_iso_datetime_truncates_to_seconds():
-    """Extra sub-second or timezone suffix is ignored gracefully."""
-    assert _parse_iso_datetime("2024-07-15T14:30:00.123") == datetime(2024, 7, 15, 14, 30, 0)
+def test_parse_iso_datetime_preserves_subseconds():
+    assert _parse_iso_datetime("2024-07-15T14:30:00.123") == datetime(2024, 7, 15, 14, 30, 0, 123000)
+
+
+def test_parse_iso_datetime_preserves_timezone():
+    from datetime import timezone, timedelta
+    dt = _parse_iso_datetime("2024-07-15T14:30:00.123+01:00")
+    assert dt == datetime(2024, 7, 15, 14, 30, 0, 123000, tzinfo=timezone(timedelta(hours=1)))
 
 
 def test_parse_iso_datetime_none():
@@ -368,3 +376,64 @@ def test_serialize_xmp_empty_tags_omits_subject():
     s = XmpSidecar(content_hash="sha256:ccc", tags=[])
     xml = serialize_xmp(s)
     assert "<rdf:li>" not in xml
+
+
+# ---------------------------------------------------------------------------
+# _extra preservation — real reference XMP (001.ref.xmp)
+# ---------------------------------------------------------------------------
+
+_TIFF = "http://ns.adobe.com/tiff/1.0/"
+_EXIF = "http://ns.adobe.com/exif/1.0/"
+_XAP  = "http://ns.adobe.com/xap/1.0/"
+_PS   = "http://ns.adobe.com/photoshop/1.0/"
+
+
+def _ref_xmp() -> XmpSidecar:
+    return parse_xmp((_SAMPLES / "001.ref.xmp").read_text(encoding="utf-8"))
+
+
+def test_ref_xmp_extra_simple_attrs():
+    """Simple EXIF/TIFF/XMP attributes from Exiv2 land in _extra with correct values."""
+    extra = _ref_xmp()._extra
+    assert extra[f"{{{_TIFF}}}Software"] == "A566BXXS8BZA7"
+    assert extra[f"{{{_TIFF}}}ImageWidth"] == "6112"
+    assert extra[f"{{{_TIFF}}}ImageLength"] == "6112"
+    assert extra[f"{{{_EXIF}}}ExposureTime"] == "20/10000"
+    assert extra[f"{{{_EXIF}}}FNumber"] == "18000/10000"
+    assert extra[f"{{{_EXIF}}}FocalLength"] == "554/100"
+    assert extra[f"{{{_EXIF}}}FocalLengthIn35mmFilm"] == "23"
+    assert extra[f"{{{_XAP}}}CreateDate"] == "2026-02-21T13:03:10.140"
+    assert extra[f"{{{_PS}}}DateCreated"] == "2026-02-21T13:03:10.140"
+
+
+def test_ref_xmp_extra_structured_elements():
+    """Structured child elements (rdf:Seq, struct) are stored as XML strings in _extra."""
+    extra = _ref_xmp()._extra
+    iso_key   = f"{{{_EXIF}}}ISOSpeedRatings"
+    flash_key = f"{{{_EXIF}}}Flash"
+
+    assert iso_key in extra
+    assert extra[iso_key].startswith("<")
+    assert "50" in extra[iso_key]           # ISO 50
+
+    assert flash_key in extra
+    assert extra[flash_key].startswith("<")
+    assert "False" in extra[flash_key]      # Flash did not fire
+
+
+def test_ref_xmp_extra_roundtrip():
+    """parse → serialize → parse preserves all _extra keys and values from the ref XMP."""
+    original = _ref_xmp()
+    restored = parse_xmp(serialize_xmp(original))
+
+    assert set(restored._extra.keys()) == set(original._extra.keys())
+    # Spot-check a few values that survive the ET round-trip unchanged
+    for key in [
+        f"{{{_TIFF}}}Software",
+        f"{{{_EXIF}}}FNumber",
+        f"{{{_XAP}}}CreateDate",
+    ]:
+        assert restored._extra[key] == original._extra[key]
+    # Complex elements: content preserved (ET normalises whitespace)
+    assert "50" in restored._extra[f"{{{_EXIF}}}ISOSpeedRatings"]
+    assert "False" in restored._extra[f"{{{_EXIF}}}Flash"]

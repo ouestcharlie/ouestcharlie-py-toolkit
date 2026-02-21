@@ -98,7 +98,7 @@ def _register_extra_ns(extra: dict[str, str]) -> None:
         seen.add(ns_uri)
         prefix = _WELL_KNOWN_NS.get(ns_uri)
         if prefix is None:
-            prefix = f"ns{counter}"
+            prefix = f"ext{counter}"  # "ns\d+" is reserved by ET in Python 3.13+
             counter += 1
         ET.register_namespace(prefix, ns_uri)
 
@@ -127,11 +127,15 @@ def xmp_path_for(photo_path: str) -> str:
 
 
 def _parse_iso_datetime(s: str | None) -> datetime | None:
-    """Parse ISO 8601 datetime as written by our XMP serializer (2024-07-15T14:30:00)."""
+    """Parse an ISO 8601 datetime string, preserving subseconds and timezone.
+
+    Returns a timezone-aware datetime when an offset is present, a naive
+    datetime otherwise.  Returns None for empty/invalid input.
+    """
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s[:19])
+        return datetime.fromisoformat(s)
     except ValueError:
         return None
 
@@ -434,7 +438,7 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
     _set_or_del(
         desc,
         f"{exif_ns}DateTimeOriginal",
-        sidecar.date_taken.isoformat(timespec="seconds") if sidecar.date_taken else None,
+        sidecar.date_taken.isoformat() if sidecar.date_taken else None,
     )
 
     # Camera

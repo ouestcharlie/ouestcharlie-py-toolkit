@@ -8,6 +8,9 @@ import pytest
 
 from ouestcharlie_toolkit import Photo
 from ouestcharlie_toolkit.backends.local import LocalBackend
+from ouestcharlie_toolkit.xmp import _parse_iso_datetime, parse_xmp
+
+_SAMPLES = Path(__file__).parent / "sample-images"
 from ouestcharlie_toolkit.schema import XmpSidecar
 
 # Minimal valid JPEG (SOI + JFIF APP0 + EOI) — no EXIF data.
@@ -117,3 +120,39 @@ async def test_extract_exif_caches_hash_for_create_identity():
         identity = await photo.create_identity()
 
     assert identity == sidecar.content_hash
+
+
+# ---------------------------------------------------------------------------
+# Real-image EXIF extraction vs reference XMP
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_matches_ref():
+    """Extract EXIF from a real JPEG and compare typed fields to the reference XMP.
+
+    001.ref.xmp was produced by Exiv2 and represents the ground truth for what
+    metadata is in 001.jpg.  Our parser reads make/model/orientation from
+    tiff:* attributes.  The date is stored as xmp:CreateDate (not
+    exif:DateTimeOriginal) in the ref, so it lands in _extra; we parse it from
+    there to keep the expected value fully ref-driven.
+    """
+    ref_sidecar = parse_xmp((_SAMPLES / "001.ref.xmp").read_text(encoding="utf-8"))
+
+    # Extract xmp:CreateDate from _extra as the reference date.
+    _XMP_CREATE_DATE = "{http://ns.adobe.com/xap/1.0/}CreateDate"
+    ref_date = _parse_iso_datetime(ref_sidecar._extra.get(_XMP_CREATE_DATE))
+
+    sidecar = await Photo(LocalBackend(root=str(_SAMPLES)), "001.jpg").extract_exif()
+
+    assert sidecar.content_hash is not None
+    assert sidecar.content_hash.startswith("sha256:")
+    assert sidecar.camera_make == ref_sidecar.camera_make
+    assert sidecar.camera_model == ref_sidecar.camera_model
+    assert sidecar.orientation == ref_sidecar.orientation
+    assert sidecar.gps == ref_sidecar.gps
+    # The ref XMP stores CreateDate without timezone; extract_exif() adds it from
+    # OffsetTimeOriginal.  Compare the wall-clock portion and assert tz is present.
+    assert sidecar.date_taken is not None
+    assert sidecar.date_taken.tzinfo is not None
+    assert sidecar.date_taken.replace(tzinfo=None) == ref_date
