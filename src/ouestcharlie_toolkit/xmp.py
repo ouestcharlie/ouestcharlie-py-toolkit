@@ -281,6 +281,57 @@ class XmpStore:
         xml = serialize_xmp(sidecar)
         return await self.backend.write_new(xmp_path, xml.encode("utf-8"))
 
+    async def read_or_create_from_picture(
+        self,
+        photo_path: str,
+        force: bool = False,
+    ) -> tuple[XmpSidecar, VersionToken, bool]:
+        """Return the XMP sidecar for a photo, creating it from EXIF if needed.
+
+        If an XMP sidecar already exists and ``force=False``, the existing
+        sidecar is returned unchanged.  If the existing sidecar lacks
+        ``ouestcharlie:contentHash`` (e.g. a third-party sidecar written by
+        Lightroom), the hash is computed from the photo bytes and stored on the
+        returned sidecar object without writing back.
+
+        If no sidecar exists, or ``force=True``, EXIF is extracted from the
+        photo file, a new sidecar is written, and the new sidecar is returned.
+
+        Args:
+            photo_path: Path to the photo file (relative to backend root).
+            force: Re-extract EXIF and overwrite any existing sidecar.
+
+        Returns:
+            ``(sidecar, version_token, created)`` where ``created`` is ``True``
+            when a new sidecar was written to the backend.
+        """
+        # Lazy import — photo.py does not import xmp.py, so no circular dep.
+        from .photo import Photo
+
+        existing_sidecar: XmpSidecar | None = None
+        existing_version: VersionToken | None = None
+        try:
+            existing_sidecar, existing_version = await self.read(photo_path)
+        except FileNotFoundError:
+            pass
+
+        if existing_sidecar is not None and not force:
+            if not existing_sidecar.content_hash:
+                # Third-party sidecar without ouestcharlie:contentHash.
+                existing_sidecar.content_hash = (
+                    await Photo(self.backend, photo_path).create_identity()
+                )
+            assert existing_version is not None
+            return existing_sidecar, existing_version, False
+
+        # Extract EXIF and write sidecar (new or forced overwrite).
+        sidecar = await Photo(self.backend, photo_path).extract_exif()
+        if existing_version is not None:
+            new_version = await self.write(photo_path, sidecar, existing_version)
+        else:
+            new_version = await self.create(photo_path, sidecar)
+        return sidecar, new_version, True
+
     async def read_modify_write(
         self,
         photo_path: str,
