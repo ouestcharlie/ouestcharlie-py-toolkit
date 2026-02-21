@@ -59,11 +59,9 @@ See [README_DEV.md](README_DEV.md) for development setup and testing instruction
 
 ## Next Steps
 
-1. **Hierarchical manifest** - min/max date computation
-2. **Build first agent** — Create Whitebeard housekeeping agent using this toolkit
-3. **Add cloud backends** — Implement S3, GCS, ADLS Gen2 backends
 4. **Integration tests** — Test agent ↔ Woof communication via MCP
 
-## Descoped
+## Descoped for now
 
 - **Implement bloom filters** — Add bloom filter library and merging logic
+- **Add cloud backends** — Implement S3, GCS, ADLS Gen2 backends
