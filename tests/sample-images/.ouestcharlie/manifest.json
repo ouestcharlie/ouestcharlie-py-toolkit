@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "partition": "",
+  "photos": [
+    {
+      "filename": "001.jpg",
+      "contentHash": "sha256:7a123fd72a1067a3a1bdf2d8d36ba7de5dcf6618da2f862b694885a8428b6e7a",
+      "metadataVersion": 1,
+      "xmpVersionToken": "1771711197942444931",
+      "dateTaken": "2026-02-21T13:03:10.140000+01:00",
+      "camera": "samsung Galaxy A56 5G",
+      "orientation": 1
+    }
+  ],
+  "summary": {
+    "path": "",
+    "photoCount": 1,
+    "dateMin": "2026-02-21T13:03:10.140000+01:00",
+    "dateMax": "2026-02-21T13:03:10.140000+01:00"
+  }
+}

@@ -1,0 +1,3 @@
+# Ignore generated XMP sidecars; keep *.ref.xmp reference files
+*.xmp
+!*.ref.xmp

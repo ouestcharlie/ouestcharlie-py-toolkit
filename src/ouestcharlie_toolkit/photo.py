@@ -66,6 +66,29 @@ _EXIF_TO_XMP_NS: dict[str, str] = {
     "Exif.Photo.": "http://ns.adobe.com/exif/1.0/",
 }
 
+# UNDEFINED-type EXIF fields that store ASCII strings as space-separated decimal bytes
+# (e.g. "48 50 50 48" → "0220").  pyexiv2 does not decode these automatically.
+_EXIF_UNDEFINED_ASCII: frozenset[str] = frozenset({
+    "Exif.Photo.ExifVersion",
+    "Exif.Photo.FlashpixVersion",
+})
+
+
+def _decode_undefined_ascii(val: str) -> str:
+    """Convert pyexiv2's decimal-byte representation of an UNDEFINED ASCII field to a string.
+
+    Some pyexiv2 builds return UNDEFINED data as space-separated decimal bytes
+    (e.g. ``"48 50 50 48"`` for ExifVersion "0220"); others return the already-decoded
+    ASCII string directly.  Decode only when spaces are present.
+    """
+    if " " not in val:
+        return val  # already a string
+    try:
+        return "".join(chr(int(b)) for b in val.split())
+    except (ValueError, TypeError):
+        return val
+
+
 # Keys consumed by typed fields, internal JPEG structure, or binary blobs.
 _EXIF_EXTRA_SKIP: frozenset[str] = frozenset({
     # Typed fields
@@ -101,6 +124,8 @@ def _map_exif_extra(exif: dict[str, str]) -> dict[str, str]:
     for key, val in exif.items():
         if key in _EXIF_EXTRA_SKIP or key.startswith("Exif.GPSInfo."):
             continue
+        if key in _EXIF_UNDEFINED_ASCII:
+            val = _decode_undefined_ascii(val)
         for prefix, ns_uri in _EXIF_TO_XMP_NS.items():
             if key.startswith(prefix):
                 local = key[len(prefix):]
@@ -204,6 +229,8 @@ class Photo:
         camera_make = (exif_data.get("Exif.Image.Make") or "").strip() or None
         camera_model = (exif_data.get("Exif.Image.Model") or "").strip() or None
         orientation_s = exif_data.get("Exif.Image.Orientation")
+        if isinstance(orientation_s, list):
+            orientation_s = orientation_s[0] if orientation_s else None
         orientation = int(orientation_s) if orientation_s else None
         gps = _parse_exif_gps(exif_data)
 

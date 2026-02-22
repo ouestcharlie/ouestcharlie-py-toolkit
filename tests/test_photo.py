@@ -126,24 +126,44 @@ async def test_extract_exif_caches_hash_for_create_identity():
 # Real-image EXIF extraction vs reference XMP
 # ---------------------------------------------------------------------------
 
+_XMP_CREATE_DATE = "{http://ns.adobe.com/xap/1.0/}CreateDate"
+
+
+def _sample_pairs():
+    """Yield pytest.param(image_path, ref_xmp_path) for each *.ref.xmp with a matching image."""
+    pairs = []
+    for ref in sorted(_SAMPLES.glob("*.ref.xmp")):
+        stem = ref.name[: -len(".ref.xmp")]
+        candidates = [
+            p for p in _SAMPLES.glob(f"{stem}.*")
+            if p.suffix.lower() not in (".xmp",) and p != ref
+        ]
+        if candidates:
+            pairs.append(pytest.param(candidates[0], ref, id=stem))
+    return pairs
+
 
 @pytest.mark.asyncio
-async def test_extract_exif_matches_ref():
-    """Extract EXIF from a real JPEG and compare typed fields to the reference XMP.
+@pytest.mark.parametrize("image_path,ref_xmp_path", _sample_pairs())
+async def test_extract_exif_matches_ref(image_path, ref_xmp_path):
+    """Extract EXIF from a real image and compare typed fields to the reference XMP.
 
-    001.ref.xmp was produced by Exiv2 and represents the ground truth for what
-    metadata is in 001.jpg.  Our parser reads make/model/orientation from
-    tiff:* attributes.  The date is stored as xmp:CreateDate (not
+    *.ref.xmp files are produced by Exiv2 and represent the ground truth for
+    what metadata is in each image.  Our parser reads make/model/orientation
+    from tiff:* attributes.  The date is stored as xmp:CreateDate (not
     exif:DateTimeOriginal) in the ref, so it lands in _extra; we parse it from
     there to keep the expected value fully ref-driven.
-    """
-    ref_sidecar = parse_xmp((_SAMPLES / "001.ref.xmp").read_text(encoding="utf-8"))
 
-    # Extract xmp:CreateDate from _extra as the reference date.
-    _XMP_CREATE_DATE = "{http://ns.adobe.com/xap/1.0/}CreateDate"
+    The wall-clock portion of date_taken is compared against ref_date.  Some
+    images carry OffsetTimeOriginal so extract_exif() will attach a timezone;
+    others will not — we do not assert tzinfo presence here.
+    """
+    ref_sidecar = parse_xmp(ref_xmp_path.read_text(encoding="utf-8"))
     ref_date = _parse_iso_datetime(ref_sidecar._extra.get(_XMP_CREATE_DATE))
 
-    sidecar = await Photo(LocalBackend(root=str(_SAMPLES)), "001.jpg").extract_exif()
+    sidecar = await Photo(
+        LocalBackend(root=str(_SAMPLES)), image_path.name
+    ).extract_exif()
 
     assert sidecar.content_hash is not None
     assert sidecar.content_hash.startswith("sha256:")
@@ -151,11 +171,10 @@ async def test_extract_exif_matches_ref():
     assert sidecar.camera_model == ref_sidecar.camera_model
     assert sidecar.orientation == ref_sidecar.orientation
     assert sidecar.gps == ref_sidecar.gps
-    # The ref XMP stores CreateDate without timezone; extract_exif() adds it from
-    # OffsetTimeOriginal.  Compare the wall-clock portion and assert tz is present.
-    assert sidecar.date_taken is not None
-    assert sidecar.date_taken.tzinfo is not None
-    assert sidecar.date_taken.replace(tzinfo=None) == ref_date
+
+    if ref_date is not None:
+        assert sidecar.date_taken is not None
+        assert sidecar.date_taken.replace(tzinfo=None) == ref_date
 
     # Cross-check _extra: compare simple scalar attributes present in both.
     # Skip ref entries whose value begins with "<" — those are complex XMP
