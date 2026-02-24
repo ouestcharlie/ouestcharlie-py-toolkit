@@ -213,6 +213,7 @@ class Photo:
             XmpSidecar populated with EXIF fields and ``content_hash``.
         """
         import pyexiv2  # lazy: native C extension with system library dependency
+        pyexiv2.set_log_level(4)  # mute C-level logs: they write to stdout, corrupting MCP stdio
 
         data, _ = await self.backend.read(self.path)
         content_hash = f"sha256:{hashlib.sha256(data).hexdigest()}"
