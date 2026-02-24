@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import tempfile
 from datetime import datetime
@@ -10,6 +11,8 @@ from pathlib import Path
 
 from .backend import Backend
 from .schema import XmpSidecar
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +50,7 @@ def _parse_exif_datetime(exif: dict[str, str]) -> datetime | None:
             iso += tz
         return datetime.fromisoformat(iso)
     except ValueError:
+        _log.debug("Could not parse EXIF datetime %r", date_str, exc_info=True)
         return None
 
 
@@ -86,6 +90,7 @@ def _decode_undefined_ascii(val: str) -> str:
     try:
         return "".join(chr(int(b)) for b in val.split())
     except (ValueError, TypeError):
+        _log.debug("Could not decode UNDEFINED ASCII EXIF field %r", val, exc_info=True)
         return val
 
 
@@ -150,6 +155,7 @@ def _parse_exif_gps(exif: dict[str, str]) -> tuple[float, float] | None:
 
         return (dms_to_decimal(lat_raw, lat_ref), dms_to_decimal(lon_raw, lon_ref))
     except (ValueError, ZeroDivisionError, IndexError):
+        _log.debug("Could not parse EXIF GPS %r / %r", lat_raw, lon_raw, exc_info=True)
         return None
 
 

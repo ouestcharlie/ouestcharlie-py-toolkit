@@ -1,6 +1,7 @@
 """Tests for the Photo domain class."""
 
 import hashlib
+import logging
 import tempfile
 from pathlib import Path
 
@@ -8,6 +9,11 @@ import pytest
 
 from ouestcharlie_toolkit import Photo
 from ouestcharlie_toolkit.backends.local import LocalBackend
+from ouestcharlie_toolkit.photo import (
+    _decode_undefined_ascii,
+    _parse_exif_datetime,
+    _parse_exif_gps,
+)
 from ouestcharlie_toolkit.xmp import _parse_iso_datetime, parse_xmp
 
 _SAMPLES = Path(__file__).parent / "sample-images"
@@ -191,3 +197,43 @@ async def test_extract_exif_matches_ref(image_path, ref_xmp_path):
         if our_val != ref_val:
             mismatches[key] = (our_val, ref_val)
     assert mismatches == {}, f"_extra value mismatches: {mismatches}"
+
+
+# ---------------------------------------------------------------------------
+# Logging behaviour in EXIF helpers
+# ---------------------------------------------------------------------------
+
+_PHOTO_LOGGER = "ouestcharlie_toolkit.photo"
+
+
+def test_parse_exif_datetime_invalid_logs_debug(caplog):
+    """_parse_exif_datetime with an unparseable string emits a DEBUG message."""
+    bad_exif = {"Exif.Photo.DateTimeOriginal": "not a date"}
+    with caplog.at_level(logging.DEBUG, logger=_PHOTO_LOGGER):
+        result = _parse_exif_datetime(bad_exif)
+    assert result is None
+    assert any("Could not parse EXIF datetime" in msg for msg in caplog.messages)
+    assert any(r.levelno == logging.DEBUG for r in caplog.records)
+
+
+def test_decode_undefined_ascii_invalid_logs_debug(caplog):
+    """_decode_undefined_ascii with non-integer bytes emits a DEBUG message."""
+    with caplog.at_level(logging.DEBUG, logger=_PHOTO_LOGGER):
+        result = _decode_undefined_ascii("xx yy zz")  # spaces → triggers decode path, then fails
+    assert result == "xx yy zz"  # original value returned on failure
+    assert any("Could not decode UNDEFINED ASCII" in msg for msg in caplog.messages)
+
+
+def test_parse_exif_gps_invalid_logs_debug(caplog):
+    """_parse_exif_gps with malformed rational strings emits a DEBUG message."""
+    bad_exif = {
+        "Exif.GPSInfo.GPSLatitudeRef": "N",
+        "Exif.GPSInfo.GPSLongitudeRef": "E",
+        "Exif.GPSInfo.GPSLatitude": "not/valid",
+        "Exif.GPSInfo.GPSLongitude": "2/1",
+    }
+    with caplog.at_level(logging.DEBUG, logger=_PHOTO_LOGGER):
+        result = _parse_exif_gps(bad_exif)
+    assert result is None
+    assert any("Could not parse EXIF GPS" in msg for msg in caplog.messages)
+    assert any(r.levelno == logging.DEBUG for r in caplog.records)

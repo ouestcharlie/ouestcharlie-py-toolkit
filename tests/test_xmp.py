@@ -1,5 +1,6 @@
 """Test XMP utilities, parsing, and serialization."""
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -437,3 +438,35 @@ def test_ref_xmp_extra_roundtrip():
     # Complex elements: content preserved (ET normalises whitespace)
     assert "50" in restored._extra[f"{{{_EXIF}}}ISOSpeedRatings"]
     assert "False" in restored._extra[f"{{{_EXIF}}}Flash"]
+
+
+# ---------------------------------------------------------------------------
+# Logging behaviour
+# ---------------------------------------------------------------------------
+
+_XMP_LOGGER = "ouestcharlie_toolkit.xmp"
+
+
+def test_parse_xmp_invalid_xml_logs_warning(caplog):
+    """parse_xmp with malformed XML emits a WARNING with exc_info."""
+    with caplog.at_level(logging.WARNING, logger=_XMP_LOGGER):
+        parse_xmp("not valid xml <<<")
+    assert any("Malformed XMP" in msg for msg in caplog.messages)
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+    assert any(r.exc_info is not None for r in caplog.records)
+
+
+def test_parse_iso_datetime_invalid_logs_debug(caplog):
+    """_parse_iso_datetime with a bad string emits a DEBUG message."""
+    with caplog.at_level(logging.DEBUG, logger=_XMP_LOGGER):
+        _parse_iso_datetime("not-a-date")
+    assert any("Could not parse XMP datetime" in msg for msg in caplog.messages)
+    assert any(r.levelno == logging.DEBUG for r in caplog.records)
+
+
+def test_parse_xmp_gps_invalid_logs_debug(caplog):
+    """_parse_xmp_gps with a malformed coordinate emits a DEBUG message."""
+    with caplog.at_level(logging.DEBUG, logger=_XMP_LOGGER):
+        _parse_xmp_gps("not-a-coord", "2,21.132000E")
+    assert any("Could not parse XMP GPS" in msg for msg in caplog.messages)
+    assert any(r.levelno == logging.DEBUG for r in caplog.records)

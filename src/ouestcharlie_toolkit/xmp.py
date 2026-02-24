@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from .backend import Backend
+
+_log = logging.getLogger(__name__)
 from .schema import (
     OUESTCHARLIE_NS,
     SCHEMA_VERSION,
@@ -137,6 +140,7 @@ def _parse_iso_datetime(s: str | None) -> datetime | None:
     try:
         return datetime.fromisoformat(s)
     except ValueError:
+        _log.debug("Could not parse XMP datetime %r", s, exc_info=True)
         return None
 
 
@@ -173,6 +177,7 @@ def _parse_xmp_gps(lat_str: str | None, lon_str: str | None) -> tuple[float, flo
     try:
         return (_xmp_coord_to_decimal(lat_str), _xmp_coord_to_decimal(lon_str))
     except (ValueError, IndexError):
+        _log.debug("Could not parse XMP GPS %r / %r", lat_str, lon_str, exc_info=True)
         return None
 
 
@@ -359,6 +364,10 @@ class XmpStore:
                 await self.write(photo_path, updated, version)
                 return updated
             except VersionConflictError:
+                _log.debug(
+                    "Version conflict on %r (attempt %d/%d), retrying",
+                    photo_path, attempt + 1, max_retries,
+                )
                 if attempt == max_retries:
                     raise
 
@@ -389,6 +398,7 @@ def parse_xmp(xml: str) -> XmpSidecar:
     try:
         root = ET.fromstring(body)
     except ET.ParseError:
+        _log.warning("Malformed XMP document, returning empty sidecar", exc_info=True)
         return XmpSidecar()
 
     desc = _find_description(root)
@@ -526,7 +536,7 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
                 child = ET.fromstring(val)
                 desc.append(child)
             except ET.ParseError:
-                pass  # skip malformed stored elements
+                _log.warning("Skipping malformed _extra element for key %r: %r", key, val, exc_info=True)
         else:
             desc.set(key, val)
 

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Callable
 
 from .backend import Backend
+
+_log = logging.getLogger(__name__)
 from .schema import (
     LeafManifest,
     ParentManifest,
@@ -114,6 +117,10 @@ class ManifestStore:
                 await self.write_leaf(updated, version)
                 return updated
             except VersionConflictError:
+                _log.debug(
+                    "Version conflict on leaf manifest %r (attempt %d/%d), retrying",
+                    partition, attempt + 1, max_retries,
+                )
                 if attempt == max_retries:
                     raise
                 # Re-read and retry

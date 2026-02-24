@@ -1,6 +1,7 @@
 """OuEstCharlie toolkit - shared Python library for photo management agents."""
 
 from .backend import Backend, backend_from_config
+from .logging import setup_logging
 from .manifest import ManifestStore
 from .progress import ProgressReporter
 from .schema import (
@@ -41,5 +42,6 @@ __all__ = [
     "ConfigurationError",
     # Utilities
     "backend_from_config",
+    "setup_logging",
     "xmp_path_for",
 ]

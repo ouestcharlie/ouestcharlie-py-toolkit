@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
+
+_log = logging.getLogger(__name__)
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
@@ -129,6 +132,10 @@ class AgentBase:
             yield ctx
         except FileNotFoundError as e:
             # Permanent error: photo file missing
+            _log.error(
+                "Photo file not found — partition=%r photo=%r: %s",
+                partition, photo, e, exc_info=True,
+            )
             await self._log_error(
                 "permanent",
                 f"Photo file not found: {e}",
@@ -139,6 +146,10 @@ class AgentBase:
             ctx.failed = True
         except Exception as e:
             # Permanent error by default (agents can re-raise transient errors differently)
+            _log.error(
+                "Failed to process photo — partition=%r photo=%r: %s",
+                partition, photo, e, exc_info=True,
+            )
             await self._log_error(
                 "permanent",
                 f"Failed to process photo: {e}",
