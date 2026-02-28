@@ -111,6 +111,20 @@ class PartitionSummary:
 
 
 @dataclass
+class ThumbnailGridLayout:
+    """Grid layout metadata for a thumbnail or preview AVIF container.
+
+    Tiles are ordered by photo content_hash (ascending) for stability:
+    a photo's tile index only changes if its content changes, not on renames.
+    """
+
+    cols: int                   # number of columns in the AVIF grid
+    rows: int                   # number of rows in the AVIF grid
+    tile_size: int              # short edge in pixels (e.g. 256 or 1440)
+    photo_order: list[str]      # content_hashes in row-major tile order
+
+
+@dataclass
 class LeafManifest:
     """Leaf-level manifest containing full per-photo metadata inline."""
 
@@ -120,6 +134,8 @@ class LeafManifest:
     summary: PartitionSummary | None = None
     thumbnails_hash: str | None = None
     previews_hash: str | None = None
+    thumbnail_grid: ThumbnailGridLayout | None = None
+    preview_grid: ThumbnailGridLayout | None = None
     _extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -240,6 +256,24 @@ def _summary_from_dict(d: dict[str, Any]) -> PartitionSummary:
     )
 
 
+def _grid_layout_to_dict(g: ThumbnailGridLayout) -> dict[str, Any]:
+    return {
+        "cols": g.cols,
+        "rows": g.rows,
+        "tileSize": g.tile_size,
+        "photoOrder": g.photo_order,
+    }
+
+
+def _grid_layout_from_dict(d: dict[str, Any]) -> ThumbnailGridLayout:
+    return ThumbnailGridLayout(
+        cols=d["cols"],
+        rows=d["rows"],
+        tile_size=d["tileSize"],
+        photo_order=d.get("photoOrder", []),
+    )
+
+
 def serialize_leaf(manifest: LeafManifest) -> dict[str, Any]:
     """Serialize a LeafManifest to a JSON-compatible dict."""
     d: dict[str, Any] = {
@@ -253,6 +287,10 @@ def serialize_leaf(manifest: LeafManifest) -> dict[str, Any]:
         d["thumbnailsHash"] = manifest.thumbnails_hash
     if manifest.previews_hash is not None:
         d["previewsHash"] = manifest.previews_hash
+    if manifest.thumbnail_grid is not None:
+        d["thumbnailGrid"] = _grid_layout_to_dict(manifest.thumbnail_grid)
+    if manifest.preview_grid is not None:
+        d["previewGrid"] = _grid_layout_to_dict(manifest.preview_grid)
     d.update(manifest._extra)
     return d
 
@@ -261,7 +299,7 @@ def deserialize_leaf(d: dict[str, Any]) -> LeafManifest:
     """Deserialize a JSON dict into a LeafManifest, preserving unknown fields."""
     known_keys = {
         "schemaVersion", "partition", "photos", "summary",
-        "thumbnailsHash", "previewsHash",
+        "thumbnailsHash", "previewsHash", "thumbnailGrid", "previewGrid",
     }
     extra = {k: v for k, v in d.items() if k not in known_keys}
     return LeafManifest(
@@ -271,6 +309,8 @@ def deserialize_leaf(d: dict[str, Any]) -> LeafManifest:
         summary=_summary_from_dict(d["summary"]) if d.get("summary") else None,
         thumbnails_hash=d.get("thumbnailsHash"),
         previews_hash=d.get("previewsHash"),
+        thumbnail_grid=_grid_layout_from_dict(d["thumbnailGrid"]) if d.get("thumbnailGrid") else None,
+        preview_grid=_grid_layout_from_dict(d["previewGrid"]) if d.get("previewGrid") else None,
         _extra=extra,
     )
 

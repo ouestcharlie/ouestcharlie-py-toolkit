@@ -18,6 +18,10 @@ dependencies = [
 raw = [
     "rawpy>=0.19",
 ]
+# pillow-heif adds HEIC/HEIF decoding support to Pillow.
+heic = [
+    "pillow-heif>=0.13",
+]
 dev = [
     "mypy>=1.0",
     "pytest>=8.0",
