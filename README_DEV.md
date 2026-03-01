@@ -60,7 +60,3 @@ ouestcharlie-py-toolkit/
 ├── pyproject.toml            # Package configuration
 └── README.md                 # Usage documentation
 ```
-
-## Implementation Status
-
-See [SKELETON_COMPLETE.md](SKELETON_COMPLETE.md) for what is implemented and what remains.

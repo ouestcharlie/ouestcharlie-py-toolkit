@@ -28,6 +28,7 @@ _NS_X = "adobe:ns:meta/"
 _NS_OC = OUESTCHARLIE_NS
 _NS_EXIF = "http://ns.adobe.com/exif/1.0/"
 _NS_TIFF = "http://ns.adobe.com/tiff/1.0/"
+_NS_XMP = "http://ns.adobe.com/xmp/1.0/"
 _NS_DC = "http://purl.org/dc/elements/1.1/"
 
 _XPACKET_HEADER = "<?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
@@ -67,6 +68,9 @@ _KNOWN_ATTRS: frozenset[str] = frozenset({
     f"{{{_NS_EXIF}}}Model",
     f"{{{_NS_TIFF}}}Model",
     f"{{{_NS_TIFF}}}Orientation",
+    f"{{{_NS_XMP}}}Rating",
+    f"{{{_NS_EXIF}}}PixelXDimension",
+    f"{{{_NS_EXIF}}}PixelYDimension",
 })
 
 # Known rdf:Description child element tags — not preserved in _extra.
@@ -83,6 +87,7 @@ def _register_et_namespaces() -> None:
     ET.register_namespace("ouestcharlie", _NS_OC)
     ET.register_namespace("exif", _NS_EXIF)
     ET.register_namespace("tiff", _NS_TIFF)
+    ET.register_namespace("xmp", _NS_XMP)
     ET.register_namespace("dc", _NS_DC)
     for ns_uri, prefix in _WELL_KNOWN_NS.items():
         ET.register_namespace(prefix, ns_uri)
@@ -408,6 +413,7 @@ def parse_xmp(xml: str) -> XmpSidecar:
     oc = f"{{{_NS_OC}}}"
     exif = f"{{{_NS_EXIF}}}"
     tiff = f"{{{_NS_TIFF}}}"
+    xmp_ns = f"{{{_NS_XMP}}}"
     dc = f"{{{_NS_DC}}}"
     rdf = f"{{{_NS_RDF}}}"
 
@@ -418,6 +424,9 @@ def parse_xmp(xml: str) -> XmpSidecar:
     make = desc.get(f"{exif}Make") or desc.get(f"{tiff}Make")
     model = desc.get(f"{exif}Model") or desc.get(f"{tiff}Model")
     orientation_s = desc.get(f"{tiff}Orientation")
+    rating_s = desc.get(f"{xmp_ns}Rating")
+    width_s = desc.get(f"{exif}PixelXDimension")
+    height_s = desc.get(f"{exif}PixelYDimension")
 
     lat_elem = desc.find(f"{exif}GPSLatitude")
     lon_elem = desc.find(f"{exif}GPSLongitude")
@@ -432,6 +441,12 @@ def parse_xmp(xml: str) -> XmpSidecar:
         bag = subject.find(f"{rdf}Bag")
         if bag is not None:
             tags = [li.text or "" for li in bag.findall(f"{rdf}li")]
+
+    def _int_or_none(s: str | None) -> int | None:
+        try:
+            return int(s) if s is not None else None
+        except (ValueError, TypeError):
+            return None
 
     # Collect unknown attributes and child elements into _extra.
     extra: dict[str, str] = {}
@@ -449,8 +464,11 @@ def parse_xmp(xml: str) -> XmpSidecar:
         date_taken=_parse_iso_datetime(date_s),
         camera_make=make or None,
         camera_model=model or None,
-        orientation=int(orientation_s) if orientation_s else None,
+        orientation=_int_or_none(orientation_s),
         gps=gps,
+        rating=_int_or_none(rating_s),
+        width=_int_or_none(width_s),
+        height=_int_or_none(height_s),
         tags=tags,
         _extra=extra,
     )
@@ -486,6 +504,7 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
     oc = f"{{{_NS_OC}}}"
     exif_ns = f"{{{_NS_EXIF}}}"
     tiff_ns = f"{{{_NS_TIFF}}}"
+    xmp_ns = f"{{{_NS_XMP}}}"
     dc_ns = f"{{{_NS_DC}}}"
     rdf_ns = f"{{{_NS_RDF}}}"
 
@@ -511,6 +530,25 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
         desc,
         f"{tiff_ns}Orientation",
         str(sidecar.orientation) if sidecar.orientation is not None else None,
+    )
+
+    # Rating (xmp:Rating — standard XMP field; -1=rejected, 0=unrated, 1-5=stars)
+    _set_or_del(
+        desc,
+        f"{xmp_ns}Rating",
+        str(sidecar.rating) if sidecar.rating is not None else None,
+    )
+
+    # Pixel dimensions
+    _set_or_del(
+        desc,
+        f"{exif_ns}PixelXDimension",
+        str(sidecar.width) if sidecar.width is not None else None,
+    )
+    _set_or_del(
+        desc,
+        f"{exif_ns}PixelYDimension",
+        str(sidecar.height) if sidecar.height is not None else None,
     )
 
     # GPS as child elements

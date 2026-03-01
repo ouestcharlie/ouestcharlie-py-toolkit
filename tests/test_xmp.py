@@ -226,6 +226,81 @@ def test_parse_xmp_known_fields_not_in_extra():
     assert s._extra == {}
 
 
+_SAMPLE_XMP_WITH_RATING_AND_DIMS = """\
+<?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+  <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+    <rdf:Description rdf:about=''
+      xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'
+      xmlns:xmp='http://ns.adobe.com/xmp/1.0/'
+      xmlns:exif='http://ns.adobe.com/exif/1.0/'
+      ouestcharlie:contentHash='sha256:abc'
+      ouestcharlie:schemaVersion='1'
+      ouestcharlie:metadataVersion='1'
+      xmp:Rating='3'
+      exif:PixelXDimension='6000'
+      exif:PixelYDimension='4000'/>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>"""
+
+
+def test_parse_xmp_rating():
+    """xmp:Rating is parsed as a typed int field."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_RATING_AND_DIMS)
+    assert s.rating == 3
+    assert "{http://ns.adobe.com/xmp/1.0/}Rating" not in s._extra
+
+
+def test_parse_xmp_rejected_rating():
+    """xmp:Rating=-1 (rejected) is parsed correctly."""
+    xml = _SAMPLE_XMP_WITH_RATING_AND_DIMS.replace("xmp:Rating='3'", "xmp:Rating='-1'")
+    assert parse_xmp(xml).rating == -1
+
+
+def test_parse_xmp_width_height():
+    """exif:PixelXDimension / PixelYDimension are parsed as typed int fields."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_RATING_AND_DIMS)
+    assert s.width == 6000
+    assert s.height == 4000
+    assert "{http://ns.adobe.com/exif/1.0/}PixelXDimension" not in s._extra
+    assert "{http://ns.adobe.com/exif/1.0/}PixelYDimension" not in s._extra
+
+
+def test_serialize_xmp_rating_round_trip():
+    """rating survives parse → serialize → parse."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_RATING_AND_DIMS)
+    assert s.rating == 3
+    restored = parse_xmp(serialize_xmp(s))
+    assert restored.rating == 3
+
+
+def test_serialize_xmp_width_height_round_trip():
+    """width and height survive parse → serialize → parse."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_RATING_AND_DIMS)
+    restored = parse_xmp(serialize_xmp(s))
+    assert restored.width == 6000
+    assert restored.height == 4000
+
+
+def test_serialize_xmp_none_rating_omits_field():
+    """When rating is None, xmp:Rating is not written to XMP."""
+    from ouestcharlie_toolkit.schema import XmpSidecar
+    s = XmpSidecar(content_hash="sha256:x")
+    assert s.rating is None
+    xml = serialize_xmp(s)
+    assert "Rating" not in xml
+
+
+def test_serialize_xmp_none_dims_omit_fields():
+    """When width/height are None, pixel dimensions are not written to XMP."""
+    from ouestcharlie_toolkit.schema import XmpSidecar
+    s = XmpSidecar(content_hash="sha256:x")
+    xml = serialize_xmp(s)
+    assert "PixelXDimension" not in xml
+    assert "PixelYDimension" not in xml
+
+
 _SAMPLE_XMP_WITH_EXTRAS = """\
 <?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>
 <x:xmpmeta xmlns:x='adobe:ns:meta/'>
@@ -250,10 +325,11 @@ _SAMPLE_XMP_WITH_EXTRAS = """\
 
 
 def test_parse_xmp_preserves_unknown_attr():
-    """Unknown simple attributes (e.g. xmp:Rating) are stored in _extra."""
+    """Unknown simple attributes are stored in _extra; known fields (e.g. xmp:Rating) become typed."""
     s = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
-    assert "{http://ns.adobe.com/xmp/1.0/}Rating" in s._extra
-    assert s._extra["{http://ns.adobe.com/xmp/1.0/}Rating"] == "4"
+    # xmp:Rating is now a known field — stored on the typed attribute, not in _extra.
+    assert s.rating == 4
+    assert "{http://ns.adobe.com/xmp/1.0/}Rating" not in s._extra
 
 
 def test_parse_xmp_preserves_unknown_child_element():
@@ -277,8 +353,9 @@ def test_serialize_xmp_roundtrip_preserves_extra():
     restored = parse_xmp(xml2)
 
     assert set(restored._extra.keys()) == set(original._extra.keys())
-    # Simple attribute: exact match
-    assert restored._extra["{http://ns.adobe.com/xmp/1.0/}Rating"] == "4"
+    # xmp:Rating is a typed field — survives round-trip as sidecar.rating, not in _extra.
+    assert restored.rating == original.rating
+    assert "{http://ns.adobe.com/xmp/1.0/}Rating" not in restored._extra
     # Child element: content preserved (whitespace may differ after ET round-trip)
     lr_key = "{http://ns.adobe.com/lightroom/1.0/}hierarchicalSubject"
     assert "Paris" in restored._extra[lr_key]

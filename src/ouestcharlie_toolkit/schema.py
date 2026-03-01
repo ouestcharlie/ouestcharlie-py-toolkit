@@ -77,10 +77,14 @@ class PhotoEntry:
     filename: str
     content_hash: str  # e.g. "sha256:a1b2c3..."
     date_taken: datetime | None = None
-    camera: str | None = None
+    make: str | None = None    # camera manufacturer (tiff:Make)
+    model: str | None = None   # camera model (tiff:Model)
     gps: tuple[float, float] | None = None
     orientation: int | None = None
     tags: list[str] = field(default_factory=list)
+    rating: int | None = None  # xmp:Rating (0=unrated, 1-5=stars, -1=rejected)
+    width: int | None = None   # pixel width (exif:PixelXDimension / tiff:ImageWidth)
+    height: int | None = None  # pixel height (exif:PixelYDimension / tiff:ImageLength)
     metadata_version: int = 1
     xmp_version_token: str = ""  # backend version token at consolidation time
     _extra: dict[str, Any] = field(default_factory=dict)
@@ -100,6 +104,8 @@ class PartitionSummary:
     photo_count: int = 0
     date_min: datetime | None = None
     date_max: datetime | None = None
+    rating_min: int | None = None  # xmp:Rating minimum across photos
+    rating_max: int | None = None  # xmp:Rating maximum across photos
     tags_bloom: bytes = b""  # serialized bloom filter over all tags
     hashes_bloom: bytes = b""  # serialized bloom filter over content hashes
     _extra: dict[str, Any] = field(default_factory=dict)
@@ -166,6 +172,9 @@ class XmpSidecar:
     camera_make: str | None = None
     camera_model: str | None = None
     orientation: int | None = None
+    rating: int | None = None  # xmp:Rating (0=unrated, 1-5=stars, -1=rejected)
+    width: int | None = None   # pixel width (exif:PixelXDimension / tiff:ImageWidth)
+    height: int | None = None  # pixel height (exif:PixelYDimension / tiff:ImageLength)
     tags: list[str] = field(default_factory=list)
     # Unknown XMP attributes and child elements from third-party apps (Lightroom, darktable, …).
     # Keys use Clark notation: "{ns_uri}localname".
@@ -191,22 +200,31 @@ def _photo_entry_to_dict(entry: PhotoEntry) -> dict[str, Any]:
     }
     if entry.date_taken is not None:
         d["dateTaken"] = entry.date_taken.isoformat()
-    if entry.camera is not None:
-        d["camera"] = entry.camera
+    if entry.make is not None:
+        d["make"] = entry.make
+    if entry.model is not None:
+        d["model"] = entry.model
     if entry.gps is not None:
         d["gps"] = list(entry.gps)
     if entry.orientation is not None:
         d["orientation"] = entry.orientation
     if entry.tags:
         d["tags"] = entry.tags
+    if entry.rating is not None:
+        d["rating"] = entry.rating
+    if entry.width is not None:
+        d["width"] = entry.width
+    if entry.height is not None:
+        d["height"] = entry.height
     d.update(entry._extra)
     return d
 
 
 def _photo_entry_from_dict(d: dict[str, Any]) -> PhotoEntry:
     known_keys = {
-        "filename", "contentHash", "dateTaken", "camera", "gps",
-        "orientation", "tags", "metadataVersion", "xmpVersionToken",
+        "filename", "contentHash", "dateTaken", "make", "model", "gps",
+        "orientation", "tags", "rating", "width", "height",
+        "metadataVersion", "xmpVersionToken",
     }
     extra = {k: v for k, v in d.items() if k not in known_keys}
     gps_raw = d.get("gps")
@@ -214,10 +232,14 @@ def _photo_entry_from_dict(d: dict[str, Any]) -> PhotoEntry:
         filename=d["filename"],
         content_hash=d["contentHash"],
         date_taken=datetime.fromisoformat(d["dateTaken"]) if d.get("dateTaken") else None,
-        camera=d.get("camera"),
+        make=d.get("make"),
+        model=d.get("model"),
         gps=tuple(gps_raw) if gps_raw else None,  # type: ignore[arg-type]
         orientation=d.get("orientation"),
         tags=d.get("tags", []),
+        rating=d.get("rating"),
+        width=d.get("width"),
+        height=d.get("height"),
         metadata_version=d.get("metadataVersion", 1),
         xmp_version_token=d.get("xmpVersionToken", ""),
         _extra=extra,
@@ -233,6 +255,10 @@ def _summary_to_dict(s: PartitionSummary) -> dict[str, Any]:
         d["dateMin"] = s.date_min.isoformat()
     if s.date_max is not None:
         d["dateMax"] = s.date_max.isoformat()
+    if s.rating_min is not None:
+        d["ratingMin"] = s.rating_min
+    if s.rating_max is not None:
+        d["ratingMax"] = s.rating_max
     if s.tags_bloom:
         # TODO: base64 encode bloom filters
         d["tagsBloom"] = s.tags_bloom.hex()
@@ -243,13 +269,15 @@ def _summary_to_dict(s: PartitionSummary) -> dict[str, Any]:
 
 
 def _summary_from_dict(d: dict[str, Any]) -> PartitionSummary:
-    known_keys = {"path", "photoCount", "dateMin", "dateMax", "tagsBloom", "hashesBloom"}
+    known_keys = {"path", "photoCount", "dateMin", "dateMax", "ratingMin", "ratingMax", "tagsBloom", "hashesBloom"}
     extra = {k: v for k, v in d.items() if k not in known_keys}
     return PartitionSummary(
         path=d["path"],
         photo_count=d.get("photoCount", 0),
         date_min=datetime.fromisoformat(d["dateMin"]) if d.get("dateMin") else None,
         date_max=datetime.fromisoformat(d["dateMax"]) if d.get("dateMax") else None,
+        rating_min=d.get("ratingMin"),
+        rating_max=d.get("ratingMax"),
         tags_bloom=bytes.fromhex(d["tagsBloom"]) if d.get("tagsBloom") else b"",
         hashes_bloom=bytes.fromhex(d["hashesBloom"]) if d.get("hashesBloom") else b"",
         _extra=extra,

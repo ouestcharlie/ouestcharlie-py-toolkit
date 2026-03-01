@@ -195,7 +195,8 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
         filename="IMG_001.jpg",
         content_hash="sha256:abc",
         date_taken=date,
-        camera="Canon EOS R5",
+        make="Canon",
+        model="EOS R5",
         gps=(48.8566, 2.3522),
         orientation=1,
         tags=["paris", "vacation"],
@@ -206,7 +207,8 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
     manifest, _ = await store.read_leaf("p")
     e = manifest.photos[0]
     assert e.date_taken == date
-    assert e.camera == "Canon EOS R5"
+    assert e.make == "Canon"
+    assert e.model == "EOS R5"
     assert e.gps == (48.8566, 2.3522)
     assert e.orientation == 1
     assert e.tags == ["paris", "vacation"]

@@ -17,11 +17,9 @@ ouestcharlie-toolkit/
 ├── pyproject.toml
 ├── src/
 │   └── ouestcharlie/
-│       ├── __init__.py           # Package exports
 │       ├── schema.py             # Data models, exceptions, constants
 │       ├── backend.py            # Backend protocol
 │       ├── backends/
-│       │   ├── __init__.py
 │       │   └── local.py          # Local filesystem backend
 │       ├── manifest.py           # ManifestStore for manifest operations
 │       ├── xmp.py                # XmpStore for XMP sidecar operations
@@ -135,7 +133,7 @@ export WOOF_BACKEND_CONFIG='{"type": "filesystem", "root": "/Users/alice/Photos"
 
 - Cloud backend implementations (S3, GCS, ADLS Gen2, OneDrive, Kdrive)
 - Bloom filter implementation for partition summaries
-- Image thumbnail generation helpers
+- Handling of more XMP field types (text, float...)
 
 ## Architecture
 

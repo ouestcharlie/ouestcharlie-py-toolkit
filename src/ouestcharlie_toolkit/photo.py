@@ -108,6 +108,10 @@ _EXIF_EXTRA_SKIP: frozenset[str] = frozenset({
     "Exif.Photo.OffsetTimeOriginal",
     "Exif.Photo.OffsetTime",
     "Exif.Photo.OffsetTimeDigitized",
+    "Exif.Photo.PixelXDimension",
+    "Exif.Photo.PixelYDimension",
+    "Exif.Image.ImageWidth",
+    "Exif.Image.ImageLength",
     # Internal JPEG / IFD pointers
     "Exif.Image.JPEGInterchangeFormat",
     "Exif.Image.JPEGInterchangeFormatLength",
@@ -241,6 +245,17 @@ class Photo:
         orientation = int(orientation_s) if orientation_s else None
         gps = _parse_exif_gps(exif_data)
 
+        def _int_or_none(v: str | None) -> int | None:
+            try:
+                return int(v) if v else None
+            except (ValueError, TypeError):
+                return None
+
+        width_s = exif_data.get("Exif.Photo.PixelXDimension") or exif_data.get("Exif.Image.ImageWidth")
+        height_s = exif_data.get("Exif.Photo.PixelYDimension") or exif_data.get("Exif.Image.ImageLength")
+        width = _int_or_none(width_s)
+        height = _int_or_none(height_s)
+
         return XmpSidecar(
             content_hash=content_hash,
             date_taken=date_taken,
@@ -248,5 +263,7 @@ class Photo:
             camera_model=camera_model,
             orientation=orientation,
             gps=gps,
+            width=width,
+            height=height,
             _extra=_map_exif_extra(exif_data),
         )
