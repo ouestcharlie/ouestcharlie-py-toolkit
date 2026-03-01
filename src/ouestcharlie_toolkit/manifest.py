@@ -184,6 +184,37 @@ class ManifestStore:
         data = json.dumps(serialize_parent(manifest), ensure_ascii=False, indent=2).encode("utf-8")
         return await self.backend.write_new(path, data)
 
+    async def read_any(
+        self, partition: str
+    ) -> tuple[LeafManifest | ParentManifest, VersionToken]:
+        """Read a manifest at partition, returning whichever type it is.
+
+        Reads the raw JSON and dispatches to LeafManifest or ParentManifest
+        based on whether the 'photos' or 'children' key is present. This
+        avoids speculative exception-based dispatch that would double I/O.
+
+        Args:
+            partition: Partition path (e.g., "2024/2024-07" or "" for root).
+
+        Returns:
+            Tuple of (LeafManifest | ParentManifest, VersionToken).
+
+        Raises:
+            FileNotFoundError: If no manifest exists at this partition.
+            ValueError: If the JSON has neither 'photos' nor 'children'.
+        """
+        path = manifest_path(partition)
+        data, version = await self.backend.read(path)
+        raw = json.loads(data.decode("utf-8"))
+        if "photos" in raw:
+            return deserialize_leaf(raw), version
+        elif "children" in raw:
+            return deserialize_parent(raw), version
+        else:
+            raise ValueError(
+                f"Manifest at {path!r} has neither 'photos' nor 'children'"
+            )
+
     async def rebuild_parent(
         self,
         parent_path: str,
