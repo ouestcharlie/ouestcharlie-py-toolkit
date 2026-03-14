@@ -74,21 +74,18 @@ class ConfigurationError(Exception):
 
 @dataclass
 class PhotoEntry:
-    """Per-photo metadata entry within a leaf manifest."""
+    """Per-photo metadata entry within a leaf manifest.
+
+    Searchable metadata (driven by PHOTO_FIELDS) is stored in ``searchable``
+    keyed by ``FieldDef.entry_attr``.  Unknown XMP fields are preserved in
+    ``_extra``.
+    """
 
     filename: str
-    content_hash: str  # e.g. "sha256:a1b2c3..."
-    date_taken: datetime | None = None
-    make: str | None = None    # camera manufacturer (tiff:Make)
-    model: str | None = None   # camera model (tiff:Model)
-    gps: tuple[float, float] | None = None
-    orientation: int | None = None
-    tags: list[str] = field(default_factory=list)
-    rating: int | None = None  # xmp:Rating (0=unrated, 1-5=stars, -1=rejected)
-    width: int | None = None   # pixel width (exif:PixelXDimension / tiff:ImageWidth)
-    height: int | None = None  # pixel height (exif:PixelYDimension / tiff:ImageLength)
+    content_hash: str
+    searchable: dict[str, Any] = field(default_factory=dict)
     metadata_version: int = 1
-    xmp_version_token: str = ""  # backend version token at consolidation time
+    xmp_version_token: str = ""
     _extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -239,50 +236,44 @@ def _photo_entry_to_dict(entry: PhotoEntry) -> dict[str, Any]:
         "metadataVersion": entry.metadata_version,
         "xmpVersionToken": entry.xmp_version_token,
     }
-    if entry.date_taken is not None:
-        d["dateTaken"] = entry.date_taken.isoformat()
-    if entry.make is not None:
-        d["make"] = entry.make
-    if entry.model is not None:
-        d["model"] = entry.model
-    if entry.gps is not None:
-        d["gps"] = list(entry.gps)
-    if entry.orientation is not None:
-        d["orientation"] = entry.orientation
-    if entry.tags:
-        d["tags"] = entry.tags
-    if entry.rating is not None:
-        d["rating"] = entry.rating
-    if entry.width is not None:
-        d["width"] = entry.width
-    if entry.height is not None:
-        d["height"] = entry.height
+    for fdef in PHOTO_FIELDS:
+        value = entry.searchable.get(fdef.entry_attr)
+        if value is None:
+            continue
+        if fdef.type is FieldType.DATE_RANGE:
+            d[fdef.name] = value.isoformat()
+        elif fdef.type is FieldType.GPS_BOX:
+            d[fdef.name] = list(value)
+        elif fdef.type is FieldType.STRING_COLLECTION:
+            if value:
+                d[fdef.name] = value
+        else:
+            d[fdef.name] = value
     d.update(entry._extra)
     return d
 
 
 def _photo_entry_from_dict(d: dict[str, Any]) -> PhotoEntry:
-    known_keys = {
-        "filename", "contentHash", "dateTaken", "make", "model", "gps",
-        "orientation", "tags", "rating", "width", "height",
-        "metadataVersion", "xmpVersionToken",
-    }
+    known_keys = {"filename", "contentHash", "metadataVersion", "xmpVersionToken"}
+    searchable: dict[str, Any] = {}
+    for fdef in PHOTO_FIELDS:
+        known_keys.add(fdef.name)
+        raw = d.get(fdef.name)
+        if raw is None:
+            continue
+        if fdef.type is FieldType.DATE_RANGE:
+            searchable[fdef.entry_attr] = datetime.fromisoformat(raw)
+        elif fdef.type is FieldType.GPS_BOX:
+            searchable[fdef.entry_attr] = tuple(raw)
+        else:
+            searchable[fdef.entry_attr] = raw
     extra = {k: v for k, v in d.items() if k not in known_keys}
-    gps_raw = d.get("gps")
     return PhotoEntry(
         filename=d["filename"],
         content_hash=d["contentHash"],
-        date_taken=datetime.fromisoformat(d["dateTaken"]) if d.get("dateTaken") else None,
-        make=d.get("make"),
-        model=d.get("model"),
-        gps=tuple(gps_raw) if gps_raw else None,  # type: ignore[arg-type]
-        orientation=d.get("orientation"),
-        tags=d.get("tags", []),
-        rating=d.get("rating"),
-        width=d.get("width"),
-        height=d.get("height"),
         metadata_version=d.get("metadataVersion", 1),
         xmp_version_token=d.get("xmpVersionToken", ""),
+        searchable=searchable,
         _extra=extra,
     )
 

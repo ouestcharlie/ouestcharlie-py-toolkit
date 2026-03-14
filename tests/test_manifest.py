@@ -194,24 +194,26 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
     photo = PhotoEntry(
         filename="IMG_001.jpg",
         content_hash="sha256:abc",
-        date_taken=date,
-        make="Canon",
-        model="EOS R5",
-        gps=(48.8566, 2.3522),
-        orientation=1,
-        tags=["paris", "vacation"],
         metadata_version=3,
         xmp_version_token="1234567890",
+        searchable={
+            "date_taken": date,
+            "make": "Canon",
+            "model": "EOS R5",
+            "gps": (48.8566, 2.3522),
+            "orientation": 1,
+            "tags": ["paris", "vacation"],
+        },
     )
     await store.create_leaf(LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo]))
     manifest, _ = await store.read_leaf("p")
     e = manifest.photos[0]
-    assert e.date_taken == date
-    assert e.make == "Canon"
-    assert e.model == "EOS R5"
-    assert e.gps == (48.8566, 2.3522)
-    assert e.orientation == 1
-    assert e.tags == ["paris", "vacation"]
+    assert e.searchable["date_taken"] == date
+    assert e.searchable["make"] == "Canon"
+    assert e.searchable["model"] == "EOS R5"
+    assert e.searchable["gps"] == (48.8566, 2.3522)
+    assert e.searchable["orientation"] == 1
+    assert e.searchable["tags"] == ["paris", "vacation"]
     assert e.metadata_version == 3
     assert e.xmp_version_token == "1234567890"
 
@@ -227,14 +229,14 @@ async def test_leaf_summary_roundtrip(store: ManifestStore) -> None:
     leaf.summary = PartitionSummary(
         path="2024/2024-07",
         photo_count=42,
-        _stats={"date": {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)}},
+        _stats={"dateTaken": {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)}},
     )
     await store.create_leaf(leaf)
     manifest, _ = await store.read_leaf("2024/2024-07")
     assert manifest.summary is not None
     assert manifest.summary.photo_count == 42
-    assert manifest.summary.date["min"] == datetime(2024, 7, 1)
-    assert manifest.summary.date["max"] == datetime(2024, 7, 31)
+    assert manifest.summary.dateTaken["min"] == datetime(2024, 7, 1)
+    assert manifest.summary.dateTaken["max"] == datetime(2024, 7, 31)
 
 
 # ---------------------------------------------------------------------------

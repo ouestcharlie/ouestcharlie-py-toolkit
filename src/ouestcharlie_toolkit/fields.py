@@ -60,13 +60,7 @@ class FieldDef:
 # Fields without sidecar_attr are populated by the caller (e.g. filename, content_hash).
 PHOTO_FIELDS: list[FieldDef] = [
     # Date/time range — partition summary pruning via min/max
-    FieldDef(
-        name="date",
-        type=FieldType.DATE_RANGE,
-        entry_attr="date_taken",
-        summary_range=True,
-        sidecar_attr="date_taken",
-    ),
+    FieldDef(name="dateTaken", type=FieldType.DATE_RANGE, entry_attr="date_taken", summary_range=True, sidecar_attr="date_taken"),
 
     # Integer ranges — partition summary pruning via min/max
     FieldDef(name="rating",      type=FieldType.INT_RANGE, entry_attr="rating",      summary_range=True,  sidecar_attr="rating"),

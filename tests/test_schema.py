@@ -87,11 +87,10 @@ def test_photo_entry_minimal():
     photo = PhotoEntry(filename="test.jpg", content_hash="sha256:abc123")
     assert photo.filename == "test.jpg"
     assert photo.content_hash == "sha256:abc123"
-    assert photo.date_taken is None
-    assert photo.make is None
-    assert photo.model is None
-    assert photo.gps is None
-    assert photo.tags == []
+    assert photo.searchable == {}
+    assert photo.searchable.get("date_taken") is None
+    assert photo.searchable.get("make") is None
+    assert photo.searchable.get("tags") is None
 
 
 def test_photo_entry_with_metadata():
@@ -100,37 +99,39 @@ def test_photo_entry_with_metadata():
     photo = PhotoEntry(
         filename="IMG_001.jpg",
         content_hash="sha256:def456",
-        date_taken=date,
-        make="Canon",
-        model="EOS R5",
-        gps=(48.8566, 2.3522),
-        orientation=1,
-        tags=["paris", "vacation"],
-        rating=4,
-        width=6000,
-        height=4000,
         metadata_version=2,
+        searchable={
+            "date_taken": date,
+            "make": "Canon",
+            "model": "EOS R5",
+            "gps": (48.8566, 2.3522),
+            "orientation": 1,
+            "tags": ["paris", "vacation"],
+            "rating": 4,
+            "width": 6000,
+            "height": 4000,
+        },
     )
 
     assert photo.filename == "IMG_001.jpg"
-    assert photo.date_taken == date
-    assert photo.make == "Canon"
-    assert photo.model == "EOS R5"
-    assert photo.gps == (48.8566, 2.3522)
-    assert photo.orientation == 1
-    assert photo.tags == ["paris", "vacation"]
-    assert photo.rating == 4
-    assert photo.width == 6000
-    assert photo.height == 4000
+    assert photo.searchable["date_taken"] == date
+    assert photo.searchable["make"] == "Canon"
+    assert photo.searchable["model"] == "EOS R5"
+    assert photo.searchable["gps"] == (48.8566, 2.3522)
+    assert photo.searchable["orientation"] == 1
+    assert photo.searchable["tags"] == ["paris", "vacation"]
+    assert photo.searchable["rating"] == 4
+    assert photo.searchable["width"] == 6000
+    assert photo.searchable["height"] == 4000
     assert photo.metadata_version == 2
 
 
 def test_photo_entry_optional_fields_default_none():
-    """rating, width, height default to None."""
+    """rating, width, height default to None (absent from searchable)."""
     photo = PhotoEntry(filename="test.jpg", content_hash="sha256:abc")
-    assert photo.rating is None
-    assert photo.width is None
-    assert photo.height is None
+    assert photo.searchable.get("rating") is None
+    assert photo.searchable.get("width") is None
+    assert photo.searchable.get("height") is None
 
 
 def test_photo_entry_extra_fields():
@@ -151,15 +152,15 @@ def test_partition_summary():
         path="2024/2024-07/",
         photo_count=42,
         _stats={
-            "date":   {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)},
-            "rating": {"type": "int_range",  "min": 2, "max": 5},
+            "dateTaken": {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)},
+            "rating":    {"type": "int_range",  "min": 2, "max": 5},
         },
     )
 
     assert summary.path == "2024/2024-07/"
     assert summary.photo_count == 42
-    assert summary.date["min"] == datetime(2024, 7, 1)
-    assert summary.date["max"] == datetime(2024, 7, 31)
+    assert summary.dateTaken["min"] == datetime(2024, 7, 1)
+    assert summary.dateTaken["max"] == datetime(2024, 7, 31)
     assert summary.rating["min"] == 2
     assert summary.rating["max"] == 5
 
@@ -243,30 +244,24 @@ def test_photo_entry_v1_fields_round_trip():
     photo = PhotoEntry(
         filename="IMG_001.jpg",
         content_hash="sha256:abc",
-        make="Sony",
-        model="A7 IV",
-        rating=5,
-        width=7008,
-        height=4672,
-        tags=["sunset"],
-        orientation=1,
+        searchable={"make": "Sony", "model": "A7 IV", "rating": 5, "width": 7008, "height": 4672, "tags": ["sunset"], "orientation": 1},
     )
     manifest = LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo])
     restored = deserialize_leaf(serialize_leaf(manifest)).photos[0]
 
-    assert restored.make == "Sony"
-    assert restored.model == "A7 IV"
-    assert restored.rating == 5
-    assert restored.width == 7008
-    assert restored.height == 4672
+    assert restored.searchable["make"] == "Sony"
+    assert restored.searchable["model"] == "A7 IV"
+    assert restored.searchable["rating"] == 5
+    assert restored.searchable["width"] == 7008
+    assert restored.searchable["height"] == 4672
 
 
 def test_photo_entry_rejected_rating_round_trip():
     """rating=-1 (rejected) survives serialize → deserialize."""
-    photo = PhotoEntry(filename="x.jpg", content_hash="sha256:abc", rating=-1)
+    photo = PhotoEntry(filename="x.jpg", content_hash="sha256:abc", searchable={"rating": -1})
     manifest = LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo])
     restored = deserialize_leaf(serialize_leaf(manifest)).photos[0]
-    assert restored.rating == -1
+    assert restored.searchable["rating"] == -1
 
 
 def test_partition_summary_rating_round_trip():
@@ -274,22 +269,22 @@ def test_partition_summary_rating_round_trip():
     summary = PartitionSummary(
         path="p", photo_count=3,
         _stats={
-            "date":   {"type": "date_range", "min": datetime(2024, 1, 1), "max": datetime(2024, 12, 31)},
-            "rating": {"type": "int_range",  "min": 1, "max": 5},
+            "dateTaken": {"type": "date_range", "min": datetime(2024, 1, 1), "max": datetime(2024, 12, 31)},
+            "rating":    {"type": "int_range",  "min": 1, "max": 5},
         },
     )
     from ouestcharlie_toolkit.schema import _summary_to_dict, _summary_from_dict
     d = _summary_to_dict(summary)
     # Verify nested format
-    assert d["date"] == {"type": "date_range", "min": "2024-01-01T00:00:00", "max": "2024-12-31T00:00:00"}
+    assert d["dateTaken"] == {"type": "date_range", "min": "2024-01-01T00:00:00", "max": "2024-12-31T00:00:00"}
     assert d["rating"] == {"type": "int_range", "min": 1, "max": 5}
     assert "dateMin" not in d and "ratingMin" not in d
     # Verify round-trip
     restored = _summary_from_dict(d)
     assert restored.rating["min"] == 1
     assert restored.rating["max"] == 5
-    assert restored.date["min"] == datetime(2024, 1, 1)
-    assert restored.date["max"] == datetime(2024, 12, 31)
+    assert restored.dateTaken["min"] == datetime(2024, 1, 1)
+    assert restored.dateTaken["max"] == datetime(2024, 12, 31)
 
 
 def test_parent_manifest_creation():
