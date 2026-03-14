@@ -1,6 +1,7 @@
 """OuEstCharlie toolkit - shared Python library for photo management agents."""
 
 from .backend import Backend, backend_from_config
+from .fields import PHOTO_FIELDS, FieldDef, FieldType
 from .logging import setup_logging
 from .manifest import ManifestStore
 from .progress import ProgressReporter
@@ -40,6 +41,10 @@ __all__ = [
     # Exceptions
     "VersionConflictError",
     "ConfigurationError",
+    # Field configuration
+    "FieldType",
+    "FieldDef",
+    "PHOTO_FIELDS",
     # Utilities
     "backend_from_config",
     "setup_logging",
