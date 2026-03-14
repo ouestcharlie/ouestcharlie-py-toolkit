@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ouestcharlie_toolkit.backend import Backend
-from ouestcharlie_toolkit.schema import METADATA_DIR, ThumbnailGridLayout
+from ouestcharlie_toolkit.schema import METADATA_DIR, ThumbnailGridLayout, PhotoEntry
 from ouestcharlie_toolkit.thumbnail import decode_and_resize
 
 _log = logging.getLogger(__name__)
@@ -247,7 +247,7 @@ async def assemble_avif(
 async def generate_partition_thumbnails(
     backend: Backend,
     partition: str,
-    photo_entries: list,  # list[PhotoEntry] — avoid circular import
+    photo_entries: list[PhotoEntry]
 ) -> ThumbnailResult:
     """Generate thumbnail and preview AVIF containers for a partition.
 
@@ -274,7 +274,7 @@ async def generate_partition_thumbnails(
                 backend=backend,
                 photo_path=photo_path,
                 content_hash=entry.content_hash,
-                orientation=entry.orientation,
+                orientation=entry.searchable.get("orientation"),
                 tile_size=tile_size,
                 partition=partition,
                 fit=TILE_FIT[tier],
