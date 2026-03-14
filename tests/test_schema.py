@@ -150,25 +150,24 @@ def test_partition_summary():
     summary = PartitionSummary(
         path="2024/2024-07/",
         photo_count=42,
-        date_min=datetime(2024, 7, 1),
-        date_max=datetime(2024, 7, 31),
-        rating_min=2,
-        rating_max=5,
+        _stats={
+            "date":   {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)},
+            "rating": {"type": "int_range",  "min": 2, "max": 5},
+        },
     )
 
     assert summary.path == "2024/2024-07/"
     assert summary.photo_count == 42
-    assert summary.date_min == datetime(2024, 7, 1)
-    assert summary.date_max == datetime(2024, 7, 31)
-    assert summary.rating_min == 2
-    assert summary.rating_max == 5
+    assert summary.date["min"] == datetime(2024, 7, 1)
+    assert summary.date["max"] == datetime(2024, 7, 31)
+    assert summary.rating["min"] == 2
+    assert summary.rating["max"] == 5
 
 
 def test_partition_summary_rating_defaults_none():
-    """rating_min and rating_max default to None when absent."""
+    """rating stat is absent (None) when not provided."""
     summary = PartitionSummary(path="2024/", photo_count=10)
-    assert summary.rating_min is None
-    assert summary.rating_max is None
+    assert summary.rating is None
 
 
 # ---------------------------------------------------------------------------
@@ -271,16 +270,26 @@ def test_photo_entry_rejected_rating_round_trip():
 
 
 def test_partition_summary_rating_round_trip():
-    """ratingMin / ratingMax survive serialize → deserialize."""
+    """rating and date survive serialize → deserialize with nested stat format."""
     summary = PartitionSummary(
         path="p", photo_count=3,
-        date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31),
-        rating_min=1, rating_max=5,
+        _stats={
+            "date":   {"type": "date_range", "min": datetime(2024, 1, 1), "max": datetime(2024, 12, 31)},
+            "rating": {"type": "int_range",  "min": 1, "max": 5},
+        },
     )
     from ouestcharlie_toolkit.schema import _summary_to_dict, _summary_from_dict
-    restored = _summary_from_dict(_summary_to_dict(summary))
-    assert restored.rating_min == 1
-    assert restored.rating_max == 5
+    d = _summary_to_dict(summary)
+    # Verify nested format
+    assert d["date"] == {"type": "date_range", "min": "2024-01-01T00:00:00", "max": "2024-12-31T00:00:00"}
+    assert d["rating"] == {"type": "int_range", "min": 1, "max": 5}
+    assert "dateMin" not in d and "ratingMin" not in d
+    # Verify round-trip
+    restored = _summary_from_dict(d)
+    assert restored.rating["min"] == 1
+    assert restored.rating["max"] == 5
+    assert restored.date["min"] == datetime(2024, 1, 1)
+    assert restored.date["max"] == datetime(2024, 12, 31)
 
 
 def test_parent_manifest_creation():

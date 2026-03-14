@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -91,24 +93,63 @@ class PhotoEntry:
 
 
 # ---------------------------------------------------------------------------
+# Partition summary helpers
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
 # Partition summary
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class PartitionSummary:
     """Summary statistics for a partition, used in parent manifests and as
-    the summary block of leaf manifests."""
+    the summary block of leaf manifests.
 
-    path: str
-    photo_count: int = 0
-    date_min: datetime | None = None
-    date_max: datetime | None = None
-    rating_min: int | None = None  # xmp:Rating minimum across photos
-    rating_max: int | None = None  # xmp:Rating maximum across photos
-    tags_bloom: bytes = b""  # serialized bloom filter over all tags
-    hashes_bloom: bytes = b""  # serialized bloom filter over content hashes
-    _extra: dict[str, Any] = field(default_factory=dict)
+    Per-field statistics are stored in ``_stats`` as typed dicts that mirror
+    the JSON serialisation format:
+
+    - date range:  ``{"type": "date_range", "min": datetime, "max": datetime}``
+    - int range:   ``{"type": "int_range",  "min": int,      "max": int}``
+    - bloom:       ``{"type": "bloom",      "value": bytes}``
+
+    Field stats are accessed via normal attribute syntax (``__getattr__``),
+    e.g. ``summary.date["min"]``, ``summary.rating["max"]``.
+
+    Adding a new summarisable field requires only a ``FieldDef`` entry in
+    ``fields.py`` — no changes needed here.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        photo_count: int = 0,
+        _stats: dict[str, dict[str, Any]] | None = None,
+        _extra: dict[str, Any] | None = None,
+    ) -> None:
+        self.path = path
+        self.photo_count = photo_count
+        self._stats: dict[str, dict[str, Any]] = dict(_stats) if _stats else {}
+        self._extra: dict[str, Any] = dict(_extra) if _extra is not None else {}
+
+    def __getattr__(self, name: str) -> Any:
+        """Return the typed stat dict for a field, e.g. summary.rating → {"type": "int_range", ...}."""
+        return self.__dict__.get("_stats", {}).get(name)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PartitionSummary):
+            return NotImplemented
+        return (
+            self.path == other.path
+            and self.photo_count == other.photo_count
+            and self._stats == other._stats
+        )
+
+    def __repr__(self) -> str:
+        parts = [f"path={self.path!r}", f"photo_count={self.photo_count}"]
+        for k, v in self._stats.items():
+            parts.append(f"{k}={v!r}")
+        return f"PartitionSummary({', '.join(parts)})"
 
 
 # ---------------------------------------------------------------------------
@@ -251,35 +292,54 @@ def _summary_to_dict(s: PartitionSummary) -> dict[str, Any]:
         "path": s.path,
         "photoCount": s.photo_count,
     }
-    if s.date_min is not None:
-        d["dateMin"] = s.date_min.isoformat()
-    if s.date_max is not None:
-        d["dateMax"] = s.date_max.isoformat()
-    if s.rating_min is not None:
-        d["ratingMin"] = s.rating_min
-    if s.rating_max is not None:
-        d["ratingMax"] = s.rating_max
-    if s.tags_bloom:
-        # TODO: base64 encode bloom filters
-        d["tagsBloom"] = s.tags_bloom.hex()
-    if s.hashes_bloom:
-        d["hashesBloom"] = s.hashes_bloom.hex()
+    # _stats already mirrors the JSON structure; only datetime and bytes need conversion.
+    for name, stat in s._stats.items():
+        t = stat.get("type")
+        if t == "date_range":
+            out: dict[str, Any] = {"type": "date_range"}
+            if stat.get("min") is not None:
+                out["min"] = stat["min"].isoformat()
+            if stat.get("max") is not None:
+                out["max"] = stat["max"].isoformat()
+            d[name] = out
+        elif t == "int_range":
+            d[name] = stat
+        elif t == "bloom":
+            val = stat.get("value")
+            if val:
+                d[name] = {"type": "bloom", "value": val.hex() if isinstance(val, bytes) else val}
     d.update(s._extra)
     return d
 
 
 def _summary_from_dict(d: dict[str, Any]) -> PartitionSummary:
-    known_keys = {"path", "photoCount", "dateMin", "dateMax", "ratingMin", "ratingMax", "tagsBloom", "hashesBloom"}
+    known_keys = {"path", "photoCount", "hashes"}
+    stats: dict[str, dict[str, Any]] = {}
+    for fd in PHOTO_FIELDS:
+        known_keys.add(fd.name)
+        stat = d.get(fd.name)
+        if not isinstance(stat, dict):
+            continue
+        if fd.summary_range and fd.type is FieldType.DATE_RANGE:
+            stats[fd.name] = {
+                "type": "date_range",
+                "min": datetime.fromisoformat(stat["min"]) if "min" in stat else None,
+                "max": datetime.fromisoformat(stat["max"]) if "max" in stat else None,
+            }
+        elif fd.summary_range and fd.type is FieldType.INT_RANGE:
+            stats[fd.name] = {"type": "int_range", "min": stat.get("min"), "max": stat.get("max")}
+        elif fd.summary_bloom_attr:
+            hex_val = stat.get("value", "")
+            if hex_val:
+                stats[fd.name] = {"type": "bloom", "value": bytes.fromhex(hex_val)}
+    hashes_stat = d.get("hashes")
+    if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
+        stats["hashes"] = {"type": "bloom", "value": bytes.fromhex(hashes_stat["value"])}
     extra = {k: v for k, v in d.items() if k not in known_keys}
     return PartitionSummary(
         path=d["path"],
         photo_count=d.get("photoCount", 0),
-        date_min=datetime.fromisoformat(d["dateMin"]) if d.get("dateMin") else None,
-        date_max=datetime.fromisoformat(d["dateMax"]) if d.get("dateMax") else None,
-        rating_min=d.get("ratingMin"),
-        rating_max=d.get("ratingMax"),
-        tags_bloom=bytes.fromhex(d["tagsBloom"]) if d.get("tagsBloom") else b"",
-        hashes_bloom=bytes.fromhex(d["hashesBloom"]) if d.get("hashesBloom") else b"",
+        _stats=stats,
         _extra=extra,
     )
 

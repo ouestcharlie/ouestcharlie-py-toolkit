@@ -227,15 +227,14 @@ async def test_leaf_summary_roundtrip(store: ManifestStore) -> None:
     leaf.summary = PartitionSummary(
         path="2024/2024-07",
         photo_count=42,
-        date_min=datetime(2024, 7, 1),
-        date_max=datetime(2024, 7, 31),
+        _stats={"date": {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)}},
     )
     await store.create_leaf(leaf)
     manifest, _ = await store.read_leaf("2024/2024-07")
     assert manifest.summary is not None
     assert manifest.summary.photo_count == 42
-    assert manifest.summary.date_min == datetime(2024, 7, 1)
-    assert manifest.summary.date_max == datetime(2024, 7, 31)
+    assert manifest.summary.date["min"] == datetime(2024, 7, 1)
+    assert manifest.summary.date["max"] == datetime(2024, 7, 31)
 
 
 # ---------------------------------------------------------------------------
