@@ -299,6 +299,8 @@ def _summary_to_dict(s: PartitionSummary) -> dict[str, Any]:
             val = stat.get("value")
             if val:
                 d[name] = {"type": "bloom", "value": val.hex() if isinstance(val, bytes) else val}
+        elif t == "gps_bbox":
+            d[name] = stat  # all values are plain floats; pass through as-is
     d.update(s._extra)
     return d
 
@@ -323,6 +325,12 @@ def _summary_from_dict(d: dict[str, Any]) -> PartitionSummary:
             hex_val = stat.get("value", "")
             if hex_val:
                 stats[fd.name] = {"type": "bloom", "value": bytes.fromhex(hex_val)}
+        elif fd.summary_gps_bbox and fd.type is FieldType.GPS_BOX:
+            stats[fd.name] = {
+                "type": "gps_bbox",
+                "minLat": stat.get("minLat"), "maxLat": stat.get("maxLat"),
+                "minLon": stat.get("minLon"), "maxLon": stat.get("maxLon"),
+            }
     hashes_stat = d.get("hashes")
     if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
         stats["hashes"] = {"type": "bloom", "value": bytes.fromhex(hashes_stat["value"])}

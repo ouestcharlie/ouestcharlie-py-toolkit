@@ -21,7 +21,7 @@ class FieldType(Enum):
     INT_RANGE         = auto()  # int min/max bounds; pruneable via PartitionSummary
     STRING_COLLECTION = auto()  # list[str] with AND exact match (e.g. tags); bloom-filter pruning
     STRING_MATCH      = auto()  # str with case-insensitive substring match; no summary pruning
-    GPS_BOX           = auto()  # (lat, lon) bounding box; matching not yet implemented in Wally
+    GPS_BOX           = auto()  # (lat, lon) point; partition summary bbox
     DESCRIPTIVE       = auto()  # placeholder: future similarity/embedding match
 
 
@@ -39,6 +39,8 @@ class FieldDef:
                             Applies to DATE_RANGE and INT_RANGE fields.
         summary_bloom_attr: Attribute name on PartitionSummary for the bloom filter.
                             Set for STRING_COLLECTION fields that support bloom pruning.
+        summary_gps_bbox:   True if the field contributes a GPS bounding box to the partition
+                            summary (minLat/maxLat/minLon/maxLon). Applies to GPS_BOX fields.
         sidecar_attr:       Attribute name on XmpSidecar to read when building a PhotoEntry.
                             None means the field has no direct XmpSidecar source (e.g. it is
                             derived or supplied externally, like filename or content_hash).
@@ -49,6 +51,7 @@ class FieldDef:
     entry_attr: str
     summary_range: bool = False
     summary_bloom_attr: str | None = None
+    summary_gps_bbox: bool = False
     sidecar_attr: str | None = None
 
 
@@ -56,7 +59,8 @@ class FieldDef:
 #
 # Fields with summary_range=True support partition-level range pruning (min/max).
 # Fields with summary_bloom_attr support partition-level bloom-filter pruning.
-# Fields without either are searchable at leaf-scan level only.
+# Fields with summary_gps_bbox=True support partition-level GPS bbox pruning (minLat/maxLat/minLon/maxLon).
+# Fields without any summary attribute are searchable at leaf-scan level only.
 # Fields without sidecar_attr are populated by the caller (e.g. filename, content_hash).
 PHOTO_FIELDS: list[FieldDef] = [
     # Date/time range — partition summary pruning via min/max
@@ -76,6 +80,6 @@ PHOTO_FIELDS: list[FieldDef] = [
     FieldDef(name="make",  type=FieldType.STRING_MATCH, entry_attr="make",  sidecar_attr="camera_make"),
     FieldDef(name="model", type=FieldType.STRING_MATCH, entry_attr="model", sidecar_attr="camera_model"),
 
-    # GPS bounding box — indexed but Wally matching not yet implemented (gracefully skipped)
-    FieldDef(name="gps", type=FieldType.GPS_BOX, entry_attr="gps", sidecar_attr="gps"),
+    # GPS bounding box — partition summary bbox + Wally bbox filter/pruning
+    FieldDef(name="gps", type=FieldType.GPS_BOX, entry_attr="gps", summary_gps_bbox=True, sidecar_attr="gps"),
 ]
