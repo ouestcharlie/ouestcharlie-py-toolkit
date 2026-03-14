@@ -154,3 +154,7 @@ Key design principles:
 - [pyexiv2](https://github.com/LeoHsiao1/pyexiv2)
 - [OuEstCharlie HLD](https://github.com/ouestcharlie/ouestcharlie/blob/master/HLD.md)
 - [Agent LLD Rationale](https://github.com/ouestcharlie/ouestcharlie/blob/master/agent/agent_LLD_rationale.md)
+
+## License
+
+MIT license
