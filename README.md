@@ -152,5 +152,5 @@ Key design principles:
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 - [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25)
 - [pyexiv2](https://github.com/LeoHsiao1/pyexiv2)
-- [OuEstCharlie HLD](../ouestcharlie/HLD.md)
-- [Agent LLD Rationale](../ouestcharlie/agent/agent_LLD_rationale.md)
+- [OuEstCharlie HLD](https://github.com/ouestcharlie/ouestcharlie/blob/master/HLD.md)
+- [Agent LLD Rationale](https://github.com/ouestcharlie/ouestcharlie/blob/master/agent/agent_LLD_rationale.md)
