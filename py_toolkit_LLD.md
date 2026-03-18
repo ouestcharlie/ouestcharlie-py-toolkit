@@ -4,11 +4,12 @@ This document details the shared Python toolkit used by all OuEstCharlie agents.
 
 ## Overview
 
-The Python toolkit (`ouestcharlie-toolkit`) is a shared library that provides three core capabilities to all agents:
+The Python toolkit (`ouestcharlie-toolkit`) is a shared library that provides four core capabilities to all agents:
 
 1. **MCP integration** — MCP server lifecycle, tool registration, progress reporting, and logging
 2. **Manifest read-edit with consistency** — hierarchical manifest traversal, atomic read-modify-write with optimistic concurrency
 3. **XMP read-edit with consistency** — sidecar read-modify-write with optimistic concurrency and field-level semantics
+4. **Thumbnail generation** — per-partition AVIF grid assembly delegated to the `avif-grid` Rust CLI
 
 Agents import the toolkit and focus on their domain logic (indexing, enrichment, search). The toolkit handles protocol, storage, and consistency concerns.
 
@@ -126,14 +127,87 @@ Errors follow the three-category model from [controller_api.json](../../controll
 
 `AgentBase` provides `per_photo(photo, partition)` context manager for error isolation without aborting the batch. See [server.py](src/ouestcharlie/server.py) for implementation.
 
+## Thumbnail Generation
+
+### Pipeline
+
+Per partition, per tier (thumbnail 256 px / preview 1440 px):
+
+```
+Python: sort photos by content_hash → stage bytes to local tmpdir
+  ↓  (one asyncio.create_subprocess_exec call)
+avif-grid (Rust):
+  rayon::par_iter — decode → apply orientation → resize → fit to square
+  sequential      — YUV420 conversion → AVIF grid encoding (libavif)
+  ↓
+Python: read AVIF bytes from tmpdir → write to backend
+```
+
+No intermediate JPEG tile cache exists. Every call to `generate_partition_thumbnails` decodes all photos fresh, relying on Rust's speed and `rayon` parallelism to keep total latency acceptable.
+
+### avif-grid JSON Protocol
+
+**Stdin:**
+```json
+{
+  "photos": [
+    { "path": "/tmp/staged.jpg", "ext": ".jpg", "orientation": 6, "content_hash": "sha256:..." }
+  ],
+  "tile_size": 256,
+  "fit": "crop",
+  "quality": 55,
+  "output": "/tmp/output.avif"
+}
+```
+
+- `orientation` — TIFF orientation value 1–8 from the XMP sidecar; `null` means no transform.
+- `fit` — `"crop"` (center-crop to square, used for thumbnails) or `"pad"` (letterbox with black, used for previews).
+- Photos must be pre-sorted by `content_hash` (Python's responsibility) for stable tile indices.
+
+**Stdout:**
+```json
+{ "cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["sha256:aaa...", ...] }
+```
+
+`photoOrder` reflects the tile order as received, so the caller can populate `ThumbnailGridLayout.photo_order` directly.
+
+### Format Support and Platform Matrix
+
+| Format | Cargo feature | System dep | Linux | macOS | Windows | iOS | Android |
+|--------|--------------|-----------|:-----:|:-----:|:-------:|:---:|:-------:|
+| JPEG, PNG, WebP, TIFF | *(default)* | None (pure Rust) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| RAW (CR2, NEF, ARW, DNG, RAF, ORF, RW2, PEF) | `raw` | None (pure Rust) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| HEIC/HEIF | `heic` | `libheif ≥ 1.17` | ✅ | ✅ | ⚠️ | — | — |
+
+RAW and HEIC are compile-time features; the binary returns a clear error if a format is not compiled in.
+
+**Notes:**
+- JPEG/PNG/WebP/TIFF use the `image` crate (pure Rust, no system libraries, all targets).
+- RAW uses `rawler` (pure Rust, no system libraries, all targets). The crate is pre-1.0; the version is pinned exactly.
+- HEIC requires the system `libheif` library (`brew install libheif` / `apt install libheif-dev`). Windows support is possible but complex (vcpkg). iOS/Android require cross-compilation and are not supported in V1.
+- `libavif` (required for AVIF grid encoding) follows the same model as HEIC — system library, not available on iOS/Android without significant effort.
+
+### Grid Layout
+
+- `cols = ceil(sqrt(n))`, `rows = ceil(n / cols)` — square-ish
+- Last row padded with black tiles when `n` is not a multiple of `cols`
+- AVIF quality: thumbnail 55, preview 60 (configurable via `AVIF_QUALITY`)
+
+### Python Entry Points
+
+`thumbnail_builder.py` exposes:
+- `generate_partition_thumbnails(backend, partition, photo_entries)` — top-level orchestrator
+- `_call_avif_grid(...)` — stages photos, calls the binary, writes AVIF to backend
+- `_avif_path(partition, tier)` — canonical backend path for an AVIF file
+- `_find_avif_grid_binary()` — resolves binary path via env var, `$PATH`, or dev build
+
 ## Dependencies
 
 | Dependency | Purpose | Version constraint |
 |---|---|---|
 | `mcp` | MCP server SDK | `>=1.0` |
 | `pyexiv2` | EXIF/XMP read-write (wraps Exiv2) | `>=2.8` |
-| `Pillow` | Image processing, thumbnail generation | `>=10.0` |
-| `rawpy` | RAW format support (wraps LibRaw) | `>=0.19` |
+| **avif-grid** (Rust binary) | Photo decode, resize, fit, AVIF assembly | built from `avif-grid/` |
 
 ## References
 

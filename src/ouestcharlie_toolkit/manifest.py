@@ -145,9 +145,14 @@ class ManifestStore:
             FileNotFoundError: If the manifest does not exist.
         """
         manifest_file = manifest_path(path)
-        data, version = await self.backend.read(manifest_file)
-        manifest = deserialize_parent(json.loads(data.decode("utf-8")))
-        return manifest, version
+        try:
+            data, version = await self.backend.read(manifest_file)
+            manifest = deserialize_parent(json.loads(data.decode("utf-8")))
+            return manifest, version
+        except:
+            _log.error(f"Error while deserializing parent manifest of '{path}'")
+            raise
+        
 
     async def write_parent(
         self, manifest: ParentManifest, expected_version: VersionToken

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from venv import logger
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
@@ -249,6 +250,8 @@ class XmpStore:
         xmp_path = xmp_path_for(photo_path)
         data, version = await self.backend.read(xmp_path)
         sidecar = parse_xmp(data.decode("utf-8"))
+        if not sidecar.content_hash:
+            _log.warning(f"Empty identity for sidecar '{xmp_path}")
         return sidecar, version
 
     async def write(

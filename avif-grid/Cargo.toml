@@ -2,7 +2,7 @@
 name = "avif-grid"
 version = "0.1.0"
 edition = "2021"
-description = "Assemble JPEG tiles into an AVIF grid container for OuEstCharlie."
+description = "Decode photos and assemble them into an AVIF grid container for OuEstCharlie."
 
 [[bin]]
 name = "avif-grid"
@@ -12,9 +12,27 @@ path = "src/main.rs"
 # Used in build.rs to locate and link the system libavif (brew install libavif).
 pkg-config = "0.3"
 
+[features]
+# RAW format support (CR2, NEF, ARW, DNG, RAF, ORF, RW2, PEF) via rawler (pure Rust).
+raw = ["dep:rawler"]
+# HEIC/HEIF support via libheif-rs (requires: brew install libheif / apt install libheif-dev).
+heic = ["dep:libheif-rs"]
+
 [dependencies]
-# JPEG tile decoding.
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# Image decoding: JPEG, PNG, WebP, TIFF (pure Rust, no system deps).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff"] }
+# Parallel photo decoding.
+rayon = "1"
 # JSON I/O (stdin/stdout protocol).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# RAW photo decoding (pure Rust — no system deps; API is pre-1.0, pin the version).
+[dependencies.rawler]
+version = "=0.7.2"
+optional = true
+
+# HEIC/HEIF decoding (requires system libheif).
+[dependencies.libheif-rs]
+version = "1"
+optional = true

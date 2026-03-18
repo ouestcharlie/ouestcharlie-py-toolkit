@@ -15,16 +15,20 @@ This toolkit provides three core capabilities:
 ```
 ouestcharlie-toolkit/
 ├── pyproject.toml
-├── src/
-│   └── ouestcharlie/
-│       ├── schema.py             # Data models, exceptions, constants
-│       ├── backend.py            # Backend protocol
-│       ├── backends/
-│       │   └── local.py          # Local filesystem backend
-│       ├── manifest.py           # ManifestStore for manifest operations
-│       ├── xmp.py                # XmpStore for XMP sidecar operations
-│       ├── progress.py           # ProgressReporter for MCP progress
-│       └── server.py             # AgentBase for MCP server lifecycle
+├── avif-grid/                    # Rust CLI: decode + resize + AVIF assembly
+│   ├── Cargo.toml
+│   └── src/main.rs
+└── src/
+    └── ouestcharlie_toolkit/
+        ├── schema.py             # Data models, exceptions, constants
+        ├── backend.py            # Backend protocol
+        ├── backends/
+        │   └── local.py          # Local filesystem backend
+        ├── manifest.py           # ManifestStore for manifest operations
+        ├── xmp.py                # XmpStore for XMP sidecar operations
+        ├── thumbnail_builder.py  # Thumbnail generation (delegates to avif-grid)
+        ├── progress.py           # ProgressReporter for MCP progress
+        └── server.py             # AgentBase for MCP server lifecycle
 ```
 
 ## Installation
@@ -37,14 +41,29 @@ uv pip install -e .
 uv pip install -e ".[dev]"
 ```
 
+### avif-grid binary (required for thumbnail generation)
+
+Thumbnail generation delegates to a Rust CLI. Build it once before running agents:
+
+```bash
+brew install libavif      # macOS (provides pre-compiled libavif + AOM encoder)
+# apt install libavif-dev # Linux
+
+cd avif-grid
+cargo build --release
+# binary: avif-grid/target/release/avif-grid
+```
+
+The toolkit resolves the binary automatically (env var `AVIF_GRID_BINARY`, `$PATH`, or the dev build path above).
+
 ## Dependencies
 
 - `mcp>=1.0` — Official MCP Python SDK
 - `pyexiv2>=2.8` — EXIF extraction from image files (wraps Exiv2); requires `brew install inih` on macOS
-- `Pillow>=10.0` — Image processing
-- `rawpy>=0.19` — RAW format support (wraps LibRaw)
 
-XMP parsing and serialization (`parse_xmp`, `serialize_xmp`) use stdlib only and have no native dependencies.
+**avif-grid** (Rust binary, built separately) handles all image decoding and AVIF assembly. `Pillow` and `rawpy` are not required.
+
+XMP parsing and serialization use stdlib only and have no native dependencies.
 
 ## Usage
 
@@ -128,12 +147,19 @@ export WOOF_BACKEND_CONFIG='{"type": "filesystem", "root": "/Users/alice/Photos"
 - XmpStore with optimistic concurrency
 - ProgressReporter with rate limiting
 - AgentBase with MCP server lifecycle
+- Thumbnail generation: per-partition AVIF grid via avif-grid Rust binary
+  - Parallel decode (rayon) for JPEG, PNG, WebP, TIFF
+  - Orientation correction (TIFF values 1–8)
+  - Crop and pad fit modes
+  - Stubbed RAW (`--features raw`) and HEIC (`--features heic`) support
 
 ### 📋 Future Work
 
 - Cloud backend implementations (S3, GCS, ADLS Gen2, OneDrive, Kdrive)
 - Bloom filter implementation for partition summaries
 - Handling of more XMP field types (text, float...)
+- RAW decode implementation in avif-grid (rawler API, once stable)
+- HEIC decode implementation in avif-grid (libheif-rs)
 
 ## Architecture
 
