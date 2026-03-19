@@ -17,6 +17,7 @@ from ouestcharlie_toolkit.thumbnail_builder import (
     _avif_path,
     _call_avif_grid,
     _find_avif_grid_binary,
+    _stage_photos,
     generate_partition_thumbnails,
 )
 
@@ -122,11 +123,18 @@ def backend_with_photo(tmp_path: Path) -> LocalBackend:
     return LocalBackend(root=str(tmp_path))
 
 
+def _staged(tmp_path: Path, content_hash: str, ext: str = ".jpg", orientation: int | None = 1) -> dict:
+    """Build a pre-staged photo dict (as _stage_photos would produce)."""
+    p = tmp_path / f"photo{ext}"
+    p.write_bytes(b"FAKE_PHOTO")
+    return {"path": str(p), "ext": ext, "orientation": orientation, "content_hash": content_hash}
+
+
 @pytest.mark.asyncio
 async def test_call_avif_grid_writes_avif_to_backend(
-    backend_with_photo: LocalBackend,
+    backend_with_photo: LocalBackend, tmp_path: Path
 ) -> None:
-    photos = [_fake_photo_entry("photo.jpg", "sha256:" + "aa" * 32)]
+    staged = [_staged(tmp_path, "sha256:" + "aa" * 32)]
     output_path = f"{METADATA_DIR}/thumbnails.avif"
 
     with patch(
@@ -135,12 +143,12 @@ async def test_call_avif_grid_writes_avif_to_backend(
     ):
         grid, content_hash = await _call_avif_grid(
             backend=backend_with_photo,
-            partition="",
-            photo_entries=photos,
+            staged_photos=staged,
             tile_size=256,
             fit="crop",
             quality=55,
             output_path=output_path,
+            tmpdir=str(tmp_path),
             avif_grid_binary="fake-avif-grid",
         )
 
@@ -152,9 +160,9 @@ async def test_call_avif_grid_writes_avif_to_backend(
 
 @pytest.mark.asyncio
 async def test_call_avif_grid_returns_sha256_hash(
-    backend_with_photo: LocalBackend,
+    backend_with_photo: LocalBackend, tmp_path: Path
 ) -> None:
-    photos = [_fake_photo_entry("photo.jpg", "sha256:" + "bb" * 32)]
+    staged = [_staged(tmp_path, "sha256:" + "bb" * 32)]
 
     with patch(
         "asyncio.create_subprocess_exec",
@@ -162,12 +170,12 @@ async def test_call_avif_grid_returns_sha256_hash(
     ):
         _, content_hash = await _call_avif_grid(
             backend=backend_with_photo,
-            partition="",
-            photo_entries=photos,
+            staged_photos=staged,
             tile_size=256,
             fit="crop",
             quality=55,
             output_path=f"{METADATA_DIR}/thumbnails.avif",
+            tmpdir=str(tmp_path),
             avif_grid_binary="fake-avif-grid",
         )
 
@@ -180,7 +188,7 @@ async def test_call_avif_grid_passes_correct_json(
     backend_with_photo: LocalBackend, tmp_path: Path
 ) -> None:
     """The JSON payload sent to avif-grid must include photos, tile_size, fit, quality."""
-    photos = [_fake_photo_entry("photo.jpg", "sha256:" + "cc" * 32, orientation=6)]
+    staged = [_staged(tmp_path, "sha256:" + "cc" * 32, orientation=6)]
     captured: list[dict] = []
 
     class _CapturingProcess:
@@ -199,12 +207,12 @@ async def test_call_avif_grid_passes_correct_json(
     with patch("asyncio.create_subprocess_exec", return_value=_CapturingProcess()):
         await _call_avif_grid(
             backend=backend_with_photo,
-            partition="",
-            photo_entries=photos,
+            staged_photos=staged,
             tile_size=256,
             fit="crop",
             quality=55,
             output_path=f"{METADATA_DIR}/thumbnails.avif",
+            tmpdir=str(tmp_path),
             avif_grid_binary="fake-avif-grid",
         )
 
@@ -221,9 +229,9 @@ async def test_call_avif_grid_passes_correct_json(
 
 @pytest.mark.asyncio
 async def test_call_avif_grid_raises_on_nonzero_exit(
-    backend_with_photo: LocalBackend,
+    backend_with_photo: LocalBackend, tmp_path: Path
 ) -> None:
-    photos = [_fake_photo_entry("photo.jpg", "sha256:" + "dd" * 32)]
+    staged = [_staged(tmp_path, "sha256:" + "dd" * 32)]
 
     with patch(
         "asyncio.create_subprocess_exec",
@@ -232,12 +240,12 @@ async def test_call_avif_grid_raises_on_nonzero_exit(
         with pytest.raises(RuntimeError, match="avif-grid exited 1"):
             await _call_avif_grid(
                 backend=backend_with_photo,
-                partition="",
-                photo_entries=photos,
+                staged_photos=staged,
                 tile_size=256,
                 fit="crop",
                 quality=55,
                 output_path=f"{METADATA_DIR}/thumbnails.avif",
+                tmpdir=str(tmp_path),
                 avif_grid_binary="fake-avif-grid",
             )
 
@@ -246,7 +254,7 @@ async def test_call_avif_grid_raises_on_nonzero_exit(
 async def test_call_avif_grid_overwrites_existing_output(
     backend_with_photo: LocalBackend, tmp_path: Path
 ) -> None:
-    photos = [_fake_photo_entry("photo.jpg", "sha256:" + "ee" * 32)]
+    staged = [_staged(tmp_path, "sha256:" + "ee" * 32)]
     output_path = f"{METADATA_DIR}/thumbnails.avif"
 
     # Pre-create the output file.
@@ -260,12 +268,12 @@ async def test_call_avif_grid_overwrites_existing_output(
     ):
         _, content_hash = await _call_avif_grid(
             backend=backend_with_photo,
-            partition="",
-            photo_entries=photos,
+            staged_photos=staged,
             tile_size=256,
             fit="crop",
             quality=55,
             output_path=output_path,
+            tmpdir=str(tmp_path),
             avif_grid_binary="fake-avif-grid",
         )
 
@@ -275,26 +283,24 @@ async def test_call_avif_grid_overwrites_existing_output(
 
 @pytest.mark.asyncio
 async def test_call_avif_grid_photo_order_in_grid(
-    backend_with_photo: LocalBackend,
+    backend_with_photo: LocalBackend, tmp_path: Path
 ) -> None:
     """photo_order in the returned grid must reflect the photoOrder from Rust output."""
     hashes = ["sha256:" + "aa" * 32, "sha256:" + "bb" * 32]
-    photos = [_fake_photo_entry("photo.jpg", h) for h in hashes]
+    staged = [_staged(tmp_path, h) for h in hashes]
 
     with patch(
         "asyncio.create_subprocess_exec",
         return_value=_FakeAvifProcess(cols=2, rows=1, tile_size=256),
     ):
-        # _FakeAvifProcess echoes content_hashes from input as photoOrder
-        # We only have one real photo file, so use the same file for both entries
         grid, _ = await _call_avif_grid(
             backend=backend_with_photo,
-            partition="",
-            photo_entries=photos,
+            staged_photos=staged,
             tile_size=256,
             fit="crop",
             quality=55,
             output_path=f"{METADATA_DIR}/thumbnails.avif",
+            tmpdir=str(tmp_path),
             avif_grid_binary="fake-avif-grid",
         )
 
@@ -318,6 +324,7 @@ async def test_generate_partition_thumbnails_returns_result(tmp_path: Path) -> N
 
     with (
         patch("ouestcharlie_toolkit.thumbnail_builder._find_avif_grid_binary", return_value="fake-bin"),
+        patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", new=AsyncMock(return_value=[])),
         patch("ouestcharlie_toolkit.thumbnail_builder._call_avif_grid", new=AsyncMock(
             return_value=(fake_grid, "sha256:" + "cc" * 32)
         )),
@@ -333,7 +340,7 @@ async def test_generate_partition_thumbnails_returns_result(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_generate_partition_thumbnails_tiles_sorted_by_hash(tmp_path: Path) -> None:
-    """Photos passed to _call_avif_grid must be sorted by content_hash."""
+    """Photos passed to _stage_photos must be sorted by content_hash."""
     backend = LocalBackend(root=str(tmp_path))
     photos = [
         _fake_photo_entry("z.jpg", "sha256:" + "zz" * 32),
@@ -343,21 +350,25 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(tmp_path: Path
 
     captured_entries: list[list] = []
 
-    async def capture_call(**kw):
-        captured_entries.append(list(kw["photo_entries"]))
-        grid = ThumbnailGridLayout(cols=2, rows=2, tile_size=256, photo_order=[])
-        return grid, "sha256:" + "00" * 32
+    async def capture_stage(backend, partition, photo_entries, tmpdir):
+        captured_entries.append(list(photo_entries))
+        return []
+
+    fake_grid = ThumbnailGridLayout(cols=2, rows=2, tile_size=256, photo_order=[])
 
     with (
         patch("ouestcharlie_toolkit.thumbnail_builder._find_avif_grid_binary", return_value="fake-bin"),
-        patch("ouestcharlie_toolkit.thumbnail_builder._call_avif_grid", side_effect=capture_call),
+        patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", side_effect=capture_stage),
+        patch("ouestcharlie_toolkit.thumbnail_builder._call_avif_grid", new=AsyncMock(
+            return_value=(fake_grid, "sha256:" + "00" * 32)
+        )),
     ):
         await generate_partition_thumbnails(backend, "", photos)
 
-    # Each tier call should receive photos sorted by content_hash.
-    for entries in captured_entries:
-        hashes = [e.content_hash for e in entries]
-        assert hashes == sorted(hashes)
+    # _stage_photos receives photos sorted by content_hash.
+    assert len(captured_entries) == 1
+    hashes = [e.content_hash for e in captured_entries[0]]
+    assert hashes == sorted(hashes)
 
 
 @pytest.mark.asyncio
@@ -375,6 +386,7 @@ async def test_generate_partition_thumbnails_calls_both_tiers(tmp_path: Path) ->
 
     with (
         patch("ouestcharlie_toolkit.thumbnail_builder._find_avif_grid_binary", return_value="fake-bin"),
+        patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", new=AsyncMock(return_value=[])),
         patch("ouestcharlie_toolkit.thumbnail_builder._call_avif_grid", side_effect=capture_call),
     ):
         await generate_partition_thumbnails(backend, "", photos)
@@ -389,14 +401,17 @@ async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path)
     backend = LocalBackend(root=str(tmp_path))
     hashes = ["sha256:" + "cc" * 32, "sha256:" + "aa" * 32, "sha256:" + "bb" * 32]
     photos = [_fake_photo_entry(f"p{i}.jpg", h) for i, h in enumerate(hashes)]
+    staged = [{"path": "/tmp/x", "ext": ".jpg", "orientation": 1, "content_hash": h}
+              for h in sorted(hashes)]
 
     async def fake_call(**kw):
-        order = [e.content_hash for e in kw["photo_entries"]]
+        order = [p["content_hash"] for p in kw["staged_photos"]]
         grid = ThumbnailGridLayout(cols=2, rows=2, tile_size=256, photo_order=order)
         return grid, "sha256:" + "00" * 32
 
     with (
         patch("ouestcharlie_toolkit.thumbnail_builder._find_avif_grid_binary", return_value="fake-bin"),
+        patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", new=AsyncMock(return_value=staged)),
         patch("ouestcharlie_toolkit.thumbnail_builder._call_avif_grid", side_effect=fake_call),
     ):
         result = await generate_partition_thumbnails(backend, "", photos)

@@ -281,7 +281,9 @@ fn run(input: Input) -> Result<Output, Box<dyn std::error::Error>> {
         (*encoder).quality = input.quality as c_int;
         (*encoder).quality_alpha = 100; // no alpha channel
         (*encoder).speed = 6;           // balanced encode speed (0=slowest, 10=fastest)
-        (*encoder).max_threads = 1;
+        (*encoder).max_threads = std::thread::available_parallelism()
+            .map(|n| n.get() as c_int)
+            .unwrap_or(1);
     }
 
     // Encode the grid.

@@ -2,9 +2,10 @@
 
 Pipeline per partition:
   1. Sort photos by content_hash for stable tile indices
-  2. Stage original photo bytes to a local temp directory
-  3. Call the avif-grid Rust CLI, which decodes + resizes + fits + assembles
-  4. Write the resulting AVIF to the backend
+  2. Stage original photo bytes once to a shared local temp directory
+  3. For both tiers (thumbnail, preview) in parallel: call the avif-grid Rust
+     CLI, which decodes + resizes + fits + assembles using the staged files
+  4. Write each resulting AVIF to the backend
   5. Return ThumbnailGridLayout + SHA-256 hashes for manifest update
 """
 
@@ -84,65 +85,74 @@ def _find_avif_grid_binary() -> str:
     )
 
 
-async def _call_avif_grid(
+async def _stage_photos(
     backend: Backend,
     partition: str,
     photo_entries: list,
+    tmpdir: str,
+) -> list[dict]:
+    """Read photos from the backend once and write them to ``tmpdir``.
+
+    Returns the avif-grid ``photos`` payload (list of dicts with path, ext,
+    orientation, content_hash).  ``photo_entries`` must already be sorted by
+    content_hash (caller's responsibility).
+    """
+    prefix = partition.rstrip("/") + "/" if partition else ""
+    photos_payload: list[dict] = []
+    for i, entry in enumerate(photo_entries):
+        photo_path = f"{prefix}{entry.filename}"
+        photo_bytes, _ = await backend.read(photo_path)
+        ext = os.path.splitext(entry.filename)[1]
+        staged_path = os.path.join(tmpdir, f"photo_{i:06d}{ext}")
+        Path(staged_path).write_bytes(photo_bytes)
+        photos_payload.append({
+            "path": staged_path,
+            "ext": ext,
+            "orientation": entry.searchable.get("orientation"),
+            "content_hash": entry.content_hash,
+        })
+    return photos_payload
+
+
+async def _call_avif_grid(
+    backend: Backend,
+    staged_photos: list[dict],
     tile_size: int,
     fit: str,
     quality: int,
     output_path: str,
+    tmpdir: str,
     avif_grid_binary: str,
 ) -> tuple[ThumbnailGridLayout, str]:
-    """Stage photos, call the avif-grid CLI, and write the AVIF to the backend.
+    """Call the avif-grid CLI with pre-staged photos and write the AVIF to the backend.
 
     The CLI handles decode + resize + fit + AVIF assembly.
     Returns (ThumbnailGridLayout, sha256_hash_of_avif).
-
-    ``photo_entries`` must already be sorted by content_hash (caller's responsibility).
     """
-    prefix = partition.rstrip("/") + "/" if partition else ""
+    tmp_output = os.path.join(tmpdir, f"output_{tile_size}.avif")
+    payload = json.dumps({
+        "photos": staged_photos,
+        "tile_size": tile_size,
+        "fit": fit,
+        "quality": quality,
+        "output": tmp_output,
+    }).encode()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Stage all photo bytes to the local temp directory.
-        photos_payload: list[dict] = []
-        for i, entry in enumerate(photo_entries):
-            photo_path = f"{prefix}{entry.filename}"
-            photo_bytes, _ = await backend.read(photo_path)
-            ext = os.path.splitext(entry.filename)[1]
-            staged_path = os.path.join(tmpdir, f"photo_{i:06d}{ext}")
-            Path(staged_path).write_bytes(photo_bytes)
-            photos_payload.append({
-                "path": staged_path,
-                "ext": ext,
-                "orientation": entry.searchable.get("orientation"),
-                "content_hash": entry.content_hash,
-            })
+    proc = await asyncio.create_subprocess_exec(
+        avif_grid_binary,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate(payload)
 
-        tmp_output = os.path.join(tmpdir, "output.avif")
-        payload = json.dumps({
-            "photos": photos_payload,
-            "tile_size": tile_size,
-            "fit": fit,
-            "quality": quality,
-            "output": tmp_output,
-        }).encode()
-
-        proc = await asyncio.create_subprocess_exec(
-            avif_grid_binary,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"avif-grid exited {proc.returncode}: {stderr.decode().strip()}"
         )
-        stdout, stderr = await proc.communicate(payload)
 
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"avif-grid exited {proc.returncode}: {stderr.decode().strip()}"
-            )
-
-        grid_info = json.loads(stdout.decode())
-        avif_bytes = Path(tmp_output).read_bytes()
+    grid_info = json.loads(stdout.decode())
+    avif_bytes = Path(tmp_output).read_bytes()
 
     content_hash = "sha256:" + hashlib.sha256(avif_bytes).hexdigest()
 
@@ -185,21 +195,29 @@ async def generate_partition_thumbnails(
     # Sort by content_hash for stable tile indices.
     ordered = sorted(photo_entries, key=lambda e: e.content_hash)
 
-    results: dict[str, tuple[ThumbnailGridLayout, str]] = {}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Stage photos once; both tiers reuse the same files.
+        staged_photos = await _stage_photos(backend, partition, ordered, tmpdir)
 
-    for tier, tile_size in TILE_SIZES.items():
-        output_path = _avif_path(partition, tier)
-        grid, content_hash = await _call_avif_grid(
-            backend=backend,
-            partition=partition,
-            photo_entries=ordered,
-            tile_size=tile_size,
-            fit=TILE_FIT[tier],
-            quality=AVIF_QUALITY[tier],
-            output_path=output_path,
-            avif_grid_binary=avif_grid_binary,
+        # Encode both tiers in parallel — they are independent and each spawns
+        # its own avif-grid subprocess, so there is no shared mutable state.
+        tier_names = list(TILE_SIZES.keys())
+        tier_results: list[tuple[ThumbnailGridLayout, str]] = await asyncio.gather(
+            *[
+                _call_avif_grid(
+                    backend=backend,
+                    staged_photos=staged_photos,
+                    tile_size=TILE_SIZES[tier],
+                    fit=TILE_FIT[tier],
+                    quality=AVIF_QUALITY[tier],
+                    output_path=_avif_path(partition, tier),
+                    tmpdir=tmpdir,
+                    avif_grid_binary=avif_grid_binary,
+                )
+                for tier in tier_names
+            ]
         )
-        results[tier] = (grid, content_hash)
+        results = dict(zip(tier_names, tier_results))
 
     thumbnail_grid, thumbnails_hash = results["thumbnail"]
     preview_grid, previews_hash = results["preview"]
