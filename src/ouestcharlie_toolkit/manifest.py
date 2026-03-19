@@ -11,15 +11,17 @@ from .backend import Backend
 _log = logging.getLogger(__name__)
 from .schema import (
     LeafManifest,
-    ParentManifest,
-    PartitionSummary,
+    ManifestSummary,
+    RootSummary,
+    SCHEMA_VERSION,
     VersionConflictError,
     VersionToken,
     deserialize_leaf,
-    deserialize_parent,
+    deserialize_summary,
     manifest_path,
     serialize_leaf,
-    serialize_parent,
+    serialize_summary,
+    summary_path,
 )
 
 
@@ -129,132 +131,92 @@ class ManifestStore:
         raise RuntimeError("Unexpected control flow")
 
     # -----------------------------------------------------------------------
-    # Parent manifests
+    # Root summary (summary.json)
     # -----------------------------------------------------------------------
 
-    async def read_parent(self, path: str) -> tuple[ParentManifest, VersionToken]:
-        """Read a parent manifest and its version token.
-
-        Args:
-            path: Parent manifest path (e.g., "2024/" or "" for root).
+    async def read_summary(self) -> tuple[RootSummary, VersionToken]:
+        """Read the root summary and its version token.
 
         Returns:
-            Tuple of (ParentManifest, VersionToken).
+            Tuple of (RootSummary, VersionToken).
 
         Raises:
-            FileNotFoundError: If the manifest does not exist.
+            FileNotFoundError: If summary.json does not exist yet.
         """
-        manifest_file = manifest_path(path)
-        try:
-            data, version = await self.backend.read(manifest_file)
-            manifest = deserialize_parent(json.loads(data.decode("utf-8")))
-            return manifest, version
-        except:
-            _log.error(f"Error while deserializing parent manifest of '{path}'")
-            raise
-        
+        path = summary_path()
+        data, version = await self.backend.read(path)
+        return deserialize_summary(json.loads(data.decode("utf-8"))), version
 
-    async def write_parent(
-        self, manifest: ParentManifest, expected_version: VersionToken
+    async def write_summary(
+        self, summary: RootSummary, expected_version: VersionToken
     ) -> VersionToken:
-        """Write a parent manifest with optimistic concurrency check.
-
-        Args:
-            manifest: ParentManifest to write.
-            expected_version: Expected version token.
-
-        Returns:
-            New version token after successful write.
+        """Write the root summary with optimistic concurrency check.
 
         Raises:
-            VersionConflictError: If the manifest was modified since read.
+            VersionConflictError: If the file was modified since read.
         """
-        path = manifest_path(manifest.path)
-        data = json.dumps(serialize_parent(manifest), ensure_ascii=False, indent=2).encode("utf-8")
+        path = summary_path()
+        data = json.dumps(serialize_summary(summary), ensure_ascii=False, indent=2).encode("utf-8")
         return await self.backend.write_conditional(path, data, expected_version)
 
-    async def create_parent(self, manifest: ParentManifest) -> VersionToken:
-        """Create a new parent manifest (fails if it already exists).
-
-        Args:
-            manifest: ParentManifest to create.
-
-        Returns:
-            Version token of the newly created manifest.
+    async def create_summary(self, summary: RootSummary) -> VersionToken:
+        """Create the root summary (fails if it already exists).
 
         Raises:
-            FileExistsError: If the manifest already exists.
+            FileExistsError: If summary.json already exists.
         """
-        path = manifest_path(manifest.path)
-        data = json.dumps(serialize_parent(manifest), ensure_ascii=False, indent=2).encode("utf-8")
+        path = summary_path()
+        data = json.dumps(serialize_summary(summary), ensure_ascii=False, indent=2).encode("utf-8")
         return await self.backend.write_new(path, data)
 
-    async def read_any(
-        self, partition: str
-    ) -> tuple[LeafManifest | ParentManifest, VersionToken]:
-        """Read a manifest at partition, returning whichever type it is.
-
-        Reads the raw JSON and dispatches to LeafManifest or ParentManifest
-        based on whether the 'photos' or 'children' key is present. This
-        avoids speculative exception-based dispatch that would double I/O.
-
-        Args:
-            partition: Partition path (e.g., "2024/2024-07" or "" for root).
-
-        Returns:
-            Tuple of (LeafManifest | ParentManifest, VersionToken).
-
-        Raises:
-            FileNotFoundError: If no manifest exists at this partition.
-            ValueError: If the JSON has neither 'photos' nor 'children'.
-        """
-        path = manifest_path(partition)
-        data, version = await self.backend.read(path)
-        raw = json.loads(data.decode("utf-8"))
-        if "photos" in raw:
-            return deserialize_leaf(raw), version
-        elif "children" in raw:
-            return deserialize_parent(raw), version
-        else:
-            raise ValueError(
-                f"Manifest at {path!r} has neither 'photos' nor 'children'"
-            )
-
-    async def rebuild_parent(
+    async def upsert_partition_in_summary(
         self,
-        parent_path: str,
-        child_summaries: list[PartitionSummary],
-    ) -> ParentManifest:
-        """Rebuild a parent manifest from child summaries.
+        new_partition_summary: ManifestSummary,
+        max_retries: int = 5,
+    ) -> RootSummary:
+        """Atomically update (or insert) one partition's entry in summary.json.
 
-        This is a convenience method that consolidates child summaries and writes
-        the parent manifest with optimistic concurrency.
+        Uses a read-modify-write loop with optimistic concurrency, retrying on
+        VersionConflictError. Handles the case where summary.json does not yet
+        exist (first index of the backend).
 
         Args:
-            parent_path: Path of the parent (e.g., "2024/" or "" for root).
-            child_summaries: List of PartitionSummary objects from children.
+            new_partition_summary: The summary to insert or replace.
+            max_retries: Maximum retry count on concurrent write conflicts.
 
         Returns:
-            The written ParentManifest.
-
-        Raises:
-            VersionConflictError: If retries are exhausted.
+            The successfully written RootSummary.
         """
-        # TODO: Implement bloom filter merging and min/max date computation
-        from .schema import SCHEMA_VERSION
-
-        manifest = ParentManifest(
-            schema_version=SCHEMA_VERSION,
-            path=parent_path,
-            children=child_summaries,
-        )
-
-        # Try to update existing, or create new
-        try:
-            existing, version = await self.read_parent(parent_path)
-            manifest._extra = existing._extra  # Preserve unknown fields
-            await self.write_parent(manifest, version)
-        except FileNotFoundError:
-            await self.create_parent(manifest)
-
-        return manifest
+        for attempt in range(max_retries + 1):
+            try:
+                existing, version = await self.read_summary()
+                partitions = [
+                    p for p in existing.partitions
+                    if p.path != new_partition_summary.path
+                ]
+                partitions.append(new_partition_summary)
+                updated = RootSummary(
+                    schema_version=existing.schema_version,
+                    partitions=partitions,
+                    _extra=existing._extra,
+                )
+                await self.write_summary(updated, version)
+                return updated
+            except FileNotFoundError:
+                fresh = RootSummary(
+                    schema_version=SCHEMA_VERSION,
+                    partitions=[new_partition_summary],
+                )
+                try:
+                    await self.create_summary(fresh)
+                    return fresh
+                except FileExistsError:
+                    pass  # Race: another writer created it; retry the read path
+            except VersionConflictError:
+                _log.debug(
+                    "Version conflict updating summary.json (attempt %d/%d), retrying",
+                    attempt + 1, max_retries,
+                )
+                if attempt == max_retries:
+                    raise
+        raise RuntimeError("Unexpected control flow in upsert_partition_in_summary")

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
+from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 
 
 # ---------------------------------------------------------------------------
@@ -16,6 +16,7 @@ from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 OUESTCHARLIE_NS = "http://ouestcharlie.app/ns/1.0/"
 SCHEMA_VERSION = 1
 MANIFEST_FILENAME = "manifest.json"
+SUMMARY_FILENAME = "summary.json"
 METADATA_DIR = ".ouestcharlie"
 
 
@@ -23,6 +24,11 @@ def manifest_path(partition: str) -> str:
     """Well-known manifest path for a partition, e.g. '2024/2024-07/' -> '2024/2024-07/.ouestcharlie/manifest.json'."""
     prefix = partition.rstrip("/") + "/" if partition else ""
     return f"{prefix}{METADATA_DIR}/{MANIFEST_FILENAME}"
+
+
+def summary_path() -> str:
+    """Well-known path for the root summary file: '.ouestcharlie/summary.json'."""
+    return f"{METADATA_DIR}/{SUMMARY_FILENAME}"
 
 
 # ---------------------------------------------------------------------------
@@ -88,20 +94,51 @@ class PhotoEntry:
     xmp_version_token: str = ""
     _extra: dict[str, Any] = field(default_factory=dict)
 
+    @classmethod
+    def from_sidecar(
+        cls,
+        filename: str,
+        sidecar: XmpSidecar,
+        content_hash: str,
+        xmp_version_token: str,
+        field_config: list[FieldDef] | None = None,
+    ) -> PhotoEntry:
+        """Build a PhotoEntry from an XmpSidecar."""
+        if field_config is None:
+            field_config = PHOTO_FIELDS
+        searchable: dict[str, Any] = {}
+        for fdef in field_config:
+            if fdef.sidecar_attr is not None:
+                val = getattr(sidecar, fdef.sidecar_attr, None)
+                if fdef.type is FieldType.STRING_COLLECTION and val is not None:
+                    val = list(val)  # defensive copy
+                searchable[fdef.entry_attr] = val
+        return cls(
+            filename=filename,
+            content_hash=content_hash,
+            metadata_version=sidecar.metadata_version,
+            xmp_version_token=xmp_version_token,
+            searchable=searchable,
+        )
+
 
 # ---------------------------------------------------------------------------
-# Partition summary helpers
+# Manifest summary
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Partition summary
-# ---------------------------------------------------------------------------
+def _naive(dt: datetime) -> datetime:
+    """Return a timezone-naive datetime for ordering.
+
+    Strips tzinfo so that min()/max() can compare a mix of aware and naive
+    datetimes without raising TypeError.
+    """
+    return dt.replace(tzinfo=None)
 
 
-class PartitionSummary:
-    """Summary statistics for a partition, used in parent manifests and as
-    the summary block of leaf manifests.
+class ManifestSummary:
+    """Summary statistics for a partition, stored inline in manifest.json and
+    as an entry in the root summary.json.
 
     Per-field statistics are stored in ``_stats`` as typed dicts that mirror
     the JSON serialisation format:
@@ -129,12 +166,48 @@ class PartitionSummary:
         self._stats: dict[str, dict[str, Any]] = dict(_stats) if _stats else {}
         self._extra: dict[str, Any] = dict(_extra) if _extra is not None else {}
 
+    @classmethod
+    def from_photos(
+        cls,
+        partition: str,
+        entries: list[PhotoEntry],
+        field_config: list[FieldDef] | None = None,
+    ) -> ManifestSummary:
+        """Compute partition-level summary statistics from photo entries."""
+        if field_config is None:
+            field_config = PHOTO_FIELDS
+        stats: dict[str, Any] = {}
+        for fdef in field_config:
+            if fdef.summary_range:
+                values = [v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None]
+                if not values:
+                    continue
+                if fdef.type == FieldType.DATE_RANGE:
+                    stats[fdef.name] = {
+                        "type": "date_range",
+                        "min": min(values, key=_naive),
+                        "max": max(values, key=_naive),
+                    }
+                elif fdef.type == FieldType.INT_RANGE:
+                    stats[fdef.name] = {"type": "int_range", "min": min(values), "max": max(values)}
+            elif fdef.summary_gps_bbox and fdef.type is FieldType.GPS_BOX:
+                values = [v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None]
+                if values:
+                    lats = [v[0] for v in values]
+                    lons = [v[1] for v in values]
+                    stats[fdef.name] = {
+                        "type": "gps_bbox",
+                        "minLat": min(lats), "maxLat": max(lats),
+                        "minLon": min(lons), "maxLon": max(lons),
+                    }
+        return cls(path=partition, photo_count=len(entries), _stats=stats)
+
     def __getattr__(self, name: str) -> Any:
         """Return the typed stat dict for a field, e.g. summary.rating → {"type": "int_range", ...}."""
         return self.__dict__.get("_stats", {}).get(name)
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, PartitionSummary):
+        if not isinstance(other, ManifestSummary):
             return NotImplemented
         return (
             self.path == other.path
@@ -146,7 +219,7 @@ class PartitionSummary:
         parts = [f"path={self.path!r}", f"photo_count={self.photo_count}"]
         for k, v in self._stats.items():
             parts.append(f"{k}={v!r}")
-        return f"PartitionSummary({', '.join(parts)})"
+        return f"ManifestSummary({', '.join(parts)})"
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +248,7 @@ class LeafManifest:
     schema_version: int
     partition: str
     photos: list[PhotoEntry] = field(default_factory=list)
-    summary: PartitionSummary | None = None
+    summary: ManifestSummary | None = None
     thumbnails_hash: str | None = None
     previews_hash: str | None = None
     thumbnail_grid: ThumbnailGridLayout | None = None
@@ -184,12 +257,17 @@ class LeafManifest:
 
 
 @dataclass
-class ParentManifest:
-    """Parent manifest that consolidates child partition summaries."""
+class RootSummary:
+    """Flat index of all partition summaries for a backend.
+
+    Written at <backend-root>/.ouestcharlie/summary.json.
+    Any folder that directly contains photos gets a manifest.json, and
+    summary.json at the root holds a flat list of all such partitions for
+    pruning during search.
+    """
 
     schema_version: int
-    path: str
-    children: list[PartitionSummary] = field(default_factory=list)
+    partitions: list[ManifestSummary] = field(default_factory=list)
     _extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -278,7 +356,7 @@ def _photo_entry_from_dict(d: dict[str, Any]) -> PhotoEntry:
     )
 
 
-def _summary_to_dict(s: PartitionSummary) -> dict[str, Any]:
+def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
     d: dict[str, Any] = {
         "path": s.path,
         "photoCount": s.photo_count,
@@ -305,7 +383,7 @@ def _summary_to_dict(s: PartitionSummary) -> dict[str, Any]:
     return d
 
 
-def _summary_from_dict(d: dict[str, Any]) -> PartitionSummary:
+def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
     known_keys = {"path", "photoCount", "hashes"}
     stats: dict[str, dict[str, Any]] = {}
     for fd in PHOTO_FIELDS:
@@ -335,7 +413,7 @@ def _summary_from_dict(d: dict[str, Any]) -> PartitionSummary:
     if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
         stats["hashes"] = {"type": "bloom", "value": bytes.fromhex(hashes_stat["value"])}
     extra = {k: v for k, v in d.items() if k not in known_keys}
-    return PartitionSummary(
+    return ManifestSummary(
         path=d["path"],
         photo_count=d.get("photoCount", 0),
         _stats=stats,
@@ -402,24 +480,22 @@ def deserialize_leaf(d: dict[str, Any]) -> LeafManifest:
     )
 
 
-def serialize_parent(manifest: ParentManifest) -> dict[str, Any]:
-    """Serialize a ParentManifest to a JSON-compatible dict."""
+def serialize_summary(s: RootSummary) -> dict[str, Any]:
+    """Serialize a RootSummary to a JSON-compatible dict."""
     d: dict[str, Any] = {
-        "schemaVersion": manifest.schema_version,
-        "path": manifest.path,
-        "children": [_summary_to_dict(c) for c in manifest.children],
+        "schemaVersion": s.schema_version,
+        "partitions": [_summary_to_dict(p) for p in s.partitions],
     }
-    d.update(manifest._extra)
+    d.update(s._extra)
     return d
 
 
-def deserialize_parent(d: dict[str, Any]) -> ParentManifest:
-    """Deserialize a JSON dict into a ParentManifest, preserving unknown fields."""
-    known_keys = {"schemaVersion", "path", "children"}
+def deserialize_summary(d: dict[str, Any]) -> RootSummary:
+    """Deserialize a JSON dict into a RootSummary, preserving unknown fields."""
+    known_keys = {"schemaVersion", "partitions"}
     extra = {k: v for k, v in d.items() if k not in known_keys}
-    return ParentManifest(
+    return RootSummary(
         schema_version=d.get("schemaVersion", SCHEMA_VERSION),
-        path=d["path"],
-        children=[_summary_from_dict(c) for c in d.get("children", [])],
+        partitions=[_summary_from_dict(p) for p in d.get("partitions", [])],
         _extra=extra,
     )

@@ -14,12 +14,13 @@ from ouestcharlie_toolkit.schema import (
     METADATA_DIR,
     SCHEMA_VERSION,
     LeafManifest,
-    ParentManifest,
-    PartitionSummary,
+    ManifestSummary,
     PhotoEntry,
+    RootSummary,
     VersionConflictError,
     VersionToken,
     manifest_path,
+    summary_path,
 )
 
 
@@ -43,14 +44,6 @@ def _leaf(partition: str = "2024/2024-07", photos: list[PhotoEntry] | None = Non
         schema_version=SCHEMA_VERSION,
         partition=partition,
         photos=photos or [PhotoEntry(filename="IMG_001.jpg", content_hash="sha256:abc")],
-    )
-
-
-def _parent(path: str = "2024", children: list[PartitionSummary] | None = None) -> ParentManifest:
-    return ParentManifest(
-        schema_version=SCHEMA_VERSION,
-        path=path,
-        children=children or [PartitionSummary(path="2024/2024-07", photo_count=1)],
     )
 
 
@@ -226,7 +219,7 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
 @pytest.mark.asyncio
 async def test_leaf_summary_roundtrip(store: ManifestStore) -> None:
     leaf = _leaf()
-    leaf.summary = PartitionSummary(
+    leaf.summary = ManifestSummary(
         path="2024/2024-07",
         photo_count=42,
         _stats={"dateTaken": {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)}},
@@ -240,115 +233,103 @@ async def test_leaf_summary_roundtrip(store: ManifestStore) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Parent — create
+# RootSummary (summary.json)
 # ---------------------------------------------------------------------------
 
 
+def _summary_with(partitions: list[ManifestSummary] | None = None) -> RootSummary:
+    return RootSummary(
+        schema_version=SCHEMA_VERSION,
+        partitions=partitions or [ManifestSummary(path="2024/2024-07", photo_count=10)],
+    )
+
+
 @pytest.mark.asyncio
-async def test_create_parent_writes_file(store: ManifestStore, tmp_path: Path) -> None:
-    await store.create_parent(_parent())
-    expected = tmp_path / "2024" / METADATA_DIR / "manifest.json"
+async def test_create_summary_writes_file(store: ManifestStore, tmp_path: Path) -> None:
+    await store.create_summary(_summary_with())
+    expected = tmp_path / ".ouestcharlie" / "summary.json"
     assert expected.exists()
+    raw = json.loads(expected.read_text())
+    assert raw["schemaVersion"] == SCHEMA_VERSION
+    assert len(raw["partitions"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_create_parent_raises_if_exists(store: ManifestStore) -> None:
-    await store.create_parent(_parent())
+async def test_create_summary_raises_if_exists(store: ManifestStore) -> None:
+    await store.create_summary(_summary_with())
     with pytest.raises(FileExistsError):
-        await store.create_parent(_parent())
-
-
-# ---------------------------------------------------------------------------
-# Parent — read
-# ---------------------------------------------------------------------------
+        await store.create_summary(_summary_with())
 
 
 @pytest.mark.asyncio
-async def test_read_parent_raises_if_missing(store: ManifestStore) -> None:
+async def test_read_summary_raises_if_missing(store: ManifestStore) -> None:
     with pytest.raises(FileNotFoundError):
-        await store.read_parent("2024")
+        await store.read_summary()
 
 
 @pytest.mark.asyncio
-async def test_read_parent_roundtrip(store: ManifestStore) -> None:
-    await store.create_parent(_parent())
-    manifest, version = await store.read_parent("2024")
-    assert manifest.path == "2024"
-    assert manifest.schema_version == SCHEMA_VERSION
-    assert len(manifest.children) == 1
-    assert manifest.children[0].path == "2024/2024-07"
-    assert isinstance(version, VersionToken)
+async def test_read_summary_roundtrip(store: ManifestStore) -> None:
+    original = _summary_with([
+        ManifestSummary(path="2024/2024-07", photo_count=100),
+        ManifestSummary(path="2024/2024-08", photo_count=80),
+    ])
+    await store.create_summary(original)
+    result, _ = await store.read_summary()
+    assert result.schema_version == SCHEMA_VERSION
+    assert len(result.partitions) == 2
+    assert result.partitions[0].path == "2024/2024-07"
+    assert result.partitions[0].photo_count == 100
 
 
 @pytest.mark.asyncio
-async def test_read_parent_preserves_extra(store: ManifestStore) -> None:
-    parent = _parent()
-    parent._extra["futureField"] = "v2-data"
-    await store.create_parent(parent)
-    manifest, _ = await store.read_parent("2024")
-    assert manifest._extra.get("futureField") == "v2-data"
-
-
-# ---------------------------------------------------------------------------
-# Parent — write (optimistic concurrency)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_write_parent_updates_content(store: ManifestStore) -> None:
-    await store.create_parent(_parent())
-    manifest, version = await store.read_parent("2024")
-
-    manifest.children.append(PartitionSummary(path="2024/2024-08", photo_count=5))
-    await store.write_parent(manifest, version)
-
-    updated, _ = await store.read_parent("2024")
-    assert len(updated.children) == 2
-
-
-@pytest.mark.asyncio
-async def test_write_parent_conflict_raises(store: ManifestStore) -> None:
-    await store.create_parent(_parent())
-    manifest, version = await store.read_parent("2024")
-    await store.write_parent(manifest, version)
-
+async def test_write_summary_conflict_raises(store: ManifestStore) -> None:
+    await store.create_summary(_summary_with())
+    summary, version = await store.read_summary()
+    await store.write_summary(summary, version)
     with pytest.raises(VersionConflictError):
-        await store.write_parent(manifest, version)
-
-
-# ---------------------------------------------------------------------------
-# rebuild_parent
-# ---------------------------------------------------------------------------
+        await store.write_summary(summary, version)
 
 
 @pytest.mark.asyncio
-async def test_rebuild_parent_creates_when_absent(store: ManifestStore, tmp_path: Path) -> None:
-    summaries = [PartitionSummary(path="2024/2024-07", photo_count=10)]
-    manifest = await store.rebuild_parent("2024", summaries)
-    assert manifest.path == "2024"
-    assert len(manifest.children) == 1
-    expected = tmp_path / "2024" / METADATA_DIR / "manifest.json"
-    assert expected.exists()
+async def test_upsert_partition_creates_summary(store: ManifestStore, tmp_path: Path) -> None:
+    p = ManifestSummary(path="2024/2024-07", photo_count=42)
+    result = await store.upsert_partition_in_summary(p)
+    assert len(result.partitions) == 1
+    assert result.partitions[0].path == "2024/2024-07"
+    assert (tmp_path / ".ouestcharlie" / "summary.json").exists()
 
 
 @pytest.mark.asyncio
-async def test_rebuild_parent_updates_when_present(store: ManifestStore) -> None:
-    await store.create_parent(_parent(children=[PartitionSummary(path="2024/2024-07", photo_count=1)]))
+async def test_upsert_partition_replaces_existing(store: ManifestStore) -> None:
+    await store.create_summary(_summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)]))
+    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-07", photo_count=99))
+    assert len(result.partitions) == 1
+    assert result.partitions[0].photo_count == 99
 
-    summaries = [
-        PartitionSummary(path="2024/2024-07", photo_count=50),
-        PartitionSummary(path="2024/2024-08", photo_count=30),
+
+@pytest.mark.asyncio
+async def test_upsert_partition_appends_new(store: ManifestStore) -> None:
+    await store.create_summary(_summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)]))
+    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-08", photo_count=20))
+    assert len(result.partitions) == 2
+
+
+@pytest.mark.asyncio
+async def test_upsert_partition_preserves_extra(store: ManifestStore) -> None:
+    s = _summary_with()
+    s._extra["futureField"] = "keep-me"
+    await store.create_summary(s)
+    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-08", photo_count=5))
+    assert result._extra.get("futureField") == "keep-me"
+
+
+@pytest.mark.asyncio
+async def test_upsert_partition_preserves_other_partitions(store: ManifestStore) -> None:
+    partitions = [
+        ManifestSummary(path="2024/2024-07", photo_count=10),
+        ManifestSummary(path="2024/2024-08", photo_count=20),
     ]
-    manifest = await store.rebuild_parent("2024", summaries)
-    assert len(manifest.children) == 2
-    assert manifest.children[0].photo_count == 50
-
-
-@pytest.mark.asyncio
-async def test_rebuild_parent_preserves_extra(store: ManifestStore) -> None:
-    parent = _parent()
-    parent._extra["legacyField"] = "keep-me"
-    await store.create_parent(parent)
-
-    manifest = await store.rebuild_parent("2024", [PartitionSummary(path="2024/2024-07", photo_count=5)])
-    assert manifest._extra.get("legacyField") == "keep-me"
+    await store.create_summary(_summary_with(partitions))
+    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-07", photo_count=99))
+    other = next(p for p in result.partitions if p.path == "2024/2024-08")
+    assert other.photo_count == 20

@@ -39,7 +39,7 @@ The `Backend` protocol defines the storage operations: `read`, `write_conditiona
 
 `VersionToken` is backend-specific: `mtime` for local filesystem, `ETag` for S3/GCS/Azure Data Lake Storage Gen2, `generation` for GCS. It is opaque to callers.
 
-### Local Filesystem Backend (V1)
+### Local Filesystem Backend
 
 Implementation uses:
 - Async I/O via `asyncio.run_in_executor`

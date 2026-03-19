@@ -6,16 +6,13 @@ from ouestcharlie_toolkit.schema import (
     VersionToken,
     FileInfo,
     PhotoEntry,
-    PartitionSummary,
+    ManifestSummary,
     LeafManifest,
-    ParentManifest,
     XmpSidecar,
     VersionConflictError,
     ConfigurationError,
     serialize_leaf,
     deserialize_leaf,
-    serialize_parent,
-    deserialize_parent,
     manifest_path,
     SCHEMA_VERSION,
     OUESTCHARLIE_NS,
@@ -142,13 +139,78 @@ def test_photo_entry_extra_fields():
 
 
 # ---------------------------------------------------------------------------
+# PhotoEntry.from_sidecar
+# ---------------------------------------------------------------------------
+
+
+def test_from_sidecar_basic_fields():
+    """filename, content_hash, metadata_version and xmp_version_token are transferred."""
+    sidecar = XmpSidecar(content_hash="sha256:abc", metadata_version=3)
+    entry = PhotoEntry.from_sidecar("photo.jpg", sidecar, "sha256:abc", "tok1")
+    assert entry.filename == "photo.jpg"
+    assert entry.content_hash == "sha256:abc"
+    assert entry.metadata_version == 3
+    assert entry.xmp_version_token == "tok1"
+
+
+def test_from_sidecar_searchable_fields():
+    """Scalar searchable fields (make, model, rating, width, height) are populated."""
+    sidecar = XmpSidecar(
+        content_hash="sha256:x",
+        camera_make="Canon",
+        camera_model="EOS R5",
+        rating=4,
+        width=6000,
+        height=4000,
+    )
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    assert entry.searchable["make"] == "Canon"
+    assert entry.searchable["model"] == "EOS R5"
+    assert entry.searchable["rating"] == 4
+    assert entry.searchable["width"] == 6000
+    assert entry.searchable["height"] == 4000
+
+
+def test_from_sidecar_date_taken():
+    """date_taken is placed in searchable under the correct key."""
+    dt = datetime(2024, 7, 15, 10, 30)
+    sidecar = XmpSidecar(content_hash="sha256:x", date_taken=dt)
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    assert entry.searchable["date_taken"] == dt
+
+
+def test_from_sidecar_gps():
+    """GPS tuple is placed in searchable."""
+    sidecar = XmpSidecar(content_hash="sha256:x", gps=(48.8566, 2.3522))
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    assert entry.searchable["gps"] == (48.8566, 2.3522)
+
+
+def test_from_sidecar_tags_defensive_copy():
+    """tags list is copied so mutations do not affect the sidecar."""
+    sidecar = XmpSidecar(content_hash="sha256:x", tags=["a", "b"])
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    entry.searchable["tags"].append("c")
+    assert sidecar.tags == ["a", "b"]
+
+
+def test_from_sidecar_none_fields_present():
+    """Fields absent on the sidecar produce None values in searchable (not missing keys)."""
+    sidecar = XmpSidecar(content_hash="sha256:x")
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    # All sidecar-mapped fields appear as None rather than being absent
+    assert "rating" in entry.searchable
+    assert entry.searchable["rating"] is None
+
+
+# ---------------------------------------------------------------------------
 # Partition summaries
 # ---------------------------------------------------------------------------
 
 
 def test_partition_summary():
-    """Test PartitionSummary creation with date and rating ranges."""
-    summary = PartitionSummary(
+    """Test ManifestSummary creation with date and rating ranges."""
+    summary = ManifestSummary(
         path="2024/2024-07/",
         photo_count=42,
         _stats={
@@ -167,7 +229,7 @@ def test_partition_summary():
 
 def test_partition_summary_rating_defaults_none():
     """rating stat is absent (None) when not provided."""
-    summary = PartitionSummary(path="2024/", photo_count=10)
+    summary = ManifestSummary(path="2024/", photo_count=10)
     assert summary.rating is None
 
 
@@ -266,7 +328,7 @@ def test_photo_entry_rejected_rating_round_trip():
 
 def test_partition_summary_rating_round_trip():
     """rating and date survive serialize → deserialize with nested stat format."""
-    summary = PartitionSummary(
+    summary = ManifestSummary(
         path="p", photo_count=3,
         _stats={
             "dateTaken": {"type": "date_range", "min": datetime(2024, 1, 1), "max": datetime(2024, 12, 31)},
@@ -285,43 +347,6 @@ def test_partition_summary_rating_round_trip():
     assert restored.rating["max"] == 5
     assert restored.dateTaken["min"] == datetime(2024, 1, 1)
     assert restored.dateTaken["max"] == datetime(2024, 12, 31)
-
-
-def test_parent_manifest_creation():
-    """Test ParentManifest creation."""
-    child1 = PartitionSummary(path="2024/2024-07/", photo_count=10)
-    child2 = PartitionSummary(path="2024/2024-08/", photo_count=15)
-
-    parent = ParentManifest(
-        schema_version=SCHEMA_VERSION,
-        path="2024/",
-        children=[child1, child2],
-    )
-
-    assert parent.schema_version == SCHEMA_VERSION
-    assert parent.path == "2024/"
-    assert len(parent.children) == 2
-    assert parent.children[0].photo_count == 10
-    assert parent.children[1].photo_count == 15
-
-
-def test_parent_manifest_serialization():
-    """Test ParentManifest serialization round-trip."""
-    child = PartitionSummary(path="2024/2024-07/", photo_count=5)
-    parent = ParentManifest(
-        schema_version=SCHEMA_VERSION,
-        path="2024/",
-        children=[child],
-    )
-
-    serialized = serialize_parent(parent)
-    deserialized = deserialize_parent(serialized)
-
-    assert deserialized.path == "2024/"
-    assert deserialized.schema_version == SCHEMA_VERSION
-    assert len(deserialized.children) == 1
-    assert deserialized.children[0].path == "2024/2024-07/"
-    assert deserialized.children[0].photo_count == 5
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,6 @@ For OuEstCharlie project open points, see [OutEstCharlie Openpoints](../ouestcha
 ## 🚧 Stub Implementations (TODO)
 
 **Bloom Filters** ([manifest.py](src/ouestcharlie_toolkit/manifest.py)):
-- `rebuild_parent()` — needs bloom filter merging logic
 - `_recompute_summary()` — needs bloom filter computation
 
 ## Future Work
