@@ -15,8 +15,8 @@ from ouestcharlie_toolkit.schema import METADATA_DIR, ThumbnailGridLayout
 from ouestcharlie_toolkit.thumbnail_builder import (
     ThumbnailResult,
     _avif_path,
-    _call_avif_grid,
-    _find_avif_grid_binary,
+    _call_image_proc,
+    _find_image_proc_binary,
     _stage_photos,
     generate_partition_thumbnails,
 )
@@ -95,21 +95,23 @@ def test_avif_path_root_partition() -> None:
 
 def test_find_binary_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AVIF_GRID_BINARY", "/custom/avif-grid")
-    assert _find_avif_grid_binary() == "/custom/avif-grid"
+    assert _find_image_proc_binary() == "/custom/avif-grid"
 
 
 def test_find_binary_uses_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AVIF_GRID_BINARY", raising=False)
-    with patch("shutil.which", return_value="/usr/local/bin/avif-grid"):
-        assert _find_avif_grid_binary() == "/usr/local/bin/avif-grid"
+    monkeypatch.delenv("IMAGE_PROC_BINARY", raising=False)
+    with patch("shutil.which", return_value="/usr/local/bin/image-proc"):
+        assert _find_image_proc_binary() == "/usr/local/bin/image-proc"
 
 
 def test_find_binary_raises_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AVIF_GRID_BINARY", raising=False)
+    monkeypatch.delenv("IMAGE_PROC_BINARY", raising=False)
     with patch("shutil.which", return_value=None):
         with patch("pathlib.Path.exists", return_value=False):
-            with pytest.raises(FileNotFoundError, match="avif-grid binary not found"):
-                _find_avif_grid_binary()
+            with pytest.raises(FileNotFoundError, match="image-proc binary not found"):
+                _find_image_proc_binary()
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +143,7 @@ async def test_call_avif_grid_writes_avif_to_backend(
         "asyncio.create_subprocess_exec",
         return_value=_FakeAvifProcess(cols=1, rows=1, tile_size=256),
     ):
-        grid, content_hash = await _call_avif_grid(
+        grid, content_hash = await _call_image_proc(
             backend=backend_with_photo,
             staged_photos=staged,
             tile_size=256,
@@ -149,7 +151,7 @@ async def test_call_avif_grid_writes_avif_to_backend(
             quality=55,
             output_path=output_path,
             tmpdir=str(tmp_path),
-            avif_grid_binary="fake-avif-grid",
+            binary="fake-avif-grid",
         )
 
     assert await backend_with_photo.exists(output_path)
@@ -168,7 +170,7 @@ async def test_call_avif_grid_returns_sha256_hash(
         "asyncio.create_subprocess_exec",
         return_value=_FakeAvifProcess(),
     ):
-        _, content_hash = await _call_avif_grid(
+        _, content_hash = await _call_image_proc(
             backend=backend_with_photo,
             staged_photos=staged,
             tile_size=256,
@@ -176,7 +178,7 @@ async def test_call_avif_grid_returns_sha256_hash(
             quality=55,
             output_path=f"{METADATA_DIR}/thumbnails.avif",
             tmpdir=str(tmp_path),
-            avif_grid_binary="fake-avif-grid",
+            binary="fake-avif-grid",
         )
 
     expected = "sha256:" + hashlib.sha256(b"FAKE_AVIF_CONTENT").hexdigest()
@@ -205,7 +207,7 @@ async def test_call_avif_grid_passes_correct_json(
             }).encode(), b""
 
     with patch("asyncio.create_subprocess_exec", return_value=_CapturingProcess()):
-        await _call_avif_grid(
+        await _call_image_proc(
             backend=backend_with_photo,
             staged_photos=staged,
             tile_size=256,
@@ -213,7 +215,7 @@ async def test_call_avif_grid_passes_correct_json(
             quality=55,
             output_path=f"{METADATA_DIR}/thumbnails.avif",
             tmpdir=str(tmp_path),
-            avif_grid_binary="fake-avif-grid",
+            binary="fake-avif-grid",
         )
 
     assert len(captured) == 1
@@ -237,8 +239,8 @@ async def test_call_avif_grid_raises_on_nonzero_exit(
         "asyncio.create_subprocess_exec",
         return_value=_FakeAvifProcessError(),
     ):
-        with pytest.raises(RuntimeError, match="avif-grid exited 1"):
-            await _call_avif_grid(
+        with pytest.raises(RuntimeError, match="image-proc exited 1"):
+            await _call_image_proc(
                 backend=backend_with_photo,
                 staged_photos=staged,
                 tile_size=256,
@@ -246,7 +248,7 @@ async def test_call_avif_grid_raises_on_nonzero_exit(
                 quality=55,
                 output_path=f"{METADATA_DIR}/thumbnails.avif",
                 tmpdir=str(tmp_path),
-                avif_grid_binary="fake-avif-grid",
+                binary="fake-avif-grid",
             )
 
 
@@ -266,7 +268,7 @@ async def test_call_avif_grid_overwrites_existing_output(
         "asyncio.create_subprocess_exec",
         return_value=_FakeAvifProcess(),
     ):
-        _, content_hash = await _call_avif_grid(
+        _, content_hash = await _call_image_proc(
             backend=backend_with_photo,
             staged_photos=staged,
             tile_size=256,
@@ -274,7 +276,7 @@ async def test_call_avif_grid_overwrites_existing_output(
             quality=55,
             output_path=output_path,
             tmpdir=str(tmp_path),
-            avif_grid_binary="fake-avif-grid",
+            binary="fake-avif-grid",
         )
 
     assert out_abs.read_bytes() == b"FAKE_AVIF_CONTENT"
@@ -293,7 +295,7 @@ async def test_call_avif_grid_photo_order_in_grid(
         "asyncio.create_subprocess_exec",
         return_value=_FakeAvifProcess(cols=2, rows=1, tile_size=256),
     ):
-        grid, _ = await _call_avif_grid(
+        grid, _ = await _call_image_proc(
             backend=backend_with_photo,
             staged_photos=staged,
             tile_size=256,
@@ -301,7 +303,7 @@ async def test_call_avif_grid_photo_order_in_grid(
             quality=55,
             output_path=f"{METADATA_DIR}/thumbnails.avif",
             tmpdir=str(tmp_path),
-            avif_grid_binary="fake-avif-grid",
+            binary="fake-avif-grid",
         )
 
     assert grid.photo_order == hashes
@@ -323,9 +325,9 @@ async def test_generate_partition_thumbnails_returns_result(tmp_path: Path) -> N
     fake_grid = ThumbnailGridLayout(cols=2, rows=1, tile_size=256, photo_order=[])
 
     with (
-        patch("ouestcharlie_toolkit.thumbnail_builder._find_avif_grid_binary", return_value="fake-bin"),
+        patch("ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary", return_value="fake-bin"),
         patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", new=AsyncMock(return_value=[])),
-        patch("ouestcharlie_toolkit.thumbnail_builder._call_avif_grid", new=AsyncMock(
+        patch("ouestcharlie_toolkit.thumbnail_builder._call_image_proc", new=AsyncMock(
             return_value=(fake_grid, "sha256:" + "cc" * 32)
         )),
     ):
@@ -357,9 +359,9 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(tmp_path: Path
     fake_grid = ThumbnailGridLayout(cols=2, rows=2, tile_size=256, photo_order=[])
 
     with (
-        patch("ouestcharlie_toolkit.thumbnail_builder._find_avif_grid_binary", return_value="fake-bin"),
+        patch("ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary", return_value="fake-bin"),
         patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", side_effect=capture_stage),
-        patch("ouestcharlie_toolkit.thumbnail_builder._call_avif_grid", new=AsyncMock(
+        patch("ouestcharlie_toolkit.thumbnail_builder._call_image_proc", new=AsyncMock(
             return_value=(fake_grid, "sha256:" + "00" * 32)
         )),
     ):
@@ -385,9 +387,9 @@ async def test_generate_partition_thumbnails_calls_both_tiers(tmp_path: Path) ->
         return grid, "sha256:" + "cc" * 32
 
     with (
-        patch("ouestcharlie_toolkit.thumbnail_builder._find_avif_grid_binary", return_value="fake-bin"),
+        patch("ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary", return_value="fake-bin"),
         patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", new=AsyncMock(return_value=[])),
-        patch("ouestcharlie_toolkit.thumbnail_builder._call_avif_grid", side_effect=capture_call),
+        patch("ouestcharlie_toolkit.thumbnail_builder._call_image_proc", side_effect=capture_call),
     ):
         await generate_partition_thumbnails(backend, "", photos)
 
@@ -410,9 +412,9 @@ async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path)
         return grid, "sha256:" + "00" * 32
 
     with (
-        patch("ouestcharlie_toolkit.thumbnail_builder._find_avif_grid_binary", return_value="fake-bin"),
+        patch("ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary", return_value="fake-bin"),
         patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", new=AsyncMock(return_value=staged)),
-        patch("ouestcharlie_toolkit.thumbnail_builder._call_avif_grid", side_effect=fake_call),
+        patch("ouestcharlie_toolkit.thumbnail_builder._call_image_proc", side_effect=fake_call),
     ):
         result = await generate_partition_thumbnails(backend, "", photos)
 

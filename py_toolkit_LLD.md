@@ -9,7 +9,7 @@ The Python toolkit (`ouestcharlie-toolkit`) is a shared library that provides fo
 1. **MCP integration** — MCP server lifecycle, tool registration, progress reporting, and logging
 2. **Manifest read-edit with consistency** — hierarchical manifest traversal, atomic read-modify-write with optimistic concurrency
 3. **XMP read-edit with consistency** — sidecar read-modify-write with optimistic concurrency and field-level semantics
-4. **Thumbnail generation** — per-partition AVIF grid assembly delegated to the `avif-grid` Rust CLI
+4. **Image processing** — thumbnail AVIF grid assembly and on-demand JPEG preview generation, both delegated to the `image-proc` Rust CLI
 
 Agents import the toolkit and focus on their domain logic (indexing, enrichment, search). The toolkit handles protocol, storage, and consistency concerns.
 
@@ -127,27 +127,27 @@ Errors follow the three-category model from [controller_api.json](../../controll
 
 `AgentBase` provides `per_photo(photo, partition)` context manager for error isolation without aborting the batch. See [server.py](src/ouestcharlie/server.py) for implementation.
 
-## Thumbnail Generation
+## Image Processing
 
-### Pipeline
+The `image-proc` Rust CLI (in `image-proc/`) handles all pixel-level operations: decoding, orientation, resize, fit, and encoding. It is invoked via `asyncio.create_subprocess_exec` with a JSON payload on stdin and returns a JSON result on stdout. Two commands are supported, dispatched by the shape of the input (untagged serde enum).
 
-Per partition, per tier (thumbnail 256 px / preview 1440 px):
+### `avif_grid` command — thumbnail AVIF grid
+
+Called by `generate_partition_thumbnails()` to produce the per-partition thumbnail AVIF container. Only the `"thumbnail"` tier is generated at indexing time (256 px, center-crop); the preview tier is replaced by lazy per-photo JPEG generation.
+
+**Pipeline:**
 
 ```
 Python: sort photos by content_hash → stage bytes to local tmpdir
-  ↓  (one asyncio.create_subprocess_exec call)
-avif-grid (Rust):
+  ↓  (one asyncio.create_subprocess_exec call, per tier)
+image-proc avif_grid (Rust):
   rayon::par_iter — decode → apply orientation → resize → fit to square
   sequential      — YUV420 conversion → AVIF grid encoding (libavif)
   ↓
 Python: read AVIF bytes from tmpdir → write to backend
 ```
 
-No intermediate JPEG tile cache exists. Every call to `generate_partition_thumbnails` decodes all photos fresh, relying on Rust's speed and `rayon` parallelism to keep total latency acceptable.
-
-### avif-grid JSON Protocol
-
-**Stdin:**
+**Stdin** (detected by presence of `"photos"` array):
 ```json
 {
   "photos": [
@@ -160,8 +160,7 @@ No intermediate JPEG tile cache exists. Every call to `generate_partition_thumbn
 }
 ```
 
-- `orientation` — TIFF orientation value 1–8 from the XMP sidecar; `null` means no transform.
-- `fit` — `"crop"` (center-crop to square, used for thumbnails) or `"pad"` (letterbox with black, used for previews).
+- `fit` — `"crop"` (center-crop to square, thumbnails) or `"pad"` (letterbox with black).
 - Photos must be pre-sorted by `content_hash` (Python's responsibility) for stable tile indices.
 
 **Stdout:**
@@ -169,7 +168,27 @@ No intermediate JPEG tile cache exists. Every call to `generate_partition_thumbn
 { "cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["sha256:aaa...", ...] }
 ```
 
-`photoOrder` reflects the tile order as received, so the caller can populate `ThumbnailGridLayout.photo_order` directly.
+### `jpeg_preview` command — on-demand preview JPEG
+
+Called by `generate_preview_jpeg()` to produce a single-photo preview JPEG. Invoked by Wally's HTTP server on cache miss.
+
+**Stdin** (detected by presence of `"photo"` object):
+```json
+{
+  "photo": { "path": "/tmp/staged.cr2", "ext": ".cr2", "orientation": 1, "content_hash": "sha256:..." },
+  "max_long_edge": 1440,
+  "quality": 85,
+  "output": "/tmp/preview.jpg"
+}
+```
+
+- `max_long_edge` — the output JPEG's long edge is capped at this value; aspect ratio is preserved.
+- `quality` — JPEG quality 1–95.
+
+**Stdout:**
+```json
+{ "width": 1440, "height": 960 }
+```
 
 ### Format Support and Platform Matrix
 
@@ -191,15 +210,17 @@ RAW and HEIC are compile-time features; the binary returns a clear error if a fo
 
 - `cols = ceil(sqrt(n))`, `rows = ceil(n / cols)` — square-ish
 - Last row padded with black tiles when `n` is not a multiple of `cols`
-- AVIF quality: thumbnail 55, preview 60 (configurable via `AVIF_QUALITY`)
+- AVIF quality: 55 for thumbnails (configurable via `AVIF_QUALITY`)
 
 ### Python Entry Points
 
 `thumbnail_builder.py` exposes:
-- `generate_partition_thumbnails(backend, partition, photo_entries)` — top-level orchestrator
-- `_call_avif_grid(...)` — stages photos, calls the binary, writes AVIF to backend
-- `_avif_path(partition, tier)` — canonical backend path for an AVIF file
-- `_find_avif_grid_binary()` — resolves binary path via env var, `$PATH`, or dev build
+- `generate_partition_thumbnails(backend, partition, photo_entries, tiers=["thumbnail", "preview"])` — top-level orchestrator; Whitebeard passes `tiers=["thumbnail"]` to skip preview generation
+- `generate_preview_jpeg(backend, partition, entry, max_long_edge=1440, jpeg_quality=85)` — generates and caches a single-photo JPEG preview; called by Wally's HTTP server
+- `_call_image_proc(...)` — stages photos, calls the binary, writes AVIF to backend
+- `_avif_path(partition, tier)` — canonical backend path for a thumbnail AVIF file
+- `_preview_jpeg_path(partition, content_hash)` — canonical backend path for a preview JPEG (`{partition}/.ouestcharlie/previews/{content_hash}.jpg`)
+- `_find_image_proc_binary()` — resolves binary path via `IMAGE_PROC_BINARY` env var, `$PATH`, or dev build (`image-proc/target/release/image-proc`)
 
 ## Dependencies
 
@@ -207,7 +228,7 @@ RAW and HEIC are compile-time features; the binary returns a clear error if a fo
 |---|---|---|
 | `mcp` | MCP server SDK | `>=1.0` |
 | `pyexiv2` | EXIF/XMP read-write (wraps Exiv2) | `>=2.8` |
-| **avif-grid** (Rust binary) | Photo decode, resize, fit, AVIF assembly | built from `avif-grid/` |
+| **image-proc** (Rust binary) | Photo decode, resize, fit, AVIF grid assembly, JPEG preview generation | built from `image-proc/` |
 
 ## References
 

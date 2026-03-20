@@ -1,11 +1,11 @@
 [package]
-name = "avif-grid"
+name = "image-proc"
 version = "0.1.0"
 edition = "2021"
-description = "Decode photos and assemble them into an AVIF grid container for OuEstCharlie."
+description = "Image processing coprocessor for OuEstCharlie: AVIF grid assembly and JPEG preview generation."
 
 [[bin]]
-name = "avif-grid"
+name = "image-proc"
 path = "src/main.rs"
 
 [build-dependencies]

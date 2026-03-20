@@ -66,19 +66,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
-name = "avif-grid"
-version = "0.1.0"
-dependencies = [
- "image",
- "libheif-rs",
- "pkg-config",
- "rawler",
- "rayon",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "backtrace"
 version = "0.3.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -431,6 +418,19 @@ dependencies = [
  "tiff",
  "zune-core 0.5.1",
  "zune-jpeg 0.5.12",
+]
+
+[[package]]
+name = "image-proc"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "libheif-rs",
+ "pkg-config",
+ "rawler",
+ "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
