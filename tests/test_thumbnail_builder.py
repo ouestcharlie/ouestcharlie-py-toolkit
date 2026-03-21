@@ -13,7 +13,6 @@ import pytest
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.schema import METADATA_DIR, ThumbnailGridLayout
 from ouestcharlie_toolkit.thumbnail_builder import (
-    ThumbnailResult,
     _avif_path,
     _call_image_proc,
     _find_image_proc_binary,
@@ -330,13 +329,10 @@ async def test_generate_partition_thumbnails_returns_result(tmp_path: Path) -> N
             return_value=(fake_grid, "A" * 22)
         )),
     ):
-        result = await generate_partition_thumbnails(backend, "", photos)
+        grid, content_hash = await generate_partition_thumbnails(backend, "", photos)
 
-    assert isinstance(result, ThumbnailResult)
-    assert len(result.thumbnails_hash) == 22
-    assert len(result.previews_hash) == 22
-    assert result.thumbnail_grid is not None
-    assert result.preview_grid is not None
+    assert grid is fake_grid
+    assert len(content_hash) == 22
 
 
 @pytest.mark.asyncio
@@ -373,8 +369,8 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_generate_partition_thumbnails_calls_both_tiers(tmp_path: Path) -> None:
-    """Both thumbnail (256px) and preview (1440px) tiers must be generated."""
+async def test_generate_partition_thumbnails_uses_tier_size(tmp_path: Path) -> None:
+    """The tile_size passed to _call_image_proc must match the requested tier."""
     backend = LocalBackend(root=str(tmp_path))
     photos = [_fake_photo_entry("a.jpg", "sha256:" + "aa" * 32)]
 
@@ -390,15 +386,15 @@ async def test_generate_partition_thumbnails_calls_both_tiers(tmp_path: Path) ->
         patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", new=AsyncMock(return_value=[])),
         patch("ouestcharlie_toolkit.thumbnail_builder._call_image_proc", side_effect=capture_call),
     ):
-        await generate_partition_thumbnails(backend, "", photos)
+        await generate_partition_thumbnails(backend, "", photos, tier="thumbnail")
+        await generate_partition_thumbnails(backend, "", photos, tier="preview")
 
-    assert 256 in sizes_seen
-    assert 1440 in sizes_seen
+    assert sizes_seen == [256, 1440]
 
 
 @pytest.mark.asyncio
 async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path) -> None:
-    """photo_order in both grids must contain all content hashes, sorted."""
+    """photo_order in the returned grid must contain all content hashes, sorted."""
     backend = LocalBackend(root=str(tmp_path))
     hashes = ["sha256:" + "cc" * 32, "sha256:" + "aa" * 32, "sha256:" + "bb" * 32]
     photos = [_fake_photo_entry(f"p{i}.jpg", h) for i, h in enumerate(hashes)]
@@ -415,7 +411,6 @@ async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path)
         patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", new=AsyncMock(return_value=staged)),
         patch("ouestcharlie_toolkit.thumbnail_builder._call_image_proc", side_effect=fake_call),
     ):
-        result = await generate_partition_thumbnails(backend, "", photos)
+        grid, _ = await generate_partition_thumbnails(backend, "", photos)
 
-    assert result.thumbnail_grid.photo_order == sorted(hashes)
-    assert result.preview_grid.photo_order == sorted(hashes)
+    assert grid.photo_order == sorted(hashes)

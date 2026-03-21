@@ -3,10 +3,10 @@
 Pipeline per partition (avif_grid command):
   1. Sort photos by content_hash for stable tile indices
   2. Stage original photo bytes once to a shared local temp directory
-  3. For both tiers (thumbnail, preview) in parallel: call the image-proc Rust
-     CLI, which decodes + resizes + fits + assembles using the staged files
-  4. Write each resulting AVIF to the backend
-  5. Return ThumbnailGridLayout + content hashes for manifest update
+  3. Call the image-proc Rust CLI for the requested tier, which decodes +
+     resizes + fits + assembles using the staged files
+  4. Write the resulting AVIF to the backend
+  5. Return (ThumbnailGridLayout, content_hash) for manifest update
 
 Individual JPEG preview generation (jpeg_preview command):
   1. Stage one photo to a temp file
@@ -23,7 +23,6 @@ import logging
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
 from ouestcharlie_toolkit.backend import Backend
@@ -49,16 +48,6 @@ PREVIEW_JPEG_QUALITY: int = 85
 
 # Metadata subdirectory inside .ouestcharlie/ for per-photo JPEG previews.
 PREVIEW_JPEG_SUBDIR: str = "previews"
-
-
-@dataclass
-class ThumbnailResult:
-    """Result of thumbnail generation for one partition."""
-
-    thumbnails_hash: str
-    previews_hash: str
-    thumbnail_grid: ThumbnailGridLayout
-    preview_grid: ThumbnailGridLayout
 
 
 def _avif_path(partition: str, tier: str) -> str:
@@ -202,9 +191,9 @@ async def generate_partition_thumbnails(
     backend: Backend,
     partition: str,
     photo_entries: list[PhotoEntry],
-    tiers: list[str] | None = None,
-) -> ThumbnailResult:
-    """Generate thumbnail and/or preview AVIF containers for a partition.
+    tier: str = "thumbnail",
+) -> tuple[ThumbnailGridLayout, str]:
+    """Generate an AVIF thumbnail container for one tier of a partition.
 
     ``photo_entries`` must have ``.content_hash``, ``.filename``, and
     ``.searchable`` attributes (i.e. ``PhotoEntry`` instances).
@@ -214,49 +203,28 @@ async def generate_partition_thumbnails(
     changes, not when it is renamed or when unrelated photos are added.
 
     Args:
-        tiers: Which tiers to generate. Defaults to both ``["thumbnail", "preview"]``.
-               Pass ``["thumbnail"]`` to skip the preview AVIF container
-               (previews are generated lazily as individual JPEGs instead).
+        tier: Which tier to generate — ``"thumbnail"`` (256 px, crop) or
+              ``"preview"`` (1440 px, pad). Defaults to ``"thumbnail"``.
+
+    Returns:
+        ``(ThumbnailGridLayout, content_hash)`` where ``content_hash`` is the
+        22-char BLAKE3 hash of the written AVIF file.
     """
-    if tiers is None:
-        tiers = ["thumbnail", "preview"]
-
     binary = _find_image_proc_binary()
-
-    # Sort by content_hash for stable tile indices.
     ordered = sorted(photo_entries, key=lambda e: e.content_hash)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Stage photos once; both tiers reuse the same files.
         staged_photos = await _stage_photos(backend, partition, ordered, tmpdir)
-
-        # Encode requested tiers in parallel.
-        tier_results: list[tuple[ThumbnailGridLayout, str]] = await asyncio.gather(
-            *[
-                _call_image_proc(
-                    backend=backend,
-                    staged_photos=staged_photos,
-                    tile_size=TILE_SIZES[tier],
-                    fit=TILE_FIT[tier],
-                    quality=AVIF_QUALITY[tier],
-                    output_path=_avif_path(partition, tier),
-                    tmpdir=tmpdir,
-                    binary=binary,
-                )
-                for tier in tiers
-            ]
+        return await _call_image_proc(
+            backend=backend,
+            staged_photos=staged_photos,
+            tile_size=TILE_SIZES[tier],
+            fit=TILE_FIT[tier],
+            quality=AVIF_QUALITY[tier],
+            output_path=_avif_path(partition, tier),
+            tmpdir=tmpdir,
+            binary=binary,
         )
-        results = dict(zip(tiers, tier_results))
-
-    thumbnail_grid, thumbnails_hash = results.get("thumbnail", (None, None))
-    preview_grid, previews_hash = results.get("preview", (None, None))
-
-    return ThumbnailResult(
-        thumbnails_hash=thumbnails_hash or "",
-        previews_hash=previews_hash or "",
-        thumbnail_grid=thumbnail_grid,
-        preview_grid=preview_grid,
-    )
 
 
 async def generate_preview_jpeg(
