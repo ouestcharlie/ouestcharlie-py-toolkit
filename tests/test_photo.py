@@ -10,6 +10,7 @@ from ouestcharlie_toolkit import Photo
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.photo import (
     _decode_undefined_ascii,
+    _map_exif_extra,
     _parse_exif_datetime,
     _parse_exif_gps,
 )
@@ -224,6 +225,32 @@ def test_decode_undefined_ascii_invalid_logs_debug(caplog):
         result = _decode_undefined_ascii("xx yy zz")  # spaces → triggers decode path, then fails
     assert result == "xx yy zz"  # original value returned on failure
     assert any("Could not decode UNDEFINED ASCII" in msg for msg in caplog.messages)
+
+
+def test_map_exif_extra_hex_local_name_is_prefixed():
+    """Unknown EXIF tags with hex IDs (e.g. 0xea1d) are prefixed with 'proprietary_'.
+
+    pyexiv2 uses hex tag IDs for tags it cannot map to a named field.  These
+    are not valid XML NCNames (cannot start with a digit), so _map_exif_extra
+    must rename them to avoid producing unserializable XMP attributes.
+    """
+    exif = {
+        "Exif.Photo.0xea1d": "0",          # unknown exif tag — hex id
+        "Exif.Image.0xc6d2": "1 2 3",      # unknown tiff tag — hex id
+        "Exif.Photo.Make": "Apple",         # normal key — unchanged
+    }
+    extra = _map_exif_extra(exif)
+
+    exif_ns = "http://ns.adobe.com/exif/1.0/"
+    tiff_ns = "http://ns.adobe.com/tiff/1.0/"
+
+    assert f"{{{exif_ns}}}proprietary_0xea1d" in extra
+    assert f"{{{tiff_ns}}}proprietary_0xc6d2" in extra
+    # Original hex keys must not appear (would produce invalid XML)
+    assert f"{{{exif_ns}}}0xea1d" not in extra
+    assert f"{{{tiff_ns}}}0xc6d2" not in extra
+    # Normal keys are unaffected
+    assert f"{{{exif_ns}}}Make" in extra
 
 
 def test_parse_exif_gps_invalid_logs_debug(caplog):

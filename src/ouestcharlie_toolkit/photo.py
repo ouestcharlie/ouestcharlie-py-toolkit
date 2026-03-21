@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -69,6 +70,10 @@ _EXIF_TO_XMP_NS: dict[str, str] = {
     "Exif.Image.": "http://ns.adobe.com/tiff/1.0/",
     "Exif.Photo.": "http://ns.adobe.com/exif/1.0/",
 }
+
+# pyexiv2 represents unknown tags as hex IDs (e.g. "0xea1d").  These are not
+# valid XML NCNames (cannot start with a digit), so we prefix them.
+_HEX_LOCAL_RE = re.compile(r"^0x[0-9a-fA-F]+$")
 
 # UNDEFINED-type EXIF fields that store ASCII strings as space-separated decimal bytes
 # (e.g. "48 50 50 48" → "0220").  pyexiv2 does not decode these automatically.
@@ -138,6 +143,8 @@ def _map_exif_extra(exif: dict[str, str]) -> dict[str, str]:
         for prefix, ns_uri in _EXIF_TO_XMP_NS.items():
             if key.startswith(prefix):
                 local = key[len(prefix):]
+                if _HEX_LOCAL_RE.match(local):
+                    local = f"proprietary_{local}"
                 extra[f"{{{ns_uri}}}{local}"] = val
                 break
     return extra
