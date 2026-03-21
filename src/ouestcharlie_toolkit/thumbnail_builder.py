@@ -27,7 +27,7 @@ from pathlib import Path
 
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.hashing import content_hash as _hash
-from ouestcharlie_toolkit.schema import METADATA_DIR, ThumbnailGridLayout, PhotoEntry
+from ouestcharlie_toolkit.schema import METADATA_DIR, ThumbnailChunk, ThumbnailGridLayout, PhotoEntry, thumbnail_avif_path
 
 _log = logging.getLogger(__name__)
 
@@ -42,6 +42,9 @@ TILE_SIZES: dict[str, int] = {"thumbnail": 256, "preview": 1440}
 #   "pad"  — letterbox/pillarbox with black (preserves all content)
 TILE_FIT: dict[str, str] = {"thumbnail": "crop", "preview": "pad"}
 
+# Maximum photos per thumbnail AVIF grid chunk (8×8 = 64).
+GRID_MAX_PHOTOS: int = 64
+
 # JPEG preview settings.
 PREVIEW_JPEG_MAX_LONG_EDGE: int = 1440
 PREVIEW_JPEG_QUALITY: int = 85
@@ -49,12 +52,6 @@ PREVIEW_JPEG_QUALITY: int = 85
 # Metadata subdirectory inside .ouestcharlie/ for per-photo JPEG previews.
 PREVIEW_JPEG_SUBDIR: str = "previews"
 
-
-def _avif_path(partition: str, tier: str) -> str:
-    """Relative backend path for an AVIF container (thumbnails.avif or previews.avif)."""
-    prefix = partition.rstrip("/") + "/" if partition else ""
-    filename = "thumbnails.avif" if tier == "thumbnail" else "previews.avif"
-    return f"{prefix}{METADATA_DIR}/{filename}"
 
 
 def _preview_jpeg_path(partition: str, content_hash: str) -> str:
@@ -127,18 +124,17 @@ async def _stage_photos(
 
 
 async def _call_image_proc(
-    backend: Backend,
     staged_photos: list[dict],
     tile_size: int,
     fit: str,
     quality: int,
-    output_path: str,
     tmpdir: str,
     binary: str,
-) -> tuple[ThumbnailGridLayout, str]:
-    """Call image-proc (avif_grid command) with pre-staged photos and write the AVIF to the backend.
+) -> tuple[ThumbnailGridLayout, bytes]:
+    """Call image-proc (avif_grid command) with pre-staged photos.
 
-    Returns (ThumbnailGridLayout, sha256_hash_of_avif).
+    Returns (ThumbnailGridLayout, avif_bytes).  The caller is responsible for
+    hashing the bytes, naming the output file, and writing to the backend.
     """
     tmp_output = os.path.join(tmpdir, f"output_{tile_size}.avif")
     payload = json.dumps({
@@ -164,27 +160,13 @@ async def _call_image_proc(
 
     grid_info = json.loads(stdout.decode())
     avif_bytes = Path(tmp_output).read_bytes()
-
-    content_hash = _hash(avif_bytes)
-
-    # Write AVIF to backend (overwrite if already exists).
-    if await backend.exists(output_path):
-        _, version = await backend.read(output_path)
-        await backend.write_conditional(output_path, avif_bytes, version)
-    else:
-        await backend.write_new(output_path, avif_bytes)
-
     grid = ThumbnailGridLayout(
         cols=grid_info["cols"],
         rows=grid_info["rows"],
         tile_size=grid_info["tileSize"],
         photo_order=grid_info["photoOrder"],
     )
-    _log.debug(
-        "AVIF written: %s (%d bytes, %dx%d grid)",
-        output_path, len(avif_bytes), grid.cols, grid.rows,
-    )
-    return grid, content_hash
+    return grid, avif_bytes
 
 
 async def generate_partition_thumbnails(
@@ -192,39 +174,52 @@ async def generate_partition_thumbnails(
     partition: str,
     photo_entries: list[PhotoEntry],
     tier: str = "thumbnail",
-) -> tuple[ThumbnailGridLayout, str]:
-    """Generate an AVIF thumbnail container for one tier of a partition.
+) -> list[ThumbnailChunk]:
+    """Generate AVIF thumbnail chunks for a partition.
 
-    ``photo_entries`` must have ``.content_hash``, ``.filename``, and
-    ``.searchable`` attributes (i.e. ``PhotoEntry`` instances).
+    Photos are sorted by ``content_hash`` for stable tile indices, then split
+    into chunks of at most ``GRID_MAX_PHOTOS`` (64) entries each, producing a
+    maximum 8×8 grid per AVIF file.  Chunks are encoded in parallel.
 
-    Tile order is deterministic: sorted ascending by ``content_hash``.
-    This ensures that a photo's tile index only changes when its content
-    changes, not when it is renamed or when unrelated photos are added.
+    Each AVIF file is named ``thumbnails-{avif_hash}.avif`` (or
+    ``previews-{avif_hash}.avif`` for the preview tier), where ``avif_hash``
+    is the 22-char BLAKE3 hash of the file's content.
 
     Args:
-        tier: Which tier to generate — ``"thumbnail"`` (256 px, crop) or
-              ``"preview"`` (1440 px, pad). Defaults to ``"thumbnail"``.
+        tier: ``"thumbnail"`` (256 px, crop) or ``"preview"`` (1440 px, pad).
 
     Returns:
-        ``(ThumbnailGridLayout, content_hash)`` where ``content_hash`` is the
-        22-char BLAKE3 hash of the written AVIF file.
+        List of ``ThumbnailChunk`` in chunk order (sorted by first photo hash).
     """
     binary = _find_image_proc_binary()
     ordered = sorted(photo_entries, key=lambda e: e.content_hash)
+    chunks = [ordered[i:i + GRID_MAX_PHOTOS] for i in range(0, len(ordered), GRID_MAX_PHOTOS)]
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        staged_photos = await _stage_photos(backend, partition, ordered, tmpdir)
-        return await _call_image_proc(
-            backend=backend,
-            staged_photos=staged_photos,
-            tile_size=TILE_SIZES[tier],
-            fit=TILE_FIT[tier],
-            quality=AVIF_QUALITY[tier],
-            output_path=_avif_path(partition, tier),
-            tmpdir=tmpdir,
-            binary=binary,
+    async def _generate_chunk(chunk_entries: list) -> ThumbnailChunk:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            staged = await _stage_photos(backend, partition, chunk_entries, tmpdir)
+            grid, avif_bytes = await _call_image_proc(
+                staged_photos=staged,
+                tile_size=TILE_SIZES[tier],
+                fit=TILE_FIT[tier],
+                quality=AVIF_QUALITY[tier],
+                tmpdir=tmpdir,
+                binary=binary,
+            )
+        avif_hash = _hash(avif_bytes)
+        avif_path = thumbnail_avif_path(partition, avif_hash, tier)
+        if await backend.exists(avif_path):
+            _, version = await backend.read(avif_path)
+            await backend.write_conditional(avif_path, avif_bytes, version)
+        else:
+            await backend.write_new(avif_path, avif_bytes)
+        _log.debug(
+            "AVIF chunk written: %s (%d bytes, %dx%d grid, %d photos)",
+            avif_path, len(avif_bytes), grid.cols, grid.rows, len(chunk_entries),
         )
+        return ThumbnailChunk(avif_hash=avif_hash, grid=grid)
+
+    return list(await asyncio.gather(*[_generate_chunk(c) for c in chunks]))
 
 
 async def generate_preview_jpeg(

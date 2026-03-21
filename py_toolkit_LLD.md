@@ -133,18 +133,23 @@ The `image-proc` Rust CLI (in `image-proc/`) handles all pixel-level operations:
 
 ### `avif_grid` command — thumbnail AVIF grid
 
-Called by `generate_partition_thumbnails()` to produce the per-partition thumbnail AVIF container. Only the `"thumbnail"` tier is generated at indexing time (256 px, center-crop); the preview tier is replaced by lazy per-photo JPEG generation.
+Called by `generate_partition_thumbnails()` to produce per-partition thumbnail AVIF chunks. Only the `"thumbnail"` tier is generated at indexing time (256 px, center-crop); the preview tier is replaced by lazy per-photo JPEG generation.
 
-**Pipeline:**
+Photos are sorted by `content_hash`, then split into chunks of at most `GRID_MAX_PHOTOS = 64` entries each, yielding a maximum 8×8 grid per file. Chunks are encoded in parallel via `asyncio.gather`. Each AVIF file is named `thumbnails-{avif_hash}.avif`, where `avif_hash` is the 22-char BLAKE3 of the file's content — the filename is determined after encoding.
+
+**Pipeline (per chunk):**
 
 ```
-Python: sort photos by content_hash → stage bytes to local tmpdir
-  ↓  (one asyncio.create_subprocess_exec call, per tier)
-image-proc avif_grid (Rust):
-  rayon::par_iter — decode → apply orientation → resize → fit to square
-  sequential      — YUV420 conversion → AVIF grid encoding (libavif)
-  ↓
-Python: read AVIF bytes from tmpdir → write to backend
+Python: sort photos by content_hash → split into chunks of ≤64
+  ↓  (asyncio.gather — one coroutine per chunk, each in its own tmpdir)
+  Per chunk:
+    Python: stage chunk's photo bytes to tmpdir
+      ↓  (asyncio.create_subprocess_exec)
+    image-proc avif_grid (Rust):
+      rayon::par_iter — decode → apply orientation → resize → fit to square
+      sequential      — YUV420 conversion → AVIF grid encoding (libavif)
+      ↓
+    Python: hash bytes → name file → write to backend as thumbnails-{hash}.avif
 ```
 
 **Stdin** (detected by presence of `"photos"` array):
@@ -208,17 +213,28 @@ RAW and HEIC are compile-time features; the binary returns a clear error if a fo
 
 ### Grid Layout
 
-- `cols = ceil(sqrt(n))`, `rows = ceil(n / cols)` — square-ish
+- `cols = ceil(sqrt(n))`, `rows = ceil(n / cols)` — square-ish, max 8×8 for 64 photos
 - Last row padded with black tiles when `n` is not a multiple of `cols`
 - AVIF quality: 55 for thumbnails (configurable via `AVIF_QUALITY`)
+- Each chunk produces one `ThumbnailChunk(avif_path, avif_hash, grid)` stored in `LeafManifest.thumbnail_chunks`
+
+### `ThumbnailChunk` schema
+
+```python
+ThumbnailChunk(
+    avif_path="2024/Jul/.ouestcharlie/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif",
+    avif_hash="Kf3QzA2_nBcR8xYvLm1P9w",
+    grid=ThumbnailGridLayout(cols=8, rows=8, tile_size=256, photo_order=[...]),
+)
+```
 
 ### Python Entry Points
 
 `thumbnail_builder.py` exposes:
-- `generate_partition_thumbnails(backend, partition, photo_entries, tiers=["thumbnail", "preview"])` — top-level orchestrator; Whitebeard passes `tiers=["thumbnail"]` to skip preview generation
+- `generate_partition_thumbnails(backend, partition, photo_entries, tier="thumbnail")` — top-level orchestrator; returns `list[ThumbnailChunk]`
 - `generate_preview_jpeg(backend, partition, entry, max_long_edge=1440, jpeg_quality=85)` — generates and caches a single-photo JPEG preview; called by Wally's HTTP server
-- `_call_image_proc(...)` — stages photos, calls the binary, writes AVIF to backend
-- `_avif_path(partition, tier)` — canonical backend path for a thumbnail AVIF file
+- `_call_image_proc(...)` — calls image-proc for one chunk, returns `(ThumbnailGridLayout, avif_bytes)`
+- `_avif_path(partition, tier, chunk_hash)` — backend path for a chunk: `{partition}/.ouestcharlie/thumbnails-{hash}.avif`
 - `_preview_jpeg_path(partition, content_hash)` — canonical backend path for a preview JPEG (`{partition}/.ouestcharlie/previews/{content_hash}.jpg`)
 - `_find_image_proc_binary()` — resolves binary path via `IMAGE_PROC_BINARY` env var, `$PATH`, or dev build (`image-proc/target/release/image-proc`)
 

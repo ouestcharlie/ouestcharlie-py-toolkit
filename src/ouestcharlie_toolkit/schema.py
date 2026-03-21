@@ -242,6 +242,34 @@ class ThumbnailGridLayout:
 
 
 @dataclass
+class ThumbnailChunk:
+    """One AVIF grid file for a subset of photos in a partition.
+
+    A partition's thumbnails are split into chunks of at most GRID_MAX_PHOTOS
+    (64) photos each, producing a max 8×8 grid per file.  Each chunk is
+    identified by its content hash, which is used as part of its filename
+    (``thumbnails-{avif_hash}.avif``).
+
+    The backend path is not stored — reconstruct it with
+    ``thumbnail_avif_path(partition, chunk.avif_hash)``.
+    """
+
+    avif_hash: str             # 22-char BLAKE3 of the AVIF content
+    grid: ThumbnailGridLayout  # cols, rows, tile_size, photo_order
+
+
+def thumbnail_avif_path(partition: str, avif_hash: str, tier: str = "thumbnail") -> str:
+    """Reconstruct the backend-relative path for a thumbnail AVIF chunk.
+
+    Example: thumbnail_avif_path("2024/Jul", "Kf3QzA2_nBcR8xYvLm1P9w")
+             → "2024/Jul/.ouestcharlie/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+    """
+    prefix = partition.rstrip("/") + "/" if partition else ""
+    stem = "thumbnails" if tier == "thumbnail" else "previews"
+    return f"{prefix}{METADATA_DIR}/{stem}-{avif_hash}.avif"
+
+
+@dataclass
 class LeafManifest:
     """Leaf-level manifest containing full per-photo metadata inline."""
 
@@ -249,10 +277,7 @@ class LeafManifest:
     partition: str
     photos: list[PhotoEntry] = field(default_factory=list)
     summary: ManifestSummary | None = None
-    thumbnails_hash: str | None = None
-    previews_hash: str | None = None
-    thumbnail_grid: ThumbnailGridLayout | None = None
-    preview_grid: ThumbnailGridLayout | None = None
+    thumbnail_chunks: list[ThumbnailChunk] = field(default_factory=list)
     _extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -439,6 +464,20 @@ def _grid_layout_from_dict(d: dict[str, Any]) -> ThumbnailGridLayout:
     )
 
 
+def _thumbnail_chunk_to_dict(c: ThumbnailChunk) -> dict[str, Any]:
+    return {
+        "avifHash": c.avif_hash,
+        "grid": _grid_layout_to_dict(c.grid),
+    }
+
+
+def _thumbnail_chunk_from_dict(d: dict[str, Any]) -> ThumbnailChunk:
+    return ThumbnailChunk(
+        avif_hash=d["avifHash"],
+        grid=_grid_layout_from_dict(d["grid"]),
+    )
+
+
 def serialize_leaf(manifest: LeafManifest) -> dict[str, Any]:
     """Serialize a LeafManifest to a JSON-compatible dict."""
     d: dict[str, Any] = {
@@ -448,34 +487,22 @@ def serialize_leaf(manifest: LeafManifest) -> dict[str, Any]:
     }
     if manifest.summary is not None:
         d["summary"] = _summary_to_dict(manifest.summary)
-    if manifest.thumbnails_hash is not None:
-        d["thumbnailsHash"] = manifest.thumbnails_hash
-    if manifest.previews_hash is not None:
-        d["previewsHash"] = manifest.previews_hash
-    if manifest.thumbnail_grid is not None:
-        d["thumbnailGrid"] = _grid_layout_to_dict(manifest.thumbnail_grid)
-    if manifest.preview_grid is not None:
-        d["previewGrid"] = _grid_layout_to_dict(manifest.preview_grid)
+    if manifest.thumbnail_chunks:
+        d["thumbnailChunks"] = [_thumbnail_chunk_to_dict(c) for c in manifest.thumbnail_chunks]
     d.update(manifest._extra)
     return d
 
 
 def deserialize_leaf(d: dict[str, Any]) -> LeafManifest:
     """Deserialize a JSON dict into a LeafManifest, preserving unknown fields."""
-    known_keys = {
-        "schemaVersion", "partition", "photos", "summary",
-        "thumbnailsHash", "previewsHash", "thumbnailGrid", "previewGrid",
-    }
+    known_keys = {"schemaVersion", "partition", "photos", "summary", "thumbnailChunks"}
     extra = {k: v for k, v in d.items() if k not in known_keys}
     return LeafManifest(
         schema_version=d.get("schemaVersion", SCHEMA_VERSION),
         partition=d["partition"],
         photos=[_photo_entry_from_dict(p) for p in d.get("photos", [])],
         summary=_summary_from_dict(d["summary"]) if d.get("summary") else None,
-        thumbnails_hash=d.get("thumbnailsHash"),
-        previews_hash=d.get("previewsHash"),
-        thumbnail_grid=_grid_layout_from_dict(d["thumbnailGrid"]) if d.get("thumbnailGrid") else None,
-        preview_grid=_grid_layout_from_dict(d["previewGrid"]) if d.get("previewGrid") else None,
+        thumbnail_chunks=[_thumbnail_chunk_from_dict(c) for c in d.get("thumbnailChunks", [])],
         _extra=extra,
     )
 
