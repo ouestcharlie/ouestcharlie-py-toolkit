@@ -109,7 +109,7 @@ Since agents write non-overlapping fields (HLD § Consistency Model), most retry
 
 When a new photo is indexed and no XMP sidecar exists:
 1. Extract EXIF from the photo file (using `pyexiv2`)
-2. Compute `SHA-256(file_bytes)` for the content hash
+2. Compute `content_hash(file_bytes)` (BLAKE3 128-bit, base64url, 22 chars) via `ouestcharlie_toolkit.hashing`
 3. Build an `XmpSidecar` with extracted fields, `metadataVersion=1`, `schemaVersion=1`
 4. Write using `write_new()` to avoid overwriting an existing sidecar
 
@@ -151,7 +151,7 @@ Python: read AVIF bytes from tmpdir → write to backend
 ```json
 {
   "photos": [
-    { "path": "/tmp/staged.jpg", "ext": ".jpg", "orientation": 6, "content_hash": "sha256:..." }
+    { "path": "/tmp/staged.jpg", "ext": ".jpg", "orientation": 6, "content_hash": "Kf3QzA2_nBcR8xYvLm1P9w" }
   ],
   "tile_size": 256,
   "fit": "crop",
@@ -165,7 +165,7 @@ Python: read AVIF bytes from tmpdir → write to backend
 
 **Stdout:**
 ```json
-{ "cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["sha256:aaa...", ...] }
+{ "cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["Kf3QzA2_nBcR8xYvLm1P9w", "aB1cD2eF3gH4i5jK6lM7nO", ...] }
 ```
 
 ### `jpeg_preview` command — on-demand preview JPEG
@@ -175,7 +175,7 @@ Called by `generate_preview_jpeg()` to produce a single-photo preview JPEG. Invo
 **Stdin** (detected by presence of `"photo"` object):
 ```json
 {
-  "photo": { "path": "/tmp/staged.cr2", "ext": ".cr2", "orientation": 1, "content_hash": "sha256:..." },
+  "photo": { "path": "/tmp/staged.cr2", "ext": ".cr2", "orientation": 1, "content_hash": "Kf3QzA2_nBcR8xYvLm1P9w" },
   "max_long_edge": 1440,
   "quality": 85,
   "output": "/tmp/preview.jpg"
