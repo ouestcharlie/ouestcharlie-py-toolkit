@@ -6,7 +6,7 @@ Pipeline per partition (avif_grid command):
   3. For both tiers (thumbnail, preview) in parallel: call the image-proc Rust
      CLI, which decodes + resizes + fits + assembles using the staged files
   4. Write each resulting AVIF to the backend
-  5. Return ThumbnailGridLayout + SHA-256 hashes for manifest update
+  5. Return ThumbnailGridLayout + content hashes for manifest update
 
 Individual JPEG preview generation (jpeg_preview command):
   1. Stage one photo to a temp file
@@ -18,7 +18,6 @@ Individual JPEG preview generation (jpeg_preview command):
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -28,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ouestcharlie_toolkit.backend import Backend
+from ouestcharlie_toolkit.hashing import content_hash as _hash
 from ouestcharlie_toolkit.schema import METADATA_DIR, ThumbnailGridLayout, PhotoEntry
 
 _log = logging.getLogger(__name__)
@@ -176,7 +176,7 @@ async def _call_image_proc(
     grid_info = json.loads(stdout.decode())
     avif_bytes = Path(tmp_output).read_bytes()
 
-    content_hash = "sha256:" + hashlib.sha256(avif_bytes).hexdigest()
+    content_hash = _hash(avif_bytes)
 
     # Write AVIF to backend (overwrite if already exists).
     if await backend.exists(output_path):

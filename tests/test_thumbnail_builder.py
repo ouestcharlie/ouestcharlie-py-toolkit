@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
+from ouestcharlie_toolkit.hashing import content_hash as _content_hash
 import json
 import shutil
 from pathlib import Path
@@ -161,7 +161,7 @@ async def test_call_avif_grid_writes_avif_to_backend(
 
 
 @pytest.mark.asyncio
-async def test_call_avif_grid_returns_sha256_hash(
+async def test_call_avif_grid_returns_content_hash(
     backend_with_photo: LocalBackend, tmp_path: Path
 ) -> None:
     staged = [_staged(tmp_path, "sha256:" + "bb" * 32)]
@@ -181,8 +181,7 @@ async def test_call_avif_grid_returns_sha256_hash(
             binary="fake-avif-grid",
         )
 
-    expected = "sha256:" + hashlib.sha256(b"FAKE_AVIF_CONTENT").hexdigest()
-    assert content_hash == expected
+    assert content_hash == _content_hash(b"FAKE_AVIF_CONTENT")
 
 
 @pytest.mark.asyncio
@@ -280,7 +279,7 @@ async def test_call_avif_grid_overwrites_existing_output(
         )
 
     assert out_abs.read_bytes() == b"FAKE_AVIF_CONTENT"
-    assert content_hash == "sha256:" + hashlib.sha256(b"FAKE_AVIF_CONTENT").hexdigest()
+    assert content_hash == _content_hash(b"FAKE_AVIF_CONTENT")
 
 
 @pytest.mark.asyncio
@@ -328,14 +327,14 @@ async def test_generate_partition_thumbnails_returns_result(tmp_path: Path) -> N
         patch("ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary", return_value="fake-bin"),
         patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", new=AsyncMock(return_value=[])),
         patch("ouestcharlie_toolkit.thumbnail_builder._call_image_proc", new=AsyncMock(
-            return_value=(fake_grid, "sha256:" + "cc" * 32)
+            return_value=(fake_grid, "A" * 22)
         )),
     ):
         result = await generate_partition_thumbnails(backend, "", photos)
 
     assert isinstance(result, ThumbnailResult)
-    assert result.thumbnails_hash.startswith("sha256:")
-    assert result.previews_hash.startswith("sha256:")
+    assert len(result.thumbnails_hash) == 22
+    assert len(result.previews_hash) == 22
     assert result.thumbnail_grid is not None
     assert result.preview_grid is not None
 
@@ -362,7 +361,7 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(tmp_path: Path
         patch("ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary", return_value="fake-bin"),
         patch("ouestcharlie_toolkit.thumbnail_builder._stage_photos", side_effect=capture_stage),
         patch("ouestcharlie_toolkit.thumbnail_builder._call_image_proc", new=AsyncMock(
-            return_value=(fake_grid, "sha256:" + "00" * 32)
+            return_value=(fake_grid, "B" * 22)
         )),
     ):
         await generate_partition_thumbnails(backend, "", photos)
@@ -384,7 +383,7 @@ async def test_generate_partition_thumbnails_calls_both_tiers(tmp_path: Path) ->
     async def capture_call(**kw):
         sizes_seen.append(kw["tile_size"])
         grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=kw["tile_size"], photo_order=[])
-        return grid, "sha256:" + "cc" * 32
+        return grid, "C" * 22
 
     with (
         patch("ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary", return_value="fake-bin"),
@@ -409,7 +408,7 @@ async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path)
     async def fake_call(**kw):
         order = [p["content_hash"] for p in kw["staged_photos"]]
         grid = ThumbnailGridLayout(cols=2, rows=2, tile_size=256, photo_order=order)
-        return grid, "sha256:" + "00" * 32
+        return grid, "D" * 22
 
     with (
         patch("ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary", return_value="fake-bin"),

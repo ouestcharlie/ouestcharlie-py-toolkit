@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import tempfile
@@ -10,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .backend import Backend
+from .hashing import content_hash
 from .schema import XmpSidecar
 
 _log = logging.getLogger(__name__)
@@ -191,17 +191,17 @@ class Photo:
         self._content_hash: str | None = None
 
     async def create_identity(self) -> str:
-        """Return the SHA-256 content hash of this photo.
+        """Return the BLAKE3 content hash of this photo.
 
         If ``extract_exif()`` was already called, the cached hash is returned
         without re-reading the file.
 
         Returns:
-            Hash string in the format ``"sha256:<hex>"``.
+            22-character base64url string (BLAKE3 truncated to 128 bits).
         """
         if self._content_hash is None:
             data, _ = await self.backend.read(self.path)
-            self._content_hash = f"sha256:{hashlib.sha256(data).hexdigest()}"
+            self._content_hash = content_hash(data)
         return self._content_hash
 
     async def extract_exif(self) -> XmpSidecar:
@@ -220,7 +220,7 @@ class Photo:
         pyexiv2.set_log_level(4)  # mute C-level logs: they write to stdout, corrupting MCP stdio
 
         data, _ = await self.backend.read(self.path)
-        content_hash = f"sha256:{hashlib.sha256(data).hexdigest()}"
+        photo_hash = content_hash(data)
         suffix = Path(self.path).suffix or ".jpg"
 
         fd, tmp_path = tempfile.mkstemp(suffix=suffix)
@@ -234,7 +234,7 @@ class Photo:
         finally:
             os.unlink(tmp_path)
 
-        self._content_hash = content_hash
+        self._content_hash = photo_hash
 
         date_taken = _parse_exif_datetime(exif_data)
         camera_make = (exif_data.get("Exif.Image.Make") or "").strip() or None
@@ -257,7 +257,7 @@ class Photo:
         height = _int_or_none(height_s)
 
         return XmpSidecar(
-            content_hash=content_hash,
+            content_hash=photo_hash,
             date_taken=date_taken,
             camera_make=camera_make,
             camera_model=camera_model,

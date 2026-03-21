@@ -1,6 +1,5 @@
 """Tests for the Photo domain class."""
 
-import hashlib
 import logging
 import tempfile
 from pathlib import Path
@@ -33,18 +32,20 @@ _MINIMAL_JPEG = (
 
 
 @pytest.mark.asyncio
-async def test_create_identity_returns_sha256_prefix():
+async def test_create_identity_returns_22_char_string():
     with tempfile.TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "photo.jpg").write_bytes(b"data")
         photo = Photo(LocalBackend(root=tmpdir), "photo.jpg")
         identity = await photo.create_identity()
-    assert identity.startswith("sha256:")
+    assert len(identity) == 22
+    # base64url alphabet only
+    assert all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for c in identity)
 
 
 @pytest.mark.asyncio
 async def test_create_identity_correct_hash():
     data = b"Hello, OuEstCharlie!"
-    expected = "sha256:" + hashlib.sha256(data).hexdigest()
+    expected = "1CoKIhOfUIpuFUjm7_XfAA"
     with tempfile.TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "photo.jpg").write_bytes(data)
         identity = await Photo(LocalBackend(root=tmpdir), "photo.jpg").create_identity()
@@ -71,7 +72,7 @@ async def test_create_identity_empty_file():
     with tempfile.TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "empty.jpg").write_bytes(b"")
         identity = await Photo(LocalBackend(root=tmpdir), "empty.jpg").create_identity()
-    assert identity == "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    assert identity == "rxNJufX5oaagQE3qNtzJSQ"
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +90,8 @@ async def test_extract_exif_returns_sidecar():
 
 @pytest.mark.asyncio
 async def test_extract_exif_sets_content_hash():
-    expected = "sha256:" + hashlib.sha256(_MINIMAL_JPEG).hexdigest()
+    from ouestcharlie_toolkit.hashing import content_hash
+    expected = content_hash(_MINIMAL_JPEG)
     with tempfile.TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
         sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
@@ -172,7 +174,7 @@ async def test_extract_exif_matches_ref(image_path, ref_xmp_path):
     ).extract_exif()
 
     assert sidecar.content_hash is not None
-    assert sidecar.content_hash.startswith("sha256:")
+    assert len(sidecar.content_hash) == 22
     assert sidecar.camera_make == ref_sidecar.camera_make
     assert sidecar.camera_model == ref_sidecar.camera_model
     assert sidecar.orientation == ref_sidecar.orientation
