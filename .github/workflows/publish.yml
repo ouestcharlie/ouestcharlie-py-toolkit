@@ -5,6 +5,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-wheel:
     name: Build wheel on ${{ matrix.os }}
@@ -30,11 +33,12 @@ jobs:
 
       - name: Install system deps (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          choco install pkgconfiglite
-          vcpkg install libavif:x64-windows-static
+          choco install pkgconfiglite -y --no-progress
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libavif:x64-windows-static
           $pkgcfg = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static\lib\pkgconfig"
-          echo "PKG_CONFIG_PATH=$pkgcfg" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$pkgcfg" | Add-Content $env:GITHUB_ENV
 
       - uses: dtolnay/rust-toolchain@stable
 
