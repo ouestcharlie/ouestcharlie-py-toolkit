@@ -11,7 +11,7 @@ path = "src/main.rs"
 [build-dependencies]
 # macOS/Linux: locate system libavif via pkg-config.
 pkg-config = "0.3"
-# Windows: locate libavif via vcpkg (avoids pkg-config drive-letter path issues).
+# Windows: locate libavif via vcpkg (x64-windows-static-md triplet, avoids pkg-config path issues).
 [target.'cfg(target_os = "windows")'.build-dependencies]
 vcpkg = "0.2"
 
