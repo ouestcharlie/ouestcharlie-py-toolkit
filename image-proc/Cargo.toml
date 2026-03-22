@@ -9,8 +9,11 @@ name = "image-proc"
 path = "src/main.rs"
 
 [build-dependencies]
-# Used in build.rs to locate and link the system libavif (brew install libavif).
+# macOS/Linux: locate system libavif via pkg-config.
 pkg-config = "0.3"
+# Windows: locate libavif via vcpkg (avoids pkg-config drive-letter path issues).
+[target.'cfg(target_os = "windows")'.build-dependencies]
+vcpkg = "0.2"
 
 [features]
 # RAW format support (CR2, NEF, ARW, DNG, RAF, ORF, RW2, PEF) via rawler (pure Rust).

@@ -35,10 +35,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install pkgconfiglite -y --no-progress
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libavif:x64-windows-static
-          $pkgcfg = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static\lib\pkgconfig"
-          "PKG_CONFIG_PATH=$pkgcfg" | Add-Content $env:GITHUB_ENV
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Add-Content $env:GITHUB_ENV
 
       - uses: dtolnay/rust-toolchain@stable
 
