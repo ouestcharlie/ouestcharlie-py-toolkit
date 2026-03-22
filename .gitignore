@@ -129,3 +129,4 @@ dmypy.json
 
 # macOS
 .DS_Store
+src/ouestcharlie_toolkit/bin/*

@@ -11,6 +11,9 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict) -> None:  # type: ignore[override]
+        if self.target_name == "sdist":
+            return  # sdist is source-only — no binary needed
+
         image_proc_dir = Path(__file__).parent / "image-proc"
 
         # Determine features to enable

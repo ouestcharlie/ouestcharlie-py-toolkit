@@ -13,7 +13,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-13          # macOS x86_64
           - os: macos-latest      # macOS arm64
           - os: ubuntu-22.04      # Linux x86_64
           - os: windows-latest    # Windows x86_64
@@ -76,7 +75,7 @@ jobs:
     name: Publish to PyPI
     needs: [build-wheel, build-sdist]
     runs-on: ubuntu-22.04
-    environment: pypi
+    environment: test-pypi
     permissions:
       id-token: write  # trusted publishing
     steps:
@@ -85,3 +84,5 @@ jobs:
           path: dist
           merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
