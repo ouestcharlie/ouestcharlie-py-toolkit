@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -68,14 +69,21 @@ def _find_image_proc_binary() -> str:
 
     Resolution order:
     1. IMAGE_PROC_BINARY environment variable
-    2. AVIF_GRID_BINARY environment variable (legacy alias)
+    2. Bundled binary inside the installed wheel (bin/image-proc[.exe])
     3. image-proc on $PATH (shutil.which)
     4. ../../image-proc/target/release/image-proc relative to this file (dev build)
        i.e. ouestcharlie-py-toolkit/image-proc/target/release/image-proc
     """
-    env_bin = os.environ.get("IMAGE_PROC_BINARY") or os.environ.get("AVIF_GRID_BINARY")
+
+    env_bin = os.environ.get("IMAGE_PROC_BINARY")
     if env_bin:
         return env_bin
+
+    # Bundled binary shipped inside the wheel alongside this package.
+    binary_name = "image-proc.exe" if sys.platform == "win32" else "image-proc"
+    bundled = Path(__file__).parent / "bin" / binary_name
+    if bundled.exists():
+        return str(bundled)
 
     on_path = shutil.which("image-proc")
     if on_path:

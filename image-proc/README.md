@@ -1,6 +1,6 @@
-# avif-grid
+# image-proc
 
-Rust CLI that decodes photos, resizes and fits them to square tiles, and assembles them into an AVIF grid container.
+Rust CLI that decodes photos, resizes and fits them to square tiles, and assembles them into an AVIF grid container. Also generates JPEG previews for individual photos.
 
 ## Build
 
@@ -15,7 +15,9 @@ cargo build --release
 
 No nasm, cmake, or meson required. The build links against the system libavif found via `pkg-config`; no codec is built from source.
 
-The binary is at `target/release/avif-grid`.
+The binary is at `target/release/image-proc`.
+
+> **Note:** When installing `ouestcharlie-toolkit` from PyPI, the binary is compiled automatically by the hatch build hook and bundled inside the wheel — no manual build step needed.
 
 ### Optional features
 
@@ -38,7 +40,7 @@ echo '{
   "fit": "crop",
   "quality": 55,
   "output": "/tmp/thumbnails.avif"
-}' | avif-grid
+}' | image-proc
 # stdout: {"cols":2,"rows":1,"tileSize":256,"photoOrder":["sha256:aaa...","sha256:bbb..."]}
 ```
 

@@ -99,19 +99,17 @@ def test_avif_path_root_partition() -> None:
 
 
 def test_find_binary_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AVIF_GRID_BINARY", "/custom/avif-grid")
-    assert _find_image_proc_binary() == "/custom/avif-grid"
+    monkeypatch.setenv("IMAGE_PROC_BINARY", "/custom/image-proc")
+    assert _find_image_proc_binary() == "/custom/image-proc"
 
 
 def test_find_binary_uses_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("AVIF_GRID_BINARY", raising=False)
     monkeypatch.delenv("IMAGE_PROC_BINARY", raising=False)
     with patch("shutil.which", return_value="/usr/local/bin/image-proc"):
         assert _find_image_proc_binary() == "/usr/local/bin/image-proc"
 
 
 def test_find_binary_raises_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("AVIF_GRID_BINARY", raising=False)
     monkeypatch.delenv("IMAGE_PROC_BINARY", raising=False)
     with patch("shutil.which", return_value=None):
         with patch("pathlib.Path.exists", return_value=False):

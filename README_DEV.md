@@ -4,59 +4,86 @@
 
 ### System dependencies (macOS)
 
-`pyexiv2` links against `libexiv2` which requires `inih` on macOS:
+`pyexiv2` links against `libexiv2` which requires `inih` at runtime on macOS. `image-proc` requires `libavif` to build:
 
 ```bash
-brew install inih
+brew install inih libavif
 ```
 
-This is only needed for `extract_exif` (EXIF extraction from image files). `parse_xmp` and `serialize_xmp` have no native dependencies. On Linux, `pyexiv2` wheels bundle their dependencies.
+On Linux, `pyexiv2` wheels bundle their dependencies. Install `libavif-dev` for building image-proc:
+
+```bash
+apt install libavif-dev
+```
 
 ### Create virtual environment and install dependencies
 
 ```bash
-# Create virtual environment with Python 3.13 (required for package compatibility)
 uv venv --python 3.13
-
-# Install package in editable mode with dev dependencies
 uv pip install -e ".[dev]"
 ```
 
-### Activate virtual environment
+### Build the image-proc binary
+
+The binary is **not** compiled automatically in editable installs. Build it once:
 
 ```bash
-# macOS/Linux
-source .venv/bin/activate
+cd image-proc
+cargo build --release
+# binary: image-proc/target/release/image-proc
+```
 
-# When active, you can use python/pytest directly:
-python tests/test_structure.py
-pytest tests/
+With optional features:
+
+```bash
+cargo build --release --features raw    # RAW format support (pure Rust, no extra deps)
+cargo build --release --features heic   # HEIC support (requires brew install libheif)
 ```
 
 ## Running Tests
 
+**Always use `.venv/bin/python -m pytest`** — do not use `.venv/bin/pytest` or a system `python`:
+
 ```bash
 # Run all tests
-.venv/bin/pytest tests/
+.venv/bin/python -m pytest tests/ -v
 
-# Run with verbose output
-.venv/bin/pytest -v tests/
+# Run a specific file
+.venv/bin/python -m pytest tests/test_photo.py -v --tb=short
+```
 
-# Run specific test file
-.venv/bin/pytest tests/test_schema.py
+> Why: `pytest` on PATH or `uv run pytest` may resolve to the wrong Python or fail on native deps (e.g. rawpy has no macOS x86_64 wheel).
 
-# Run with coverage (if coverage is installed)
-.venv/bin/pytest --cov=ouestcharlie_toolkit tests/
+## Building a Wheel
+
+The `hatch_build.py` hook compiles `image-proc` and bundles the binary inside the wheel:
+
+```bash
+pip install hatch
+hatch build
+# produces dist/ouestcharlie_toolkit-*.whl (platform-specific)
+```
+
+Set env vars to enable optional features:
+
+```bash
+IMAGE_PROC_FEATURE_RAW=1 hatch build
+IMAGE_PROC_FEATURE_HEIC=1 hatch build
 ```
 
 ## Project Structure
 
 ```
 ouestcharlie-py-toolkit/
+├── hatch_build.py            # Build hook: compiles image-proc, bundles binary in wheel
+├── image-proc/               # Rust CLI source
+│   ├── Cargo.toml
+│   └── src/main.rs
 ├── src/
-│   └── ouestcharlie/         # Main package
-├── tests/                    # Test directory
-├── .venv/                    # Virtual environment (gitignored)
-├── pyproject.toml            # Package configuration
-└── README.md                 # Usage documentation
+│   └── ouestcharlie_toolkit/ # Python package
+│       └── bin/              # Bundled binary (populated at build time, gitignored)
+├── tests/
+├── pyproject.toml
+├── README.md                 # Usage and PyPI install docs
+└── README_DEV.md             # This file
 ```

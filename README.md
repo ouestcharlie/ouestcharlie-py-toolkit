@@ -15,53 +15,79 @@ This toolkit provides three core capabilities:
 ```
 ouestcharlie-toolkit/
 ├── pyproject.toml
-├── avif-grid/                    # Rust CLI: decode + resize + AVIF assembly
+├── hatch_build.py                # Build hook: compiles image-proc and bundles it in the wheel
+├── image-proc/                   # Rust CLI: decode + resize + AVIF/JPEG assembly
 │   ├── Cargo.toml
 │   └── src/main.rs
 └── src/
     └── ouestcharlie_toolkit/
+        ├── bin/                  # Bundled image-proc binary (populated at build time)
         ├── schema.py             # Data models, exceptions, constants
         ├── backend.py            # Backend protocol
         ├── backends/
         │   └── local.py          # Local filesystem backend
         ├── manifest.py           # ManifestStore for manifest operations
         ├── xmp.py                # XmpStore for XMP sidecar operations
-        ├── thumbnail_builder.py  # Thumbnail generation (delegates to avif-grid)
+        ├── thumbnail_builder.py  # Thumbnail generation (delegates to image-proc)
         ├── progress.py           # ProgressReporter for MCP progress
         └── server.py             # AgentBase for MCP server lifecycle
 ```
 
 ## Installation
 
-```bash
-# Install in development mode
-uv pip install -e .
+### From PyPI (recommended)
 
-# Install with dev dependencies
+```bash
+pip install ouestcharlie-toolkit
+```
+
+The `image-proc` binary is compiled and bundled inside the wheel at publish time — no Rust toolchain required at install time.
+
+System prerequisites:
+- **macOS**: `brew install inih` (required by pyexiv2 at runtime)
+- **Linux/Windows**: no extra steps — pyexiv2 and image-proc wheels are self-contained
+
+### From source (development)
+
+Requires Rust and system libavif:
+
+```bash
+brew install libavif inih   # macOS
+# apt install libavif-dev   # Linux
+
+uv venv --python 3.13
 uv pip install -e ".[dev]"
 ```
 
-### avif-grid binary (required for thumbnail generation)
-
-Thumbnail generation delegates to a Rust CLI. Build it once before running agents:
+The `image-proc` binary is **not** compiled automatically in editable installs. Build it manually once:
 
 ```bash
-brew install libavif      # macOS (provides pre-compiled libavif + AOM encoder)
-# apt install libavif-dev # Linux
-
-cd avif-grid
-cargo build --release
-# binary: avif-grid/target/release/avif-grid
+cd image-proc && cargo build --release
+# binary: image-proc/target/release/image-proc
 ```
 
-The toolkit resolves the binary automatically (env var `AVIF_GRID_BINARY`, `$PATH`, or the dev build path above).
+The toolkit resolves the binary in this order:
+1. `IMAGE_PROC_BINARY` environment variable
+2. `bin/image-proc[.exe]` bundled inside the installed wheel
+3. `image-proc` on `$PATH`
+4. `image-proc/target/release/image-proc` relative to this repo (dev build)
+
+### Optional features (RAW and HEIC)
+
+To build with RAW or HEIC support, set env vars before `hatch build` or `cargo build`:
+
+```bash
+IMAGE_PROC_FEATURE_RAW=1 hatch build   # enables rawler (pure Rust RAW decoder)
+IMAGE_PROC_FEATURE_HEIC=1 hatch build  # enables libheif-rs (requires brew install libheif)
+```
 
 ## Dependencies
 
 - `mcp>=1.0` — Official MCP Python SDK
 - `pyexiv2>=2.8` — EXIF extraction from image files (wraps Exiv2); requires `brew install inih` on macOS
+- `blake3>=1.0.8` — Fast content hashing
 
-**avif-grid** (Rust binary, built separately) handles all image decoding and AVIF assembly. `Pillow` and `rawpy` are not required.
+**image-proc** (Rust binary, bundled in the wheel) handles all image decoding, resizing, AVIF assembly, and JPEG preview generation.
 
 XMP parsing and serialization use stdlib only and have no native dependencies.
 
@@ -157,9 +183,6 @@ export WOOF_BACKEND_CONFIG='{"type": "filesystem", "root": "/Users/alice/Photos"
 
 - Cloud backend implementations (S3, GCS, ADLS Gen2, OneDrive, Kdrive)
 - Bloom filter implementation for partition summaries
-- Handling of more XMP field types (text, float...)
-- RAW decode implementation in avif-grid (rawler API, once stable)
-- HEIC decode implementation in avif-grid (libheif-rs)
 
 ## Architecture
 
