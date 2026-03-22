@@ -4,16 +4,17 @@ Rust CLI that decodes photos, resizes and fits them to square tiles, and assembl
 
 ## Build
 
-Requires Rust (install via [rustup](https://rustup.rs)) and the system libavif:
+Requires Rust (install via [rustup](https://rustup.rs)) and **nasm** (for rav1e's assembly-optimised AVIF encoder):
 
 ```bash
-brew install libavif    # macOS — provides pre-compiled libavif + libaom encoder
-# apt install libavif-dev  # Linux
+brew install nasm    # macOS
+# sudo apt install nasm  # Linux
+# choco install nasm     # Windows
 
 cargo build --release
 ```
 
-No nasm, cmake, or meson required. The build links against the system libavif found via `pkg-config`; no codec is built from source.
+No system libavif, cmake, or meson required. AVIF encoding is done entirely in Rust via [ravif](https://crates.io/crates/ravif) + [rav1e](https://crates.io/crates/rav1e). nasm is only needed at compile time; no runtime system libraries are required.
 
 The binary is at `target/release/image-proc`.
 

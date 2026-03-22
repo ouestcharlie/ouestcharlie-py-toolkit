@@ -25,18 +25,16 @@ jobs:
 
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'
-        run: brew install libavif inih
+        run: brew install nasm inih
 
-      - name: Install system deps (Linux)
+      - name: Install nasm (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libavif-dev
+        run: sudo apt-get update && sudo apt-get install -y nasm
 
-      - name: Install system deps (Windows)
+      - name: Install nasm (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libavif:x64-windows-static-md
-          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Add-Content $env:GITHUB_ENV
+        run: choco install nasm -y --no-progress
 
       - uses: dtolnay/rust-toolchain@stable
 

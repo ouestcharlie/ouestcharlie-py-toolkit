@@ -2,19 +2,23 @@
 
 ## Setup
 
-### System dependencies (macOS)
+### System dependencies
 
-`pyexiv2` links against `libexiv2` which requires `inih` at runtime on macOS. `image-proc` requires `libavif` to build:
-
-```bash
-brew install inih libavif
-```
-
-On Linux, `pyexiv2` wheels bundle their dependencies. Install `libavif-dev` for building image-proc:
+`pyexiv2` links against `libexiv2` which requires `inih` at runtime on macOS:
 
 ```bash
-apt install libavif-dev
+brew install inih    # macOS only
 ```
+
+`image-proc` (Rust) uses [ravif](https://crates.io/crates/ravif) for AVIF encoding — pure Rust, no system libavif needed. However, rav1e's assembly optimisations require **nasm** at compile time:
+
+```bash
+brew install nasm          # macOS
+sudo apt install nasm      # Linux
+choco install nasm         # Windows
+```
+
+No other system libraries are required for building image-proc.
 
 ### Create virtual environment and install dependencies
 

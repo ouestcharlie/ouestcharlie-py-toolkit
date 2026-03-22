@@ -9,11 +9,7 @@ name = "image-proc"
 path = "src/main.rs"
 
 [build-dependencies]
-# macOS/Linux: locate system libavif via pkg-config.
-pkg-config = "0.3"
-# Windows: locate libavif via vcpkg (x64-windows-static-md triplet, avoids pkg-config path issues).
-[target.'cfg(target_os = "windows")'.build-dependencies]
-vcpkg = "0.2"
+# No system dependencies — ravif encodes AVIF in pure Rust.
 
 [features]
 # RAW format support (CR2, NEF, ARW, DNG, RAF, ORF, RW2, PEF) via rawler (pure Rust).
@@ -24,6 +20,11 @@ heic = ["dep:libheif-rs"]
 [dependencies]
 # Image decoding: JPEG, PNG, WebP, TIFF (pure Rust, no system deps).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff"] }
+# Pure-Rust AVIF encoder (replaces libavif — no system deps, cross-platform).
+# Uses rav1e with nasm assembly for optimised encoding (install nasm before building).
+ravif = "0.11"
+# Pixel type used by ravif's Img<&[RGB8]> API.
+rgb = "0.8"
 # Parallel photo decoding.
 rayon = "1"
 # JSON I/O (stdin/stdout protocol).

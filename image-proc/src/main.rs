@@ -54,86 +54,12 @@
 //! passing them here, to ensure stable tile indices.
 
 use std::io::{self, Read};
-use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
 
 use image::{DynamicImage, GenericImageView, RgbImage};
 use rayon::prelude::*;
+use rgb::FromSlice;
 use serde::{Deserialize, Serialize};
-
-// ---------------------------------------------------------------------------
-// Minimal libavif FFI — mirrors avif.h from libavif ≥ 1.0.0
-// ---------------------------------------------------------------------------
-
-mod ffi {
-    use std::os::raw::c_int;
-
-    #[repr(C)]
-    pub struct AvifImage { _opaque: [u8; 0] }
-
-    #[repr(C)]
-    pub struct AvifEncoder {
-        pub codec_choice: c_int,
-        pub max_threads: c_int,
-        pub speed: c_int,
-        _keyframe_interval: c_int,
-        _timescale: u64,
-        _repetition_count: c_int,
-        _extra_layer_count: u32,
-        pub quality: c_int,
-        pub quality_alpha: c_int,
-    }
-
-    #[repr(C)]
-    pub struct AvifRgbImage {
-        pub width: u32,
-        pub height: u32,
-        pub depth: u32,
-        pub format: u32,
-        pub chroma_upsampling: u32,
-        pub chroma_downsampling: u32,
-        pub avoid_libyuv: c_int,
-        pub ignore_alpha: c_int,
-        pub alpha_premultiplied: c_int,
-        pub is_float: c_int,
-        pub max_threads: c_int,
-        pub pixels: *mut u8,
-        pub row_bytes: u32,
-    }
-
-    #[repr(C)]
-    pub struct AvifRwData { pub data: *mut u8, pub size: usize }
-
-    impl Default for AvifRwData {
-        fn default() -> Self { AvifRwData { data: std::ptr::null_mut(), size: 0 } }
-    }
-
-    pub const AVIF_RESULT_OK: c_int = 0;
-    pub const AVIF_PIXEL_FORMAT_YUV420: u32 = 3;
-    pub const AVIF_RGB_FORMAT_RGB: u32 = 0;
-    pub const AVIF_CHROMA_UPSAMPLING_AUTOMATIC: u32 = 0;
-    pub const AVIF_CHROMA_DOWNSAMPLING_AUTOMATIC: u32 = 0;
-    pub const AVIF_ADD_IMAGE_FLAG_SINGLE: u32 = 2;
-
-    extern "C" {
-        pub fn avifImageCreate(width: u32, height: u32, depth: u32, yuv_format: u32) -> *mut AvifImage;
-        pub fn avifImageDestroy(image: *mut AvifImage);
-        pub fn avifImageRGBToYUV(image: *mut AvifImage, rgb: *const AvifRgbImage) -> c_int;
-        pub fn avifEncoderCreate() -> *mut AvifEncoder;
-        pub fn avifEncoderDestroy(encoder: *mut AvifEncoder);
-        pub fn avifEncoderAddImageGrid(
-            encoder: *mut AvifEncoder,
-            grid_cols: u32,
-            grid_rows: u32,
-            cell_images: *const *const AvifImage,
-            add_image_flags: u32,
-        ) -> c_int;
-        pub fn avifEncoderFinish(encoder: *mut AvifEncoder, output: *mut AvifRwData) -> c_int;
-        pub fn avifRWDataFree(raw: *mut AvifRwData);
-    }
-}
-
-use ffi::*;
 
 // ---------------------------------------------------------------------------
 // I/O types
@@ -230,62 +156,41 @@ fn run_avif_grid(input: AvifGridInput) -> Result<AvifGridOutput, Box<dyn std::er
 
     let tile_size = input.tile_size;
     let fit = input.fit.clone();
+    let (cols, rows) = grid_dims(n);
+    let total_cells = (cols * rows) as usize;
 
     // Phase 1: Decode + resize + fit in parallel.
-    let rgb_images: Vec<RgbImage> = input.photos
+    let mut tiles: Vec<RgbImage> = input.photos
         .par_iter()
         .map(|photo| decode_and_prepare(&photo.path, &photo.ext, photo.orientation, tile_size, &fit))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e: String| -> Box<dyn std::error::Error> { e.into() })?;
 
-    let (cols, rows) = grid_dims(n);
-    let total_cells = (cols * rows) as usize;
-
-    // Phase 2: Convert to YUV420 (libavif is not thread-safe).
-    struct CellGuard(Vec<*mut AvifImage>);
-    impl Drop for CellGuard {
-        fn drop(&mut self) { for p in &self.0 { unsafe { avifImageDestroy(*p) }; } }
-    }
-    let mut guard = CellGuard(Vec::with_capacity(total_cells));
-
-    for i in 0..total_cells {
-        let avif_img = if i < n {
-            rgb_to_yuv420(&rgb_images[i])?
-        } else {
-            rgb_to_yuv420(&RgbImage::new(tile_size, tile_size))?
-        };
-        guard.0.push(avif_img);
+    // Pad last row with blank black tiles.
+    while tiles.len() < total_cells {
+        tiles.push(RgbImage::new(tile_size, tile_size));
     }
 
-    let const_ptrs: Vec<*const AvifImage> = guard.0.iter().map(|p| *p as *const _).collect();
-
-    let encoder = unsafe { avifEncoderCreate() };
-    if encoder.is_null() { return Err("avifEncoderCreate returned null".into()); }
-    struct EncoderGuard(*mut AvifEncoder);
-    impl Drop for EncoderGuard { fn drop(&mut self) { unsafe { avifEncoderDestroy(self.0) }; } }
-    let _enc_guard = EncoderGuard(encoder);
-
-    unsafe {
-        (*encoder).quality = input.quality as c_int;
-        (*encoder).quality_alpha = 100;
-        (*encoder).speed = 6;
-        (*encoder).max_threads = std::thread::available_parallelism()
-            .map(|n| n.get() as c_int).unwrap_or(1);
+    // Phase 2: Composite all tiles into a single canvas.
+    let total_w = cols * tile_size;
+    let total_h = rows * tile_size;
+    let mut canvas = RgbImage::new(total_w, total_h);
+    for (i, tile) in tiles.iter().enumerate() {
+        let col = (i as u32) % cols;
+        let row = (i as u32) / cols;
+        image::imageops::overlay(&mut canvas, tile, (col * tile_size) as i64, (row * tile_size) as i64);
     }
 
-    let rc = unsafe {
-        avifEncoderAddImageGrid(encoder, cols, rows, const_ptrs.as_ptr(), AVIF_ADD_IMAGE_FLAG_SINGLE)
-    };
-    if rc != AVIF_RESULT_OK { return Err(format!("avifEncoderAddImageGrid failed (code {rc})").into()); }
+    // Phase 3: Encode as AVIF using ravif (pure Rust, no system deps).
+    let pixels: &[rgb::RGB8] = canvas.as_raw().as_rgb();
+    let img = ravif::Img::new(pixels, total_w as usize, total_h as usize);
+    let encoded = ravif::Encoder::new()
+        .with_quality(input.quality as f32)
+        .with_speed(6)
+        .encode_rgb(img)
+        .map_err(|e| format!("AVIF encoding failed: {e}"))?;
 
-    let mut output_data = AvifRwData::default();
-    let rc = unsafe { avifEncoderFinish(encoder, &mut output_data) };
-    if rc != AVIF_RESULT_OK { return Err(format!("avifEncoderFinish failed (code {rc})").into()); }
-
-    let avif_bytes = unsafe { std::slice::from_raw_parts(output_data.data, output_data.size) }.to_vec();
-    unsafe { avifRWDataFree(&mut output_data) };
-
-    std::fs::write(&input.output, &avif_bytes)?;
+    std::fs::write(&input.output, &encoded.avif_file)?;
 
     let photo_order: Vec<String> = input.photos.iter().map(|p| p.content_hash.clone()).collect();
     Ok(AvifGridOutput { cols, rows, tile_size, photo_order })
@@ -424,35 +329,6 @@ fn grid_dims(n: usize) -> (u32, u32) {
 }
 
 // ---------------------------------------------------------------------------
-// libavif helper
-// ---------------------------------------------------------------------------
-
-fn rgb_to_yuv420(rgb: &RgbImage) -> Result<*mut AvifImage, Box<dyn std::error::Error>> {
-    let w = rgb.width();
-    let h = rgb.height();
-    let avif_img = unsafe { avifImageCreate(w, h, 8, AVIF_PIXEL_FORMAT_YUV420) };
-    if avif_img.is_null() { return Err("avifImageCreate returned null".into()); }
-
-    let rgb_desc = AvifRgbImage {
-        width: w, height: h, depth: 8,
-        format: AVIF_RGB_FORMAT_RGB,
-        chroma_upsampling: AVIF_CHROMA_UPSAMPLING_AUTOMATIC,
-        chroma_downsampling: AVIF_CHROMA_DOWNSAMPLING_AUTOMATIC,
-        avoid_libyuv: 0, ignore_alpha: 1, alpha_premultiplied: 0, is_float: 0,
-        max_threads: 1,
-        pixels: rgb.as_raw().as_ptr() as *mut u8,
-        row_bytes: w * 3,
-    };
-
-    let rc = unsafe { avifImageRGBToYUV(avif_img, &rgb_desc) };
-    if rc != AVIF_RESULT_OK {
-        unsafe { avifImageDestroy(avif_img) };
-        return Err(format!("avifImageRGBToYUV failed (code {rc})").into());
-    }
-    Ok(avif_img)
-}
-
-// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
@@ -539,5 +415,104 @@ mod tests {
         }).unwrap();
         assert_eq!(result.width, 800);
         assert_eq!(result.height, 600);
+    }
+
+    // Helper: write a solid-color JPEG to a temp path and return a PhotoInput.
+    fn make_jpeg(name: &str, w: u32, h: u32, px: Rgb<u8>, hash: &str) -> PhotoInput {
+        let path = std::env::temp_dir().join(name);
+        solid(w, h, px).save(&path).unwrap();
+        PhotoInput { path, ext: ".jpg".into(), orientation: None, content_hash: hash.into() }
+    }
+
+    #[test]
+    fn avif_grid_single_photo_produces_valid_file() {
+        let output = std::env::temp_dir().join("avif_grid_1.avif");
+        let result = run_avif_grid(AvifGridInput {
+            photos: vec![make_jpeg("ag1_a.jpg", 300, 300, Rgb([200, 100, 50]), "sha256:aaaa")],
+            tile_size: 64,
+            fit: "crop".into(),
+            quality: 55,
+            output: output.clone(),
+        }).unwrap();
+        assert_eq!(result.cols, 1);
+        assert_eq!(result.rows, 1);
+        assert_eq!(result.tile_size, 64);
+        assert_eq!(result.photo_order, vec!["sha256:aaaa"]);
+        assert!(output.exists());
+        assert!(output.metadata().unwrap().len() > 0, "output file should be non-empty");
+    }
+
+    #[test]
+    fn avif_grid_four_photos_two_by_two() {
+        let output = std::env::temp_dir().join("avif_grid_4.avif");
+        let photos = vec![
+            make_jpeg("ag4_a.jpg", 200, 200, Rgb([255,   0,   0]), "sha256:a1"),
+            make_jpeg("ag4_b.jpg", 200, 200, Rgb([  0, 255,   0]), "sha256:a2"),
+            make_jpeg("ag4_c.jpg", 200, 200, Rgb([  0,   0, 255]), "sha256:a3"),
+            make_jpeg("ag4_d.jpg", 200, 200, Rgb([255, 255,   0]), "sha256:a4"),
+        ];
+        let hashes: Vec<String> = photos.iter().map(|p| p.content_hash.clone()).collect();
+        let result = run_avif_grid(AvifGridInput {
+            photos,
+            tile_size: 32,
+            fit: "crop".into(),
+            quality: 55,
+            output: output.clone(),
+        }).unwrap();
+        assert_eq!(result.cols, 2);
+        assert_eq!(result.rows, 2);
+        assert_eq!(result.photo_order, hashes);
+        assert!(output.exists());
+    }
+
+    #[test]
+    fn avif_grid_five_photos_pads_last_row() {
+        // 5 photos → cols=3, rows=2 → 6 cells (1 padding tile)
+        let output = std::env::temp_dir().join("avif_grid_5.avif");
+        let photos: Vec<PhotoInput> = (0..5).map(|i| {
+            make_jpeg(&format!("ag5_{i}.jpg"), 100, 100, Rgb([i * 50, 100, 200]), &format!("sha256:b{i}"))
+        }).collect();
+        let result = run_avif_grid(AvifGridInput {
+            photos,
+            tile_size: 16,
+            fit: "pad".into(),
+            quality: 55,
+            output: output.clone(),
+        }).unwrap();
+        assert_eq!(result.cols, 3);
+        assert_eq!(result.rows, 2);
+        assert_eq!(result.photo_order.len(), 5);
+        assert!(output.exists());
+    }
+
+    #[test]
+    fn avif_grid_photo_order_matches_input_hashes() {
+        let output = std::env::temp_dir().join("avif_grid_order.avif");
+        let hashes = vec!["sha256:z3", "sha256:a1", "sha256:m2"];
+        let photos: Vec<PhotoInput> = hashes.iter().enumerate().map(|(i, h)| {
+            make_jpeg(&format!("ago_{i}.jpg"), 80, 80, Rgb([100, 100, 100]), h)
+        }).collect();
+        let result = run_avif_grid(AvifGridInput {
+            photos,
+            tile_size: 16,
+            fit: "crop".into(),
+            quality: 55,
+            output,
+        }).unwrap();
+        // photo_order must echo input hashes in input order (caller controls ordering)
+        assert_eq!(result.photo_order, hashes);
+    }
+
+    #[test]
+    fn avif_grid_empty_photos_returns_error() {
+        let output = std::env::temp_dir().join("avif_grid_empty.avif");
+        let err = run_avif_grid(AvifGridInput {
+            photos: vec![],
+            tile_size: 64,
+            fit: "crop".into(),
+            quality: 55,
+            output,
+        });
+        assert!(err.is_err());
     }
 }
