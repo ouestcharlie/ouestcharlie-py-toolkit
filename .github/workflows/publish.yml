@@ -31,9 +31,10 @@ jobs:
       - name: Install system deps (Windows)
         if: runner.os == 'Windows'
         run: |
+          choco install pkgconfiglite
           vcpkg install libavif:x64-windows-static
-          echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-windows-static/lib/pkgconfig" >> $env:GITHUB_ENV
-          echo "LIBAVIF_STATIC=1" >> $env:GITHUB_ENV
+          $pkgcfg = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static\lib\pkgconfig"
+          echo "PKG_CONFIG_PATH=$pkgcfg" >> $env:GITHUB_ENV
 
       - uses: dtolnay/rust-toolchain@stable
 
