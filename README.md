@@ -49,21 +49,33 @@ System prerequisites:
 
 ### From source (development)
 
-Requires Rust and system libavif:
+**System prerequisites:**
 
 ```bash
-brew install libavif inih   # macOS
-# apt install libavif-dev   # Linux
+brew install inih nasm    # macOS — inih for pyexiv2, nasm for rav1e AVIF encoder
+sudo apt install nasm     # Linux
+choco install nasm        # Windows
+```
 
+**Create virtual environment and install dependencies:**
+
+```bash
 uv venv --python 3.13
 uv pip install -e ".[dev]"
 ```
 
-The `image-proc` binary is **not** compiled automatically in editable installs. Build it manually once:
+The `image-proc` binary is **not** compiled automatically in editable installs. Build it once:
 
 ```bash
 cd image-proc && cargo build --release
 # binary: image-proc/target/release/image-proc
+```
+
+With optional features:
+
+```bash
+cargo build --release --features raw    # RAW format support (pure Rust, no extra deps)
+cargo build --release --features heic   # HEIC support (requires brew install libheif)
 ```
 
 The toolkit resolves the binary in this order:
@@ -79,6 +91,43 @@ To build with RAW or HEIC support, set env vars before `hatch build` or `cargo b
 ```bash
 IMAGE_PROC_FEATURE_RAW=1 hatch build   # enables rawler (pure Rust RAW decoder)
 IMAGE_PROC_FEATURE_HEIC=1 hatch build  # enables libheif-rs (requires brew install libheif)
+```
+
+## Running Tests
+
+**Always use `.venv/bin/python -m pytest`** — do not use `.venv/bin/pytest` or a system `python`:
+
+```bash
+# Run all tests
+.venv/bin/python -m pytest tests/ -v
+
+# Run a specific file
+.venv/bin/python -m pytest tests/test_photo.py -v --tb=short
+```
+
+> Why: `pytest` on PATH or `uv run pytest` may resolve to the wrong Python or fail on native dependencies.
+
+To run the Rust tests:
+
+```bash
+cd image-proc && cargo test
+```
+
+## Building a Wheel
+
+The `hatch_build.py` hook compiles `image-proc` and bundles the binary inside the wheel:
+
+```bash
+pip install hatch
+hatch build
+# produces dist/ouestcharlie_toolkit-*.whl (platform-specific)
+```
+
+Set env vars to enable optional features:
+
+```bash
+IMAGE_PROC_FEATURE_RAW=1 hatch build
+IMAGE_PROC_FEATURE_HEIC=1 hatch build
 ```
 
 ## Dependencies
