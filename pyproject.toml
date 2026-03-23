@@ -9,13 +9,17 @@ path = "hatch_build.py"
 name = "ouestcharlie-toolkit"
 version = "0.1.0"
 description = "Shared Python toolkit for OuEstCharlie agents"
-requires-python = ">=3.11"
 readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE*"]
+authors = [
+    { name = "Antoine Hue" },
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-license = "MIT"
 dependencies = [
     "mcp>=1.0",
     "pyexiv2>=2.8",
@@ -28,6 +32,10 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ouestcharlie/ouestcharlie"
+Issues = "https://github.com/ouestcharlie/ouestcharlie/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ouestcharlie_toolkit"]
