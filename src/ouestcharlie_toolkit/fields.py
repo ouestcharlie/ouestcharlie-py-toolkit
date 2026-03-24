@@ -17,8 +17,8 @@ from enum import Enum, auto
 class FieldType(Enum):
     """Taxonomy of searchable field types, each with distinct match and pruning semantics."""
 
-    DATE_RANGE        = auto()  # datetime min/max bounds; pruneable via PartitionSummary
-    INT_RANGE         = auto()  # int min/max bounds; pruneable via PartitionSummary
+    DATE_RANGE        = auto()  # datetime min/max bounds; pruneable
+    INT_RANGE         = auto()  # int min/max bounds; pruneable
     STRING_COLLECTION = auto()  # list[str] with AND exact match (e.g. tags); bloom-filter pruning
     STRING_MATCH      = auto()  # str with case-insensitive substring match; no summary pruning
     GPS_BOX           = auto()  # (lat, lon) point; partition summary bbox

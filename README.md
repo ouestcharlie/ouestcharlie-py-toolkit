@@ -216,11 +216,10 @@ export WOOF_BACKEND_CONFIG='{"type": "filesystem", "root": "/Users/alice/Photos"
 ### ✅ Completed
 
 - Package structure and build configuration
-- Data models (PhotoEntry, LeafManifest, ParentManifest, XmpSidecar)
 - Backend protocol and local filesystem implementation
 - ManifestStore with optimistic concurrency
 - XmpStore with optimistic concurrency
-- ProgressReporter with rate limiting
+- ProgressReporter
 - AgentBase with MCP server lifecycle
 - Thumbnail generation: per-partition AVIF grid via avif-grid Rust binary
   - Parallel decode (rayon) for JPEG, PNG, WebP, TIFF
