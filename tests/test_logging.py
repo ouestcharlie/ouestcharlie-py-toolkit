@@ -32,28 +32,36 @@ def clean_root_logger():
 
 
 def test_default_log_dir_darwin():
-    with patch("ouestcharlie_toolkit.logging.platform.system", return_value="Darwin"), \
-         patch.object(sys, "platform", "darwin"):
+    with (
+        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Darwin"),
+        patch.object(sys, "platform", "darwin"),
+    ):
         assert _default_log_dir("myagent") == Path.home() / "Library" / "Logs" / "myagent"
 
 
 def test_default_log_dir_linux():
-    with patch("ouestcharlie_toolkit.logging.platform.system", return_value="Linux"), \
-         patch.object(sys, "platform", "linux"):
+    with (
+        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Linux"),
+        patch.object(sys, "platform", "linux"),
+    ):
         assert _default_log_dir("myagent") == Path.home() / ".local" / "state" / "myagent"
 
 
 def test_default_log_dir_linux_with_xdg(monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", "/custom/state")
-    with patch("ouestcharlie_toolkit.logging.platform.system", return_value="Linux"), \
-         patch.object(sys, "platform", "linux"):
+    with (
+        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Linux"),
+        patch.object(sys, "platform", "linux"),
+    ):
         assert _default_log_dir("myagent") == Path("/custom/state/myagent")
 
 
 def test_default_log_dir_windows(monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", "/win/appdata")
-    with patch("ouestcharlie_toolkit.logging.platform.system", return_value="Windows"), \
-         patch.object(sys, "platform", "win32"):
+    with (
+        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Windows"),
+        patch.object(sys, "platform", "win32"),
+    ):
         assert _default_log_dir("myagent") == Path("/win/appdata/myagent/logs")
 
 
@@ -64,8 +72,10 @@ def test_default_log_dir_android():
 
 
 def test_default_log_dir_uses_agent_name():
-    with patch("ouestcharlie_toolkit.logging.platform.system", return_value="Darwin"), \
-         patch.object(sys, "platform", "darwin"):
+    with (
+        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Darwin"),
+        patch.object(sys, "platform", "darwin"),
+    ):
         assert _default_log_dir("whitebeard").name == "whitebeard"
 
 

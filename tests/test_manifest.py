@@ -19,10 +19,7 @@ from ouestcharlie_toolkit.schema import (
     RootSummary,
     VersionConflictError,
     VersionToken,
-    manifest_path,
-    summary_path,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -198,7 +195,9 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
             "tags": ["paris", "vacation"],
         },
     )
-    await store.create_leaf(LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo]))
+    await store.create_leaf(
+        LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo])
+    )
     manifest, _ = await store.read_leaf("p")
     e = manifest.photos[0]
     assert e.searchable["date_taken"] == date
@@ -222,7 +221,13 @@ async def test_leaf_summary_roundtrip(store: ManifestStore) -> None:
     leaf.summary = ManifestSummary(
         path="2024/2024-07",
         photo_count=42,
-        _stats={"dateTaken": {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)}},
+        _stats={
+            "dateTaken": {
+                "type": "date_range",
+                "min": datetime(2024, 7, 1),
+                "max": datetime(2024, 7, 31),
+            }
+        },
     )
     await store.create_leaf(leaf)
     manifest, _ = await store.read_leaf("2024/2024-07")
@@ -269,10 +274,12 @@ async def test_read_summary_raises_if_missing(store: ManifestStore) -> None:
 
 @pytest.mark.asyncio
 async def test_read_summary_roundtrip(store: ManifestStore) -> None:
-    original = _summary_with([
-        ManifestSummary(path="2024/2024-07", photo_count=100),
-        ManifestSummary(path="2024/2024-08", photo_count=80),
-    ])
+    original = _summary_with(
+        [
+            ManifestSummary(path="2024/2024-07", photo_count=100),
+            ManifestSummary(path="2024/2024-08", photo_count=80),
+        ]
+    )
     await store.create_summary(original)
     result, _ = await store.read_summary()
     assert result.schema_version == SCHEMA_VERSION
@@ -301,16 +308,24 @@ async def test_upsert_partition_creates_summary(store: ManifestStore, tmp_path: 
 
 @pytest.mark.asyncio
 async def test_upsert_partition_replaces_existing(store: ManifestStore) -> None:
-    await store.create_summary(_summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)]))
-    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-07", photo_count=99))
+    await store.create_summary(
+        _summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)])
+    )
+    result = await store.upsert_partition_in_summary(
+        ManifestSummary(path="2024/2024-07", photo_count=99)
+    )
     assert len(result.partitions) == 1
     assert result.partitions[0].photo_count == 99
 
 
 @pytest.mark.asyncio
 async def test_upsert_partition_appends_new(store: ManifestStore) -> None:
-    await store.create_summary(_summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)]))
-    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-08", photo_count=20))
+    await store.create_summary(
+        _summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)])
+    )
+    result = await store.upsert_partition_in_summary(
+        ManifestSummary(path="2024/2024-08", photo_count=20)
+    )
     assert len(result.partitions) == 2
 
 
@@ -319,17 +334,23 @@ async def test_upsert_partition_preserves_extra(store: ManifestStore) -> None:
     s = _summary_with()
     s._extra["futureField"] = "keep-me"
     await store.create_summary(s)
-    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-08", photo_count=5))
+    result = await store.upsert_partition_in_summary(
+        ManifestSummary(path="2024/2024-08", photo_count=5)
+    )
     assert result._extra.get("futureField") == "keep-me"
 
 
 @pytest.mark.asyncio
-async def test_upsert_partition_preserves_other_partitions(store: ManifestStore) -> None:
+async def test_upsert_partition_preserves_other_partitions(
+    store: ManifestStore,
+) -> None:
     partitions = [
         ManifestSummary(path="2024/2024-07", photo_count=10),
         ManifestSummary(path="2024/2024-08", photo_count=20),
     ]
     await store.create_summary(_summary_with(partitions))
-    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-07", photo_count=99))
+    result = await store.upsert_partition_in_summary(
+        ManifestSummary(path="2024/2024-07", photo_count=99)
+    )
     other = next(p for p in result.partitions if p.path == "2024/2024-08")
     assert other.photo_count == 20

@@ -8,7 +8,6 @@ from typing import Any
 
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -21,7 +20,10 @@ METADATA_DIR = ".ouestcharlie"
 
 
 def manifest_path(partition: str) -> str:
-    """Well-known manifest path for a partition, e.g. '2024/2024-07/' -> '2024/2024-07/.ouestcharlie/manifest.json'."""
+    """Well-known manifest path for a partition.
+
+    Example: ``'2024/2024-07/'`` → ``'2024/2024-07/.ouestcharlie/manifest.json'``.
+    """
     prefix = partition.rstrip("/") + "/" if partition else ""
     return f"{prefix}{METADATA_DIR}/{MANIFEST_FILENAME}"
 
@@ -179,7 +181,9 @@ class ManifestSummary:
         stats: dict[str, Any] = {}
         for fdef in field_config:
             if fdef.summary_range:
-                values = [v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None]
+                values = [
+                    v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None
+                ]
                 if not values:
                     continue
                 if fdef.type == FieldType.DATE_RANGE:
@@ -189,21 +193,30 @@ class ManifestSummary:
                         "max": max(values, key=_naive),
                     }
                 elif fdef.type == FieldType.INT_RANGE:
-                    stats[fdef.name] = {"type": "int_range", "min": min(values), "max": max(values)}
+                    stats[fdef.name] = {
+                        "type": "int_range",
+                        "min": min(values),
+                        "max": max(values),
+                    }
             elif fdef.summary_gps_bbox and fdef.type is FieldType.GPS_BOX:
-                values = [v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None]
+                values = [
+                    v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None
+                ]
                 if values:
                     lats = [v[0] for v in values]
                     lons = [v[1] for v in values]
                     stats[fdef.name] = {
                         "type": "gps_bbox",
-                        "minLat": min(lats), "maxLat": max(lats),
-                        "minLon": min(lons), "maxLon": max(lons),
+                        "minLat": min(lats),
+                        "maxLat": max(lats),
+                        "minLon": min(lons),
+                        "maxLon": max(lons),
                     }
         return cls(path=partition, photo_count=len(entries), _stats=stats)
 
     def __getattr__(self, name: str) -> Any:
-        """Return the typed stat dict for a field, e.g. summary.rating → {"type": "int_range", ...}."""
+        """Return the typed stat dict for a field,
+        e.g. summary.rating → {"type": "int_range", ...}."""
         return self.__dict__.get("_stats", {}).get(name)
 
     def __eq__(self, other: object) -> bool:
@@ -235,10 +248,10 @@ class ThumbnailGridLayout:
     a photo's tile index only changes if its content changes, not on renames.
     """
 
-    cols: int                   # number of columns in the AVIF grid
-    rows: int                   # number of rows in the AVIF grid
-    tile_size: int              # short edge in pixels (e.g. 256 or 1440)
-    photo_order: list[str]      # content_hashes in row-major tile order
+    cols: int  # number of columns in the AVIF grid
+    rows: int  # number of rows in the AVIF grid
+    tile_size: int  # short edge in pixels (e.g. 256 or 1440)
+    photo_order: list[str]  # content_hashes in row-major tile order
 
 
 @dataclass
@@ -254,7 +267,7 @@ class ThumbnailChunk:
     ``thumbnail_avif_path(partition, chunk.avif_hash)``.
     """
 
-    avif_hash: str             # 22-char BLAKE3 of the AVIF content
+    avif_hash: str  # 22-char BLAKE3 of the AVIF content
     grid: ThumbnailGridLayout  # cols, rows, tile_size, photo_order
 
 
@@ -314,7 +327,7 @@ class XmpSidecar:
     camera_model: str | None = None
     orientation: int | None = None
     rating: int | None = None  # xmp:Rating (0=unrated, 1-5=stars, -1=rejected)
-    width: int | None = None   # pixel width (exif:PixelXDimension / tiff:ImageWidth)
+    width: int | None = None  # pixel width (exif:PixelXDimension / tiff:ImageWidth)
     height: int | None = None  # pixel height (exif:PixelYDimension / tiff:ImageLength)
     tags: list[str] = field(default_factory=list)
     # Unknown XMP attributes and child elements from third-party apps (Lightroom, darktable, …).
@@ -401,7 +414,10 @@ def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
         elif t == "bloom":
             val = stat.get("value")
             if val:
-                d[name] = {"type": "bloom", "value": val.hex() if isinstance(val, bytes) else val}
+                d[name] = {
+                    "type": "bloom",
+                    "value": val.hex() if isinstance(val, bytes) else val,
+                }
         elif t == "gps_bbox":
             d[name] = stat  # all values are plain floats; pass through as-is
     d.update(s._extra)
@@ -423,7 +439,11 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
                 "max": datetime.fromisoformat(stat["max"]) if "max" in stat else None,
             }
         elif fd.summary_range and fd.type is FieldType.INT_RANGE:
-            stats[fd.name] = {"type": "int_range", "min": stat.get("min"), "max": stat.get("max")}
+            stats[fd.name] = {
+                "type": "int_range",
+                "min": stat.get("min"),
+                "max": stat.get("max"),
+            }
         elif fd.summary_bloom_attr:
             hex_val = stat.get("value", "")
             if hex_val:
@@ -431,12 +451,17 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
         elif fd.summary_gps_bbox and fd.type is FieldType.GPS_BOX:
             stats[fd.name] = {
                 "type": "gps_bbox",
-                "minLat": stat.get("minLat"), "maxLat": stat.get("maxLat"),
-                "minLon": stat.get("minLon"), "maxLon": stat.get("maxLon"),
+                "minLat": stat.get("minLat"),
+                "maxLat": stat.get("maxLat"),
+                "minLon": stat.get("minLon"),
+                "maxLon": stat.get("maxLon"),
             }
     hashes_stat = d.get("hashes")
     if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
-        stats["hashes"] = {"type": "bloom", "value": bytes.fromhex(hashes_stat["value"])}
+        stats["hashes"] = {
+            "type": "bloom",
+            "value": bytes.fromhex(hashes_stat["value"]),
+        }
     extra = {k: v for k, v in d.items() if k not in known_keys}
     return ManifestSummary(
         path=d["path"],

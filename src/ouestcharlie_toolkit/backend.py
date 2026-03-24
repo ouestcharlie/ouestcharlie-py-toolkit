@@ -90,6 +90,7 @@ def backend_from_config(config: dict) -> Backend:
 
     if backend_type == "filesystem":
         from .backends.local import LocalBackend
+
         root = config.get("root")
         if not root:
             raise ConfigurationError("filesystem backend requires 'root' field")

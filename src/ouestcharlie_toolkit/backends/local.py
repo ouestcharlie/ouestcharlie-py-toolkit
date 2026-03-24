@@ -52,9 +52,7 @@ class LocalBackend:
         current_mtime = stat.st_mtime_ns
 
         if current_mtime != expected_version.value:
-            raise VersionConflictError(
-                path, expected_version, VersionToken(current_mtime)
-            )
+            raise VersionConflictError(path, expected_version, VersionToken(current_mtime))
 
         # Write to temp file, then atomic rename
         tmp_path = full_path.with_suffix(full_path.suffix + ".tmp")

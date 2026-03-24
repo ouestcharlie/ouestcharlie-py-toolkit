@@ -1,11 +1,13 @@
 """Test backend configuration and utilities."""
 
+import tempfile
+from pathlib import Path
+
 import pytest
+
 from ouestcharlie_toolkit.backend import backend_from_config
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.schema import ConfigurationError
-from pathlib import Path
-import tempfile
 
 
 def test_backend_from_config_local():

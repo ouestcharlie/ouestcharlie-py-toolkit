@@ -2,24 +2,24 @@
 
 from datetime import datetime
 
-from ouestcharlie_toolkit.schema import (
-    VersionToken,
-    FileInfo,
-    PhotoEntry,
-    ManifestSummary,
-    LeafManifest,
-    XmpSidecar,
-    VersionConflictError,
-    ConfigurationError,
-    serialize_leaf,
-    deserialize_leaf,
-    manifest_path,
-    SCHEMA_VERSION,
-    OUESTCHARLIE_NS,
-    METADATA_DIR,
-)
 import pytest
 
+from ouestcharlie_toolkit.schema import (
+    METADATA_DIR,
+    OUESTCHARLIE_NS,
+    SCHEMA_VERSION,
+    ConfigurationError,
+    FileInfo,
+    LeafManifest,
+    ManifestSummary,
+    PhotoEntry,
+    VersionConflictError,
+    VersionToken,
+    XmpSidecar,
+    deserialize_leaf,
+    manifest_path,
+    serialize_leaf,
+)
 
 # ---------------------------------------------------------------------------
 # Version tokens and file info
@@ -214,8 +214,12 @@ def test_partition_summary():
         path="2024/2024-07/",
         photo_count=42,
         _stats={
-            "dateTaken": {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)},
-            "rating":    {"type": "int_range",  "min": 2, "max": 5},
+            "dateTaken": {
+                "type": "date_range",
+                "min": datetime(2024, 7, 1),
+                "max": datetime(2024, 7, 31),
+            },
+            "rating": {"type": "int_range", "min": 2, "max": 5},
         },
     )
 
@@ -306,7 +310,15 @@ def test_photo_entry_v1_fields_round_trip():
     photo = PhotoEntry(
         filename="IMG_001.jpg",
         content_hash="sha256:abc",
-        searchable={"make": "Sony", "model": "A7 IV", "rating": 5, "width": 7008, "height": 4672, "tags": ["sunset"], "orientation": 1},
+        searchable={
+            "make": "Sony",
+            "model": "A7 IV",
+            "rating": 5,
+            "width": 7008,
+            "height": 4672,
+            "tags": ["sunset"],
+            "orientation": 1,
+        },
     )
     manifest = LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo])
     restored = deserialize_leaf(serialize_leaf(manifest)).photos[0]
@@ -329,16 +341,26 @@ def test_photo_entry_rejected_rating_round_trip():
 def test_partition_summary_rating_round_trip():
     """rating and date survive serialize → deserialize with nested stat format."""
     summary = ManifestSummary(
-        path="p", photo_count=3,
+        path="p",
+        photo_count=3,
         _stats={
-            "dateTaken": {"type": "date_range", "min": datetime(2024, 1, 1), "max": datetime(2024, 12, 31)},
-            "rating":    {"type": "int_range",  "min": 1, "max": 5},
+            "dateTaken": {
+                "type": "date_range",
+                "min": datetime(2024, 1, 1),
+                "max": datetime(2024, 12, 31),
+            },
+            "rating": {"type": "int_range", "min": 1, "max": 5},
         },
     )
-    from ouestcharlie_toolkit.schema import _summary_to_dict, _summary_from_dict
+    from ouestcharlie_toolkit.schema import _summary_from_dict, _summary_to_dict
+
     d = _summary_to_dict(summary)
     # Verify nested format
-    assert d["dateTaken"] == {"type": "date_range", "min": "2024-01-01T00:00:00", "max": "2024-12-31T00:00:00"}
+    assert d["dateTaken"] == {
+        "type": "date_range",
+        "min": "2024-01-01T00:00:00",
+        "max": "2024-12-31T00:00:00",
+    }
     assert d["rating"] == {"type": "int_range", "min": 1, "max": 5}
     assert "dateMin" not in d and "ratingMin" not in d
     # Verify round-trip

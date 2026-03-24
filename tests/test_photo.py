@@ -14,10 +14,10 @@ from ouestcharlie_toolkit.photo import (
     _parse_exif_datetime,
     _parse_exif_gps,
 )
+from ouestcharlie_toolkit.schema import XmpSidecar
 from ouestcharlie_toolkit.xmp import _parse_iso_datetime, parse_xmp
 
 _SAMPLES = Path(__file__).parent / "sample-images"
-from ouestcharlie_toolkit.schema import XmpSidecar
 
 # Minimal valid JPEG (SOI + JFIF APP0 + EOI) — no EXIF data.
 _MINIMAL_JPEG = (
@@ -40,7 +40,9 @@ async def test_create_identity_returns_22_char_string():
         identity = await photo.create_identity()
     assert len(identity) == 22
     # base64url alphabet only
-    assert all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for c in identity)
+    assert all(
+        c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for c in identity
+    )
 
 
 @pytest.mark.asyncio
@@ -92,6 +94,7 @@ async def test_extract_exif_returns_sidecar():
 @pytest.mark.asyncio
 async def test_extract_exif_sets_content_hash():
     from ouestcharlie_toolkit.hashing import content_hash
+
     expected = content_hash(_MINIMAL_JPEG)
     with tempfile.TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
@@ -144,8 +147,7 @@ def _sample_pairs():
     for ref in sorted(_SAMPLES.glob("*.ref.xmp")):
         stem = ref.name[: -len(".ref.xmp")]
         candidates = [
-            p for p in _SAMPLES.glob(f"{stem}.*")
-            if p.suffix.lower() not in (".xmp",) and p != ref
+            p for p in _SAMPLES.glob(f"{stem}.*") if p.suffix.lower() not in (".xmp",) and p != ref
         ]
         if candidates:
             pairs.append(pytest.param(candidates[0], ref, id=stem))
@@ -170,9 +172,7 @@ async def test_extract_exif_matches_ref(image_path, ref_xmp_path):
     ref_sidecar = parse_xmp(ref_xmp_path.read_text(encoding="utf-8"))
     ref_date = _parse_iso_datetime(ref_sidecar._extra.get(_XMP_CREATE_DATE))
 
-    sidecar = await Photo(
-        LocalBackend(root=str(_SAMPLES)), image_path.name
-    ).extract_exif()
+    sidecar = await Photo(LocalBackend(root=str(_SAMPLES)), image_path.name).extract_exif()
 
     assert sidecar.content_hash is not None
     assert len(sidecar.content_hash) == 22
@@ -235,9 +235,9 @@ def test_map_exif_extra_hex_local_name_is_prefixed():
     must rename them to avoid producing unserializable XMP attributes.
     """
     exif = {
-        "Exif.Photo.0xea1d": "0",          # unknown exif tag — hex id
-        "Exif.Image.0xc6d2": "1 2 3",      # unknown tiff tag — hex id
-        "Exif.Photo.Make": "Apple",         # normal key — unchanged
+        "Exif.Photo.0xea1d": "0",  # unknown exif tag — hex id
+        "Exif.Image.0xc6d2": "1 2 3",  # unknown tiff tag — hex id
+        "Exif.Photo.Make": "Apple",  # normal key — unchanged
     }
     extra = _map_exif_extra(exif)
 

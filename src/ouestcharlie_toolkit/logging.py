@@ -66,10 +66,7 @@ def setup_logging(
     Returns:
         Path of the log file that was opened.
     """
-    if log_file_env_var:
-        override = os.environ.get(log_file_env_var)
-    else:
-        override = None
+    override = os.environ.get(log_file_env_var) if log_file_env_var else None
 
     log_file = Path(override) if override else _default_log_dir(agent_name) / f"{agent_name}.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
