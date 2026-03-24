@@ -17,55 +17,44 @@ jobs:
       matrix:
         include:
           - os: macos-latest      # macOS arm64
-          - os: ubuntu-22.04      # Linux x86_64 — uses cibuildwheel for manylinux tag
+          - os: ubuntu-22.04      # Linux x86_64
           - os: windows-latest    # Windows x86_64
 
     steps:
       - uses: actions/checkout@v4
 
-      # macOS / Windows: install deps and build directly with hatch
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'
         run: brew install nasm inih
+
+      - name: Install nasm (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nasm
 
       - name: Install nasm (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: choco install nasm -y --no-progress
 
-      - name: Set up Rust (macOS / Windows)
-        if: runner.os != 'Linux'
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install hatch (macOS / Windows)
-        if: runner.os != 'Linux'
-        run: pip install hatch
+      - name: Install build tools
+        run: pip install hatch auditwheel
 
-      - name: Build wheel (macOS / Windows)
-        if: runner.os != 'Linux'
+      - name: Build wheel
         run: hatch build --target wheel
         env:
           IMAGE_PROC_FEATURE_RAW: "1"
 
-      # Linux: build inside a manylinux container via cibuildwheel
-      # Rust and nasm are installed inside the container by CIBW_BEFORE_BUILD.
-      - name: Build wheel (Linux — manylinux)
+      - name: Repair wheel (Linux — retag linux_x86_64 → manylinux)
         if: runner.os == 'Linux'
-        uses: pypa/cibuildwheel@v2
-        with:
-          output-dir: dist
-        env:
-          CIBW_BUILD: "cp311-manylinux_x86_64"
-          CIBW_MANYLINUX_X86_64_IMAGE: quay.io/pypa/manylinux_2_28_x86_64
-          CIBW_BEFORE_BUILD: |
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-            source "$HOME/.cargo/env"
-            dnf install -y nasm
-          CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" IMAGE_PROC_FEATURE_RAW=1'
+        run: |
+          auditwheel repair dist/*.whl -w dist/
+          rm dist/*-linux_x86_64.whl
 
       - uses: actions/upload-artifact@v4
         with:
