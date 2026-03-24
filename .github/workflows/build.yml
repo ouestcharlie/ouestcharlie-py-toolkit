@@ -16,12 +16,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: macos-15-intel    # macOS Intel
           - os: macos-latest      # macOS arm64
           - os: ubuntu-22.04      # Linux x86_64
           - os: windows-latest    # Windows x86_64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'
@@ -38,7 +39,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -56,7 +57,7 @@ jobs:
           auditwheel repair dist/*.whl -w dist/
           rm dist/*-linux_x86_64.whl
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: wheel-${{ matrix.os }}
           path: dist/*.whl
@@ -65,8 +66,8 @@ jobs:
     name: Build source distribution
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install hatch
