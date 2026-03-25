@@ -289,7 +289,6 @@ class LeafManifest:
     schema_version: int
     partition: str
     photos: list[PhotoEntry] = field(default_factory=list)
-    summary: ManifestSummary | None = None
     thumbnail_chunks: list[ThumbnailChunk] = field(default_factory=list)
     _extra: dict[str, Any] = field(default_factory=dict)
 
@@ -510,8 +509,6 @@ def serialize_leaf(manifest: LeafManifest) -> dict[str, Any]:
         "partition": manifest.partition,
         "photos": [_photo_entry_to_dict(p) for p in manifest.photos],
     }
-    if manifest.summary is not None:
-        d["summary"] = _summary_to_dict(manifest.summary)
     if manifest.thumbnail_chunks:
         d["thumbnailChunks"] = [_thumbnail_chunk_to_dict(c) for c in manifest.thumbnail_chunks]
     d.update(manifest._extra)
@@ -526,7 +523,6 @@ def deserialize_leaf(d: dict[str, Any]) -> LeafManifest:
         schema_version=d.get("schemaVersion", SCHEMA_VERSION),
         partition=d["partition"],
         photos=[_photo_entry_from_dict(p) for p in d.get("photos", [])],
-        summary=_summary_from_dict(d["summary"]) if d.get("summary") else None,
         thumbnail_chunks=[_thumbnail_chunk_from_dict(c) for c in d.get("thumbnailChunks", [])],
         _extra=extra,
     )

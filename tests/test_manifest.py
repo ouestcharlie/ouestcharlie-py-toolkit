@@ -211,33 +211,6 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Leaf — summary
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_leaf_summary_roundtrip(store: ManifestStore) -> None:
-    leaf = _leaf()
-    leaf.summary = ManifestSummary(
-        path="2024/2024-07",
-        photo_count=42,
-        _stats={
-            "dateTaken": {
-                "type": "date_range",
-                "min": datetime(2024, 7, 1),
-                "max": datetime(2024, 7, 31),
-            }
-        },
-    )
-    await store.create_leaf(leaf)
-    manifest, _ = await store.read_leaf("2024/2024-07")
-    assert manifest.summary is not None
-    assert manifest.summary.photo_count == 42
-    assert manifest.summary.dateTaken["min"] == datetime(2024, 7, 1)
-    assert manifest.summary.dateTaken["max"] == datetime(2024, 7, 31)
-
-
-# ---------------------------------------------------------------------------
 # RootSummary (summary.json)
 # ---------------------------------------------------------------------------
 

@@ -267,7 +267,6 @@ def test_leaf_manifest_creation():
     assert manifest.partition == "2024/2024-07/"
     assert len(manifest.photos) == 1
     assert manifest.photos[0] == photo
-    assert manifest.summary is None
 
 
 def test_leaf_manifest_serialization():
