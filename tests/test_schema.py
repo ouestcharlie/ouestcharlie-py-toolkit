@@ -245,7 +245,7 @@ def test_partition_summary_rating_defaults_none():
 def test_manifest_path_helper():
     """Test manifest path generation."""
     path = manifest_path("2024/2024-07/")
-    assert path == "2024/2024-07/.ouestcharlie/manifest.json"
+    assert path == ".ouestcharlie/2024/2024-07/manifest.json"
 
 
 def test_manifest_path_empty():

@@ -86,14 +86,14 @@ class _FakeAvifProcessError:
 def test_avif_path_thumbnail_tier() -> None:
     assert (
         thumbnail_avif_path("2024/July", _FAKE_HASH, "thumbnail")
-        == f"2024/July/{METADATA_DIR}/thumbnails-{_FAKE_HASH}.avif"
+        == f"{METADATA_DIR}/2024/July/thumbnails-{_FAKE_HASH}.avif"
     )
 
 
 def test_avif_path_preview_tier() -> None:
     assert (
         thumbnail_avif_path("2024/July", _FAKE_HASH, "preview")
-        == f"2024/July/{METADATA_DIR}/previews-{_FAKE_HASH}.avif"
+        == f"{METADATA_DIR}/2024/July/previews-{_FAKE_HASH}.avif"
     )
 
 

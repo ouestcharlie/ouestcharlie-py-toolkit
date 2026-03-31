@@ -29,10 +29,10 @@ from pathlib import Path
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.hashing import content_hash as _hash
 from ouestcharlie_toolkit.schema import (
-    METADATA_DIR,
     PhotoEntry,
     ThumbnailChunk,
     ThumbnailGridLayout,
+    preview_jpeg_path,
     thumbnail_avif_path,
 )
 
@@ -55,18 +55,6 @@ GRID_MAX_PHOTOS: int = 64
 # JPEG preview settings.
 PREVIEW_JPEG_MAX_LONG_EDGE: int = 1440
 PREVIEW_JPEG_QUALITY: int = 85
-
-# Metadata subdirectory inside .ouestcharlie/ for per-photo JPEG previews.
-PREVIEW_JPEG_SUBDIR: str = "previews"
-
-
-def _preview_jpeg_path(partition: str, content_hash: str) -> str:
-    """Relative backend path for a per-photo JPEG preview.
-
-    Example: "2024/2024-07/.ouestcharlie/previews/sha256:abc123.jpg"
-    """
-    prefix = partition.rstrip("/") + "/" if partition else ""
-    return f"{prefix}{METADATA_DIR}/{PREVIEW_JPEG_SUBDIR}/{content_hash}.jpg"
 
 
 def _find_image_proc_binary() -> str:
@@ -256,7 +244,7 @@ async def generate_preview_jpeg(
     WebP), applies EXIF orientation, resizes to ``max_long_edge`` on the long
     edge (preserving aspect ratio), and saves as JPEG.
 
-    The result is cached at ``{partition}/.ouestcharlie/previews/{content_hash}.jpg``.
+    The result is cached at ``.ouestcharlie/{partition}/previews/{content_hash}.jpg``.
     Subsequent calls for the same photo return immediately if the cache file
     already exists on the backend.
 
@@ -269,10 +257,10 @@ async def generate_preview_jpeg(
 
     Returns:
         Backend-relative path of the cached JPEG (e.g.
-        ``"2024/2024-07/.ouestcharlie/previews/sha256:abc123.jpg"``).
+        ``".ouestcharlie/2024/2024-07/previews/sha256:abc123.jpg"``).
     """
     binary = _find_image_proc_binary()
-    cache_path = _preview_jpeg_path(partition, entry.content_hash)
+    cache_path = preview_jpeg_path(partition, entry.content_hash)
 
     # Fast path: already cached.
     if await backend.exists(cache_path):

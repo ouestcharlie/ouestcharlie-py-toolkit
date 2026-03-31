@@ -52,14 +52,14 @@ def _leaf(partition: str = "2024/2024-07", photos: list[PhotoEntry] | None = Non
 @pytest.mark.asyncio
 async def test_create_leaf_writes_file(store: ManifestStore, tmp_path: Path) -> None:
     await store.create_leaf(_leaf())
-    expected = tmp_path / "2024" / "2024-07" / METADATA_DIR / "manifest.json"
+    expected = tmp_path / METADATA_DIR / "2024" / "2024-07" / "manifest.json"
     assert expected.exists()
 
 
 @pytest.mark.asyncio
 async def test_create_leaf_valid_json(store: ManifestStore, tmp_path: Path) -> None:
     await store.create_leaf(_leaf())
-    path = tmp_path / "2024" / "2024-07" / METADATA_DIR / "manifest.json"
+    path = tmp_path / METADATA_DIR / "2024" / "2024-07" / "manifest.json"
     data = json.loads(path.read_text())
     assert data["partition"] == "2024/2024-07"
     assert data["schemaVersion"] == SCHEMA_VERSION

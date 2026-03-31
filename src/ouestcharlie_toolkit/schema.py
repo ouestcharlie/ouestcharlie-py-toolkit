@@ -17,20 +17,35 @@ SCHEMA_VERSION = 1
 MANIFEST_FILENAME = "manifest.json"
 SUMMARY_FILENAME = "summary.json"
 METADATA_DIR = ".ouestcharlie"
+PREVIEW_JPEG_SUBDIR = "previews"
 
 
 def manifest_path(partition: str) -> str:
     """Well-known manifest path for a partition.
 
-    Example: ``'2024/2024-07/'`` → ``'2024/2024-07/.ouestcharlie/manifest.json'``.
+    All metadata lives under a single ``.ouestcharlie/`` tree at the backend
+    root, mirroring the partition directory structure.
+
+    Example: ``'2024/2024-07/'`` → ``'.ouestcharlie/2024/2024-07/manifest.json'``.
+    Root partition (``''``) → ``'.ouestcharlie/manifest.json'``.
     """
-    prefix = partition.rstrip("/") + "/" if partition else ""
-    return f"{prefix}{METADATA_DIR}/{MANIFEST_FILENAME}"
+    suffix = partition.rstrip("/") + "/" if partition else ""
+    return f"{METADATA_DIR}/{suffix}{MANIFEST_FILENAME}"
 
 
 def summary_path() -> str:
     """Well-known path for the root summary file: '.ouestcharlie/summary.json'."""
     return f"{METADATA_DIR}/{SUMMARY_FILENAME}"
+
+
+def preview_jpeg_path(partition: str, content_hash: str) -> str:
+    """Backend-relative path for a per-photo JPEG preview cache file.
+
+    Example: ``'2024/2024-07'`` → ``'.ouestcharlie/2024/2024-07/previews/sha256:abc.jpg'``.
+    Root partition (``''``) → ``'.ouestcharlie/previews/sha256:abc.jpg'``.
+    """
+    suffix = partition.rstrip("/") + "/" if partition else ""
+    return f"{METADATA_DIR}/{suffix}{PREVIEW_JPEG_SUBDIR}/{content_hash}.jpg"
 
 
 # ---------------------------------------------------------------------------
@@ -275,11 +290,12 @@ def thumbnail_avif_path(partition: str, avif_hash: str, tier: str = "thumbnail")
     """Reconstruct the backend-relative path for a thumbnail AVIF chunk.
 
     Example: thumbnail_avif_path("2024/Jul", "Kf3QzA2_nBcR8xYvLm1P9w")
-             → "2024/Jul/.ouestcharlie/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+             → ".ouestcharlie/2024/Jul/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+    Root partition (``''``) → ``'.ouestcharlie/thumbnails-{hash}.avif'``.
     """
-    prefix = partition.rstrip("/") + "/" if partition else ""
+    suffix = partition.rstrip("/") + "/" if partition else ""
     stem = "thumbnails" if tier == "thumbnail" else "previews"
-    return f"{prefix}{METADATA_DIR}/{stem}-{avif_hash}.avif"
+    return f"{METADATA_DIR}/{suffix}{stem}-{avif_hash}.avif"
 
 
 @dataclass
