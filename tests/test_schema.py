@@ -375,6 +375,78 @@ def test_partition_summary_rating_round_trip():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# ManifestSummary.from_photos — missing value counts
+# ---------------------------------------------------------------------------
+
+
+def _entry(searchable: dict) -> PhotoEntry:
+    return PhotoEntry(filename="x.jpg", content_hash="sha256:abc", searchable=searchable)
+
+
+def test_from_photos_no_missing_when_all_have_field() -> None:
+    """When every photo has dateTaken, no 'missing' key in the stat."""
+    entries = [
+        _entry({"date_taken": datetime(2024, 1, 1)}),
+        _entry({"date_taken": datetime(2024, 6, 1)}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert "missing" not in summary.dateTaken
+
+
+def test_from_photos_missing_count_for_date_range() -> None:
+    """Photos with None dateTaken are counted in 'missing'."""
+    entries = [
+        _entry({"date_taken": datetime(2024, 1, 1)}),
+        _entry({"date_taken": None}),
+        _entry({}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert summary.dateTaken["missing"] == 2
+
+
+def test_from_photos_missing_count_for_int_range() -> None:
+    """Photos with None rating are counted in 'missing'."""
+    entries = [
+        _entry({"rating": 3}),
+        _entry({"rating": 5}),
+        _entry({"rating": None}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert summary.rating["missing"] == 1
+
+
+def test_from_photos_missing_count_for_gps() -> None:
+    """Photos with None GPS are counted in 'missing'."""
+    entries = [
+        _entry({"gps": (48.85, 2.35)}),
+        _entry({"gps": None}),
+        _entry({}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert summary.gps["missing"] == 2
+
+
+def test_from_photos_no_stat_when_all_missing() -> None:
+    """When all photos lack a field, the stat is absent entirely."""
+    entries = [_entry({}), _entry({"dateTaken": None})]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert summary.dateTaken is None
+
+
+def test_from_photos_missing_survives_round_trip() -> None:
+    """'missing' key is preserved through serialize → deserialize."""
+    from ouestcharlie_toolkit.schema import _summary_from_dict, _summary_to_dict
+
+    entries = [
+        _entry({"rating": 4}),
+        _entry({"rating": None}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    restored = _summary_from_dict(_summary_to_dict(summary))
+    assert restored.rating["missing"] == 1
+
+
 def test_xmp_sidecar_creation():
     """Test XmpSidecar creation including queryable fields."""
     xmp = XmpSidecar(

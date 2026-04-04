@@ -201,32 +201,42 @@ class ManifestSummary:
                 ]
                 if not values:
                     continue
+                missing = len(entries) - len(values)
                 if fdef.type == FieldType.DATE_RANGE:
-                    stats[fdef.name] = {
+                    stat: dict[str, Any] = {
                         "type": "date_range",
                         "min": min(values, key=_naive),
                         "max": max(values, key=_naive),
                     }
                 elif fdef.type == FieldType.INT_RANGE:
-                    stats[fdef.name] = {
+                    stat = {
                         "type": "int_range",
                         "min": min(values),
                         "max": max(values),
                     }
+                else:
+                    continue
+                if missing:
+                    stat["missing"] = missing
+                stats[fdef.name] = stat
             elif fdef.summary_gps_bbox and fdef.type is FieldType.GPS_BOX:
                 values = [
                     v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None
                 ]
                 if values:
+                    missing = len(entries) - len(values)
                     lats = [v[0] for v in values]
                     lons = [v[1] for v in values]
-                    stats[fdef.name] = {
+                    gps_stat: dict[str, Any] = {
                         "type": "gps_bbox",
                         "minLat": min(lats),
                         "maxLat": max(lats),
                         "minLon": min(lons),
                         "maxLon": max(lons),
                     }
+                    if missing:
+                        gps_stat["missing"] = missing
+                    stats[fdef.name] = gps_stat
         return cls(path=partition, photo_count=len(entries), _stats=stats)
 
     def __getattr__(self, name: str) -> Any:
@@ -423,6 +433,8 @@ def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
                 out["min"] = stat["min"].isoformat()
             if stat.get("max") is not None:
                 out["max"] = stat["max"].isoformat()
+            if stat.get("missing"):
+                out["missing"] = stat["missing"]
             d[name] = out
         elif t == "int_range":
             d[name] = stat
@@ -448,29 +460,38 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
         if not isinstance(stat, dict):
             continue
         if fd.summary_range and fd.type is FieldType.DATE_RANGE:
-            stats[fd.name] = {
+            parsed: dict[str, Any] = {
                 "type": "date_range",
                 "min": datetime.fromisoformat(stat["min"]) if "min" in stat else None,
                 "max": datetime.fromisoformat(stat["max"]) if "max" in stat else None,
             }
+            if stat.get("missing"):
+                parsed["missing"] = stat["missing"]
+            stats[fd.name] = parsed
         elif fd.summary_range and fd.type is FieldType.INT_RANGE:
-            stats[fd.name] = {
+            parsed = {
                 "type": "int_range",
                 "min": stat.get("min"),
                 "max": stat.get("max"),
             }
+            if stat.get("missing"):
+                parsed["missing"] = stat["missing"]
+            stats[fd.name] = parsed
         elif fd.summary_bloom_attr:
             hex_val = stat.get("value", "")
             if hex_val:
                 stats[fd.name] = {"type": "bloom", "value": bytes.fromhex(hex_val)}
         elif fd.summary_gps_bbox and fd.type is FieldType.GPS_BOX:
-            stats[fd.name] = {
+            parsed = {
                 "type": "gps_bbox",
                 "minLat": stat.get("minLat"),
                 "maxLat": stat.get("maxLat"),
                 "minLon": stat.get("minLon"),
                 "maxLon": stat.get("maxLon"),
             }
+            if stat.get("missing"):
+                parsed["missing"] = stat["missing"]
+            stats[fd.name] = parsed
     hashes_stat = d.get("hashes")
     if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
         stats["hashes"] = {
