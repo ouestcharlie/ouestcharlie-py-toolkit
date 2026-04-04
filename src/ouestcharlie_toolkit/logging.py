@@ -20,21 +20,21 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
-def _default_log_dir(agent_name: str) -> Path:
+def _default_log_dir() -> Path:
     # sys.platform == "android" is set by Python 3.13+ on Android (PEP 738).
     if sys.platform == "android":
         # App sandbox home is set by the Android runtime; no XDG conventions apply.
-        return Path.home() / "logs" / agent_name
+        return Path.home() / "logs" / "ouestcharlie"
     system = platform.system()
     if system == "Darwin":
         # Covers both macOS and iOS (same Darwin kernel, same sandbox layout).
-        return Path.home() / "Library" / "Logs" / agent_name
+        return Path.home() / "Library" / "Logs" / "ouestcharlie"
     elif system == "Windows":
         base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
-        return base / agent_name / "logs"
+        return base / "ouestcharlie" / "logs"
     else:
         xdg = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-        return Path(xdg) / agent_name
+        return Path(xdg) / "ouestcharlie"
 
 
 def setup_logging(
@@ -68,7 +68,7 @@ def setup_logging(
     """
     override = os.environ.get(log_file_env_var) if log_file_env_var else None
 
-    log_file = Path(override) if override else _default_log_dir(agent_name) / f"{agent_name}.log"
+    log_file = Path(override) if override else _default_log_dir() / f"{agent_name}.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     handler = RotatingFileHandler(

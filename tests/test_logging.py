@@ -36,7 +36,7 @@ def test_default_log_dir_darwin():
         patch("ouestcharlie_toolkit.logging.platform.system", return_value="Darwin"),
         patch.object(sys, "platform", "darwin"),
     ):
-        assert _default_log_dir("myagent") == Path.home() / "Library" / "Logs" / "myagent"
+        assert _default_log_dir() == Path.home() / "Library" / "Logs" / "ouestcharlie"
 
 
 def test_default_log_dir_linux():
@@ -44,7 +44,7 @@ def test_default_log_dir_linux():
         patch("ouestcharlie_toolkit.logging.platform.system", return_value="Linux"),
         patch.object(sys, "platform", "linux"),
     ):
-        assert _default_log_dir("myagent") == Path.home() / ".local" / "state" / "myagent"
+        assert _default_log_dir() == Path.home() / ".local" / "state" / "ouestcharlie"
 
 
 def test_default_log_dir_linux_with_xdg(monkeypatch):
@@ -53,7 +53,7 @@ def test_default_log_dir_linux_with_xdg(monkeypatch):
         patch("ouestcharlie_toolkit.logging.platform.system", return_value="Linux"),
         patch.object(sys, "platform", "linux"),
     ):
-        assert _default_log_dir("myagent") == Path("/custom/state/myagent")
+        assert _default_log_dir() == Path("/custom/state/ouestcharlie")
 
 
 def test_default_log_dir_windows(monkeypatch):
@@ -62,21 +62,22 @@ def test_default_log_dir_windows(monkeypatch):
         patch("ouestcharlie_toolkit.logging.platform.system", return_value="Windows"),
         patch.object(sys, "platform", "win32"),
     ):
-        assert _default_log_dir("myagent") == Path("/win/appdata/myagent/logs")
+        assert _default_log_dir() == Path("/win/appdata/ouestcharlie/logs")
 
 
 def test_default_log_dir_android():
     """Android check runs before platform.system(), which returns 'Linux' on Android."""
     with patch.object(sys, "platform", "android"):
-        assert _default_log_dir("myagent") == Path.home() / "logs" / "myagent"
+        assert _default_log_dir() == Path.home() / "logs" / "ouestcharlie"
 
 
-def test_default_log_dir_uses_agent_name():
+def test_default_log_dir_shared_folder():
+    """All agents share the same ouestcharlie log directory."""
     with (
         patch("ouestcharlie_toolkit.logging.platform.system", return_value="Darwin"),
         patch.object(sys, "platform", "darwin"),
     ):
-        assert _default_log_dir("whitebeard").name == "whitebeard"
+        assert _default_log_dir().name == "ouestcharlie"
 
 
 # ---------------------------------------------------------------------------
