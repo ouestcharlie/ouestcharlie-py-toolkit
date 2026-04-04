@@ -85,8 +85,21 @@ class LocalBackend:
         stat = await loop.run_in_executor(None, full_path.stat)
         return VersionToken(stat.st_mtime_ns)
 
-    async def list_files(self, prefix: str, suffix: str = "") -> list[FileInfo]:
-        """List files under prefix, optionally filtered by suffix."""
+    async def list_dirs(self, prefix: str) -> list[str]:
+        """List immediate subdirectory paths under prefix."""
+        prefix_path = self._resolve(prefix)
+
+        if not prefix_path.exists():
+            return []
+
+        return [str(p.relative_to(self.root)) for p in prefix_path.iterdir() if p.is_dir()]
+
+    async def list_files(
+        self,
+        prefix: str,
+        suffixes: frozenset[str] | None = None,
+    ) -> list[FileInfo]:
+        """List direct-child files under prefix, optionally filtered by extension."""
         prefix_path = self._resolve(prefix)
 
         if not prefix_path.exists():
@@ -95,23 +108,25 @@ class LocalBackend:
         if not prefix_path.is_dir():
             raise NotADirectoryError(f"Prefix is not a directory: {prefix}")
 
-        # Use glob pattern
-        pattern = f"**/*{suffix}" if suffix else "**/*"
-
         loop = asyncio.get_event_loop()
+
+        # Build one glob pattern per suffix (or a single catch-all).
+        # Non-recursive patterns (*ext) let the OS skip subdirectories entirely.
+        patterns = [f"*{s}" for s in suffixes] if suffixes else ["*"]
 
         def _list_files() -> list[FileInfo]:
             results = []
-            for file_path in prefix_path.glob(pattern):
-                if file_path.is_file():
-                    relative = file_path.relative_to(self.root)
-                    stat = file_path.stat()
-                    results.append(
-                        FileInfo(
-                            path=str(relative),
-                            version=VersionToken(stat.st_mtime_ns),
+            for pattern in patterns:
+                for file_path in prefix_path.glob(pattern):
+                    if file_path.is_file():
+                        relative = file_path.relative_to(self.root)
+                        stat = file_path.stat()
+                        results.append(
+                            FileInfo(
+                                path=str(relative),
+                                version=VersionToken(stat.st_mtime_ns),
+                            )
                         )
-                    )
             return results
 
         return await loop.run_in_executor(None, _list_files)

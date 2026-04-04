@@ -46,12 +46,30 @@ class Backend(Protocol):
         """
         ...
 
-    async def list_files(self, prefix: str, suffix: str = "") -> list[FileInfo]:
-        """List files under prefix, optionally filtered by suffix.
+    async def list_dirs(self, prefix: str) -> list[str]:
+        """List immediate subdirectory paths under prefix.
 
         Args:
-            prefix: Directory/prefix to list files from.
-            suffix: Optional suffix filter (e.g., ".xmp", ".jpg").
+            prefix: Directory path relative to the backend root.
+
+        Returns:
+            List of subdirectory paths relative to the backend root.
+            Returns an empty list if prefix does not exist.
+        """
+        ...
+
+    async def list_files(
+        self,
+        prefix: str,
+        suffixes: frozenset[str] | None = None,
+    ) -> list[FileInfo]:
+        """List direct-child files under prefix, optionally filtered by extension.
+
+        Args:
+            prefix: Directory path relative to the backend root.
+            suffixes: Optional set of lowercase extensions to include
+                (e.g. ``frozenset({".jpg", ".heic"})``).  When ``None``,
+                all direct-child files are returned.
 
         Returns:
             List of FileInfo objects with paths and version tokens.
