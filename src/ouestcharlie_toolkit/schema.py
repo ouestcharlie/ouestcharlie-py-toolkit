@@ -220,23 +220,19 @@ class ManifestSummary:
                     stat["missing"] = missing
                 stats[fdef.name] = stat
             elif fdef.summary_gps_bbox and fdef.type is FieldType.GPS_BOX:
-                values = [
-                    v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None
-                ]
-                if values:
-                    missing = len(entries) - len(values)
-                    lats = [v[0] for v in values]
-                    lons = [v[1] for v in values]
-                    gps_stat: dict[str, Any] = {
-                        "type": "gps_bbox",
-                        "minLat": min(lats),
-                        "maxLat": max(lats),
-                        "minLon": min(lons),
-                        "maxLon": max(lons),
-                    }
-                    if missing:
-                        gps_stat["missing"] = missing
-                    stats[fdef.name] = gps_stat
+                all_gps = [e.searchable.get(fdef.entry_attr) for e in entries]
+                lats = [v[0] for v in all_gps if v is not None and v[0] is not None]
+                lons = [v[1] for v in all_gps if v is not None and v[1] is not None]
+                if lats or lons:
+                    missing_lat = len(entries) - len(lats)
+                    missing_lon = len(entries) - len(lons)
+                    lat_stat: dict[str, Any] = {"min": min(lats), "max": max(lats)} if lats else {}
+                    lon_stat: dict[str, Any] = {"min": min(lons), "max": max(lons)} if lons else {}
+                    if missing_lat:
+                        lat_stat["missing"] = missing_lat
+                    if missing_lon:
+                        lon_stat["missing"] = missing_lon
+                    stats[fdef.name] = {"type": "gps_bbox", "lat": lat_stat, "lon": lon_stat}
         return cls(path=partition, photo_count=len(entries), _stats=stats)
 
     def __getattr__(self, name: str) -> Any:
@@ -482,16 +478,15 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
             if hex_val:
                 stats[fd.name] = {"type": "bloom", "value": bytes.fromhex(hex_val)}
         elif fd.summary_gps_bbox and fd.type is FieldType.GPS_BOX:
-            parsed = {
-                "type": "gps_bbox",
-                "minLat": stat.get("minLat"),
-                "maxLat": stat.get("maxLat"),
-                "minLon": stat.get("minLon"),
-                "maxLon": stat.get("maxLon"),
-            }
-            if stat.get("missing"):
-                parsed["missing"] = stat["missing"]
-            stats[fd.name] = parsed
+            raw_lat = stat.get("lat", {})
+            raw_lon = stat.get("lon", {})
+            parsed_lat: dict[str, Any] = {"min": raw_lat.get("min"), "max": raw_lat.get("max")}
+            if raw_lat.get("missing"):
+                parsed_lat["missing"] = raw_lat["missing"]
+            parsed_lon: dict[str, Any] = {"min": raw_lon.get("min"), "max": raw_lon.get("max")}
+            if raw_lon.get("missing"):
+                parsed_lon["missing"] = raw_lon["missing"]
+            stats[fd.name] = {"type": "gps_bbox", "lat": parsed_lat, "lon": parsed_lon}
     hashes_stat = d.get("hashes")
     if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
         stats["hashes"] = {

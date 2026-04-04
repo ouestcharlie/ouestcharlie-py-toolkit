@@ -417,14 +417,34 @@ def test_from_photos_missing_count_for_int_range() -> None:
 
 
 def test_from_photos_missing_count_for_gps() -> None:
-    """Photos with None GPS are counted in 'missing'."""
+    """Photos with None GPS are counted in 'missing' for both lat and lon."""
     entries = [
         _entry({"gps": (48.85, 2.35)}),
         _entry({"gps": None}),
         _entry({}),
     ]
     summary = ManifestSummary.from_photos("p", entries)
-    assert summary.gps["missing"] == 2
+    assert summary.gps["lat"]["missing"] == 2
+    assert summary.gps["lon"]["missing"] == 2
+
+
+def test_from_photos_gps_missing_counted_per_axis() -> None:
+    """lat and lon missing counts are independent when one component is None."""
+    entries = [
+        _entry({"gps": (48.85, 2.35)}),  # both present
+        _entry({"gps": (43.3, None)}),  # lat present, lon missing
+        _entry({"gps": (None, 5.37)}),  # lon present, lat missing
+        _entry({"gps": None}),  # both missing
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    # lat: entries 1 and 3 have a lat value → 2 missing (entries 2 and 3)
+    assert summary.gps["lat"]["min"] == 43.3
+    assert summary.gps["lat"]["max"] == 48.85
+    assert summary.gps["lat"]["missing"] == 2
+    # lon: entries 1 and 2 have a lon value → 2 missing (entries 2 and 3)
+    assert summary.gps["lon"]["min"] == 2.35
+    assert summary.gps["lon"]["max"] == 5.37
+    assert summary.gps["lon"]["missing"] == 2
 
 
 def test_from_photos_no_stat_when_all_missing() -> None:
