@@ -101,8 +101,11 @@ class LocalBackend:
     def _resolve(self, path: str) -> Path:
         """Resolve a relative path to an absolute path within the root."""
         full_path = (self.root / path).resolve()
-        # Security check: ensure the resolved path is within root
-        if not str(full_path).startswith(str(self.root)):
+        # Security check: ensure the resolved path is within root.
+        # Use is_relative_to rather than str.startswith so that case
+        # differences on Windows (case-insensitive filesystem) are handled
+        # correctly by pathlib.
+        if not full_path.is_relative_to(self.root):
             raise ValueError(f"Path escapes backend root: {path}")
         return full_path
 
