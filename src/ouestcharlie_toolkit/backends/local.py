@@ -106,7 +106,9 @@ class LocalBackend:
         # differences on Windows (case-insensitive filesystem) are handled
         # correctly by pathlib.
         if not full_path.is_relative_to(self.root):
-            raise ValueError(f"Path escapes backend root: {path}")
+            raise ValueError(
+                f"Path '{path}' escapes backend root '{self.root}' when resolved as '{full_path} "
+            )
         return full_path
 
     async def read(self, path: str) -> tuple[bytes, VersionToken]:

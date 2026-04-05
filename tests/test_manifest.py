@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -269,8 +270,10 @@ async def test_read_summary_roundtrip(store: ManifestStore) -> None:
 
 @pytest.mark.asyncio
 async def test_write_summary_conflict_raises(store: ManifestStore) -> None:
-    await store.create_summary(_summary_with())
-    summary, version = await store.read_summary()
+    summary = _summary_with()
+    version = await store.create_summary(summary)
+    # Force some delay
+    await asyncio.sleep(0.001)
     await store.write_summary(summary, version)
     with pytest.raises(VersionConflictError):
         await store.write_summary(summary, version)

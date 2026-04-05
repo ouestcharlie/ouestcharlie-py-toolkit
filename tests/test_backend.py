@@ -1,5 +1,7 @@
 """Test backend configuration and utilities."""
 
+import asyncio
+import os
 import tempfile
 from pathlib import Path
 
@@ -7,7 +9,7 @@ import pytest
 
 from ouestcharlie_toolkit.backend import backend_from_config
 from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.schema import ConfigurationError
+from ouestcharlie_toolkit.schema import ConfigurationError, VersionConflictError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -160,8 +162,6 @@ async def test_read_returns_content_and_version() -> None:
 @pytest.mark.asyncio
 async def test_read_version_matches_mtime() -> None:
     """read version token value equals the file's st_mtime_ns."""
-    import os
-
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "a.txt"
         path.write_bytes(b"x")
@@ -197,8 +197,6 @@ async def test_write_new_creates_file() -> None:
 @pytest.mark.asyncio
 async def test_write_new_returns_version() -> None:
     """write_new returns a VersionToken whose value matches the new file's mtime."""
-    import os
-
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=tmpdir)
         version = await backend.write_new("out.txt", b"x")
@@ -233,8 +231,6 @@ async def test_write_new_raises_if_exists() -> None:
 @pytest.mark.asyncio
 async def test_write_conditional_updates_file() -> None:
     """write_conditional overwrites the file when version matches."""
-    import asyncio
-
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=tmpdir)
         version = await backend.write_new("f.txt", b"v1")
@@ -247,8 +243,6 @@ async def test_write_conditional_updates_file() -> None:
 @pytest.mark.asyncio
 async def test_write_conditional_returns_new_version() -> None:
     """write_conditional returns a fresh version token after the write."""
-    import os
-
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=tmpdir)
         v1 = await backend.write_new("f.txt", b"a")
@@ -260,10 +254,6 @@ async def test_write_conditional_returns_new_version() -> None:
 @pytest.mark.asyncio
 async def test_write_conditional_raises_on_version_conflict() -> None:
     """write_conditional raises VersionConflictError when version is stale."""
-    import asyncio
-
-    from ouestcharlie_toolkit.schema import VersionConflictError
-
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=tmpdir)
         v1 = await backend.write_new("f.txt", b"original")
@@ -347,8 +337,6 @@ def test_resolve_rejects_path_traversal() -> None:
 @pytest.mark.asyncio
 async def test_write_new_concurrent_only_one_succeeds() -> None:
     """When N coroutines race to write_new the same path, exactly one succeeds."""
-    import asyncio
-
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=tmpdir)
         results = await asyncio.gather(
@@ -379,10 +367,6 @@ async def test_write_conditional_concurrent_serialised() -> None:
       exceptions, no silent corruption).
     - The file on disk contains a coherent payload from exactly one writer.
     """
-    import asyncio
-
-    from ouestcharlie_toolkit.schema import VersionConflictError
-
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=tmpdir)
         version = await backend.write_new("shared.txt", b"init")
