@@ -196,7 +196,7 @@ class LocalBackend:
         if not prefix_path.exists():
             return []
 
-        return [str(p.relative_to(self.root)) for p in prefix_path.iterdir() if p.is_dir()]
+        return [p.relative_to(self.root).as_posix() for p in prefix_path.iterdir() if p.is_dir()]
 
     async def list_files(
         self,
@@ -227,7 +227,7 @@ class LocalBackend:
                         stat = file_path.stat()
                         results.append(
                             FileInfo(
-                                path=str(relative),
+                                path=relative.as_posix(),
                                 version=VersionToken(stat.st_mtime_ns),
                             )
                         )

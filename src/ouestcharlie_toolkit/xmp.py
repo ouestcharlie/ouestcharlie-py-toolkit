@@ -131,7 +131,7 @@ def xmp_path_for(photo_path: str) -> str:
         Path to the XMP sidecar (e.g., "2024/2024-07/IMG_001.xmp").
     """
     p = Path(photo_path)
-    return str(p.with_suffix(".xmp"))
+    return p.with_suffix(".xmp").as_posix()
 
 
 # ---------------------------------------------------------------------------
