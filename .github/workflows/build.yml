@@ -44,7 +44,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - uses: astral-sh/setup-uv@v6
 
@@ -87,6 +87,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install nasm inih
+
+      - name: Install nasm (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Install nasm (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install nasm -y --no-progress
+
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo test
         working-directory: image-proc
@@ -99,7 +113,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install hatch
         run: pip install hatch
       - name: Build sdist
