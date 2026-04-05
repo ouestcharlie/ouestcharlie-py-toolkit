@@ -73,6 +73,25 @@ jobs:
           name: wheel-${{ matrix.os }}
           path: dist/*.whl
 
+  test-rust:
+    name: Rust unit tests (image-proc)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+          - os: macos-latest
+          - os: ubuntu-22.04
+          - os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        working-directory: image-proc
+        run: cargo test
+
   build-sdist:
     name: Build source distribution
     runs-on: ubuntu-22.04

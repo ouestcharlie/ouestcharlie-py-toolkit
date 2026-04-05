@@ -10,7 +10,7 @@ name = "ouestcharlie-py-toolkit"
 version = "0.1.1"
 description = "Shared Python toolkit for OuEstCharlie agents"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE*"]
 authors = [
@@ -44,7 +44,7 @@ packages = ["src/ouestcharlie_toolkit"]
 artifacts = ["src/ouestcharlie_toolkit/bin/*"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
@@ -55,5 +55,5 @@ asyncio_mode = "strict"
 tmp_path_retention_policy = "none"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true

@@ -220,13 +220,13 @@ class LocalBackend:
         loop = asyncio.get_event_loop()
 
         # Build one glob pattern per suffix (or a single catch-all).
-        # Non-recursive patterns (*ext) let the OS skip subdirectories entirely.
+        # case_sensitive=False ensures .JPG matches ".jpg" on POSIX filesystems.
         patterns = [f"*{s}" for s in suffixes] if suffixes else ["*"]
 
         def _list_files() -> list[FileInfo]:
             results = []
             for pattern in patterns:
-                for file_path in prefix_path.glob(pattern):
+                for file_path in prefix_path.glob(pattern, case_sensitive=False):
                     if file_path.is_file():
                         relative = file_path.relative_to(self.root)
                         stat = file_path.stat()

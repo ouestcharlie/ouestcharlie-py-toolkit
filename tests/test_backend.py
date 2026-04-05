@@ -126,6 +126,19 @@ async def test_list_files_with_suffixes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_files_suffixes_case_insensitive() -> None:
+    """list_files matches suffixes case-insensitively (e.g. .jpg matches PHOTO.JPG)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "PHOTO.JPG").write_bytes(b"\xff\xd8\xff\xd9")
+        (Path(tmpdir) / "lower.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+        (Path(tmpdir) / "notes.txt").write_text("hello")
+        backend = LocalBackend(root=tmpdir)
+        files = await backend.list_files("", frozenset({".jpg"}))
+        paths = {f.path for f in files}
+        assert paths == {"PHOTO.JPG", "lower.jpg"}
+
+
+@pytest.mark.asyncio
 async def test_list_files_empty_dir() -> None:
     """list_files on an empty directory returns an empty list."""
     with tempfile.TemporaryDirectory() as tmpdir:
