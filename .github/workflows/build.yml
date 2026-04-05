@@ -59,8 +59,8 @@ jobs:
       - name: Install wheel and run tests
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
         run: |
-          uv pip install dist/*.whl pytest pytest-asyncio
-          uv run pytest tests/ -v
+          uv pip install --system dist/*.whl pytest pytest-asyncio
+          uv run --system pytest tests/ -v
 
       - name: Repair wheel (Linux — retag linux_x86_64 → manylinux)
         if: runner.os == 'Linux'
