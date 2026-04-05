@@ -139,8 +139,14 @@ async def test_write_leaf_returns_new_version(store: ManifestStore) -> None:
 
 @pytest.mark.asyncio
 async def test_write_leaf_conflict_raises(store: ManifestStore) -> None:
+    import asyncio
+
     await store.create_leaf(_leaf())
     manifest, version = await store.read_leaf("2024/2024-07")
+
+    # Brief pause so the next write lands on a different mtime tick even on
+    # coarse-resolution filesystems (e.g. tmpfs in CI).
+    await asyncio.sleep(0.01)
 
     # Simulate a concurrent write that advances the version.
     await store.write_leaf(manifest, version)

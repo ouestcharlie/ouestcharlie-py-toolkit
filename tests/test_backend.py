@@ -257,11 +257,16 @@ async def test_write_conditional_returns_new_version() -> None:
 @pytest.mark.asyncio
 async def test_write_conditional_raises_on_version_conflict() -> None:
     """write_conditional raises VersionConflictError when version is stale."""
+    import asyncio
+
     from ouestcharlie_toolkit.schema import VersionConflictError
 
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=str(tmpdir))
         v1 = await backend.write_new("f.txt", b"original")
+        # Brief pause so the next write lands on a different mtime tick even
+        # on coarse-resolution filesystems (e.g. tmpfs in CI).
+        await asyncio.sleep(0.01)
         # Advance the file so v1 is stale
         await backend.write_conditional("f.txt", b"updated", v1)
         with pytest.raises(VersionConflictError):
