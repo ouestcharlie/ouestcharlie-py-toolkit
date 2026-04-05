@@ -139,3 +139,250 @@ async def test_list_files_nonexistent_prefix() -> None:
         backend = LocalBackend(root=str(tmpdir))
         files = await backend.list_files("does_not_exist")
         assert files == []
+
+
+# ---------------------------------------------------------------------------
+# LocalBackend.read
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_returns_content_and_version() -> None:
+    """read returns the file bytes and a non-None version token."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "a.txt").write_bytes(b"hello")
+        backend = LocalBackend(root=str(tmpdir))
+        data, version = await backend.read("a.txt")
+        assert data == b"hello"
+        assert version.value is not None
+
+
+@pytest.mark.asyncio
+async def test_read_version_matches_mtime() -> None:
+    """read version token value equals the file's st_mtime_ns."""
+    import os
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "a.txt"
+        path.write_bytes(b"x")
+        expected_mtime = os.stat(path).st_mtime_ns
+        backend = LocalBackend(root=str(tmpdir))
+        _, version = await backend.read("a.txt")
+        assert version.value == expected_mtime
+
+
+@pytest.mark.asyncio
+async def test_read_missing_file_raises() -> None:
+    """read raises FileNotFoundError for a missing file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        with pytest.raises(FileNotFoundError):
+            await backend.read("no_such_file.txt")
+
+
+# ---------------------------------------------------------------------------
+# LocalBackend.write_new
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_new_creates_file() -> None:
+    """write_new creates the file with the given content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        await backend.write_new("out.txt", b"created")
+        assert (Path(tmpdir) / "out.txt").read_bytes() == b"created"
+
+
+@pytest.mark.asyncio
+async def test_write_new_returns_version() -> None:
+    """write_new returns a VersionToken whose value matches the new file's mtime."""
+    import os
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        version = await backend.write_new("out.txt", b"x")
+        expected = os.stat(Path(tmpdir) / "out.txt").st_mtime_ns
+        assert version.value == expected
+
+
+@pytest.mark.asyncio
+async def test_write_new_creates_parent_dirs() -> None:
+    """write_new creates intermediate directories as needed."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        await backend.write_new("a/b/c.txt", b"deep")
+        assert (Path(tmpdir) / "a" / "b" / "c.txt").read_bytes() == b"deep"
+
+
+@pytest.mark.asyncio
+async def test_write_new_raises_if_exists() -> None:
+    """write_new raises FileExistsError if the file already exists."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "existing.txt").write_bytes(b"old")
+        backend = LocalBackend(root=str(tmpdir))
+        with pytest.raises(FileExistsError):
+            await backend.write_new("existing.txt", b"new")
+
+
+# ---------------------------------------------------------------------------
+# LocalBackend.write_conditional
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_updates_file() -> None:
+    """write_conditional overwrites the file when version matches."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        version = await backend.write_new("f.txt", b"v1")
+        new_version = await backend.write_conditional("f.txt", b"v2", version)
+        assert (Path(tmpdir) / "f.txt").read_bytes() == b"v2"
+        assert new_version.value != version.value
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_returns_new_version() -> None:
+    """write_conditional returns a fresh version token after the write."""
+    import os
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        v1 = await backend.write_new("f.txt", b"a")
+        v2 = await backend.write_conditional("f.txt", b"b", v1)
+        actual_mtime = os.stat(Path(tmpdir) / "f.txt").st_mtime_ns
+        assert v2.value == actual_mtime
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_raises_on_version_conflict() -> None:
+    """write_conditional raises VersionConflictError when version is stale."""
+    from ouestcharlie_toolkit.schema import VersionConflictError
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        v1 = await backend.write_new("f.txt", b"original")
+        # Advance the file so v1 is stale
+        await backend.write_conditional("f.txt", b"updated", v1)
+        with pytest.raises(VersionConflictError):
+            await backend.write_conditional("f.txt", b"conflict", v1)
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_read_version_is_consistent() -> None:
+    """Version returned by read matches what write_conditional expects."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        await backend.write_new("f.txt", b"init")
+        _, version = await backend.read("f.txt")
+        # Should succeed — version came from read, so it must be consistent
+        await backend.write_conditional("f.txt", b"updated", version)
+        data, _ = await backend.read("f.txt")
+        assert data == b"updated"
+
+
+# ---------------------------------------------------------------------------
+# LocalBackend.exists / delete
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exists_true_for_existing_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "a.txt").write_bytes(b"x")
+        backend = LocalBackend(root=str(tmpdir))
+        assert await backend.exists("a.txt") is True
+
+
+@pytest.mark.asyncio
+async def test_exists_false_for_missing_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        assert await backend.exists("no_such.txt") is False
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "bye.txt").write_bytes(b"x")
+        backend = LocalBackend(root=str(tmpdir))
+        await backend.delete("bye.txt")
+        assert not (Path(tmpdir) / "bye.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_raises_for_missing_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        with pytest.raises(FileNotFoundError):
+            await backend.delete("no_such.txt")
+
+
+# ---------------------------------------------------------------------------
+# Path traversal guard
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_rejects_path_traversal() -> None:
+    """_resolve must not allow paths that escape the backend root."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        with pytest.raises(ValueError, match="escapes"):
+            backend._resolve("../../etc/passwd")
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: write_new — only one winner under concurrent callers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_new_concurrent_only_one_succeeds() -> None:
+    """When N coroutines race to write_new the same path, exactly one succeeds."""
+    import asyncio
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        results = await asyncio.gather(
+            *[backend.write_new("race.txt", f"writer-{i}".encode()) for i in range(10)],
+            return_exceptions=True,
+        )
+        successes = [r for r in results if not isinstance(r, Exception)]
+        errors = [r for r in results if isinstance(r, FileExistsError)]
+        assert len(successes) == 1
+        assert len(errors) == 9
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: write_conditional — stale writers get VersionConflictError
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_concurrent_serialised() -> None:
+    """Concurrent write_conditional on the same file: all succeed sequentially
+    or raise VersionConflictError — no data corruption, no silent overwrites."""
+    import asyncio
+
+    from ouestcharlie_toolkit.schema import VersionConflictError
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=str(tmpdir))
+        version = await backend.write_new("shared.txt", b"init")
+
+        # 10 coroutines all try to write with the same (now stale after first
+        # succeeds) version.  Exactly one must win; the rest raise conflict.
+        async def try_write(i: int):
+            return await backend.write_conditional("shared.txt", f"writer-{i}".encode(), version)
+
+        results = await asyncio.gather(
+            *[try_write(i) for i in range(10)],
+            return_exceptions=True,
+        )
+        successes = [r for r in results if not isinstance(r, Exception)]
+        conflicts = [r for r in results if isinstance(r, VersionConflictError)]
+        assert len(successes) == 1
+        assert len(conflicts) == 9
+        # The file on disk must contain exactly one writer's payload
+        content = (Path(tmpdir) / "shared.txt").read_bytes()
+        assert content.startswith(b"writer-")

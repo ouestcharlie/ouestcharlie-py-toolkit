@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: "Run unit tests after building"
+        type: boolean
+        default: true
 
 jobs:
   build-wheel:
@@ -40,13 +46,21 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: astral-sh/setup-uv@v6
+
       - name: Install build tools
-        run: pip install hatch auditwheel
+        run: uv pip install --system hatch auditwheel
 
       - name: Build wheel
         run: hatch build --target wheel
         env:
           IMAGE_PROC_FEATURE_RAW: "1"
+
+      - name: Install wheel and run tests
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
+        run: |
+          uv pip install dist/*.whl pytest pytest-asyncio
+          uv run pytest tests/ -v
 
       - name: Repair wheel (Linux — retag linux_x86_64 → manylinux)
         if: runner.os == 'Linux'

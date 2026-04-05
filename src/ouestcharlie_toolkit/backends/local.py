@@ -3,11 +3,78 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
+import sys
 import threading
 from pathlib import Path
 
 from ..schema import FileInfo, VersionConflictError, VersionToken
+
+# ---------------------------------------------------------------------------
+# Platform-specific cross-process locking
+# ---------------------------------------------------------------------------
+# Two separate class bodies — one per platform — so each branch only
+# references imports that are statically available on that platform.
+# Pyright evaluates sys.platform checks statically, so this avoids false
+# "attribute not found on None" errors from the try/except-import pattern.
+
+if sys.platform == "win32":
+    import msvcrt as _msvcrt
+
+    class _CrossProcessLock:
+        """Exclusive cross-process lock on a sidecar ``.lock`` file (Windows).
+
+        Uses ``msvcrt.locking(LK_LOCK, 1)`` which spin-waits up to 10 s on
+        1 byte at position 0 of the lock file, then raises ``OSError``.
+        ``msvcrt.locking`` is per-process, so the caller must also hold a
+        ``threading.Lock`` to serialise threads within the same process.
+        """
+
+        def __init__(self, lock_path: Path) -> None:
+            self._lock_path = lock_path
+            self._fd = None
+
+        def __enter__(self) -> _CrossProcessLock:
+            self._fd = open(self._lock_path, "a")  # noqa: SIM115
+            self._fd.flush()
+            _msvcrt.locking(self._fd.fileno(), _msvcrt.LK_LOCK, 1)
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            self._fd.seek(0)
+            _msvcrt.locking(self._fd.fileno(), _msvcrt.LK_UNLCK, 1)
+            self._fd.close()
+            self._fd = None
+
+else:
+    import fcntl as _fcntl
+    from typing import IO
+
+    class _CrossProcessLock:  # type: ignore[no-redef]
+        """Exclusive cross-process lock on a sidecar ``.lock`` file (POSIX).
+
+        Uses ``fcntl.flock(LOCK_EX)`` held on the open fd.
+
+        - **macOS/BSD:** ``flock`` is per-process and does *not* serialise
+          threads within the same process — the caller must also hold a
+          ``threading.Lock``.
+        - **Linux:** ``flock`` is per open-file-description, so it does
+          serialise threads; the ``threading.Lock`` is redundant but harmless.
+        """
+
+        def __init__(self, lock_path: Path) -> None:
+            self._lock_path = lock_path
+            self._fd: IO[str] | None = None
+
+        def __enter__(self) -> _CrossProcessLock:
+            self._fd = open(self._lock_path, "a")  # noqa: SIM115
+            _fcntl.flock(self._fd, _fcntl.LOCK_EX)
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            assert self._fd is not None
+            _fcntl.flock(self._fd, _fcntl.LOCK_UN)
+            self._fd.close()
+            self._fd = None
 
 
 class LocalBackend:
@@ -21,7 +88,9 @@ class LocalBackend:
         """
         self.root = Path(root).resolve()
         # Per-path threading locks for intra-process thread safety.
-        # flock alone is per-process on macOS/BSD and does not serialize threads.
+        # On macOS/BSD, flock alone is per-process and does not serialise
+        # threads within the same process.  On Windows, msvcrt.locking is
+        # similarly per-process.  The threading lock fills that gap on both.
         self._thread_locks: dict[str, threading.Lock] = {}
         self._thread_locks_mutex = threading.Lock()
         if not self.root.exists():
@@ -73,11 +142,12 @@ class LocalBackend:
         """Write file using atomic rename, checking mtime version first.
 
         Holds both a per-path ``threading.Lock`` (intra-process thread safety)
-        and an exclusive ``fcntl.flock`` on a ``<path>.lock`` sidecar
+        and an exclusive ``_CrossProcessLock`` on a ``<path>.lock`` sidecar
         (cross-process safety) for the duration of stat-check + write.
 
-        ``flock`` alone is per-process on macOS/BSD so it does not serialize
-        threads within the same process — the threading lock fills that gap.
+        On macOS/BSD, ``flock`` is per-process and does not serialise threads
+        within the same process — the threading lock fills that gap.
+        On Windows, ``msvcrt.locking`` is similarly per-process.
         """
         full_path = self._resolve(path)
         tmp_path = full_path.with_suffix(full_path.suffix + ".tmp")
@@ -86,19 +156,13 @@ class LocalBackend:
         thread_lock = self._get_thread_lock(path)
 
         def _locked_check_and_write() -> int:
-            with thread_lock, open(lock_path, "a") as lock_fd:  # noqa: SIM115
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
-                try:
-                    current_mtime = full_path.stat().st_mtime_ns
-                    if current_mtime != expected_version.value:
-                        raise VersionConflictError(
-                            path, expected_version, VersionToken(current_mtime)
-                        )
-                    tmp_path.write_bytes(data)
-                    tmp_path.replace(full_path)
-                    return full_path.stat().st_mtime_ns
-                finally:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            with thread_lock, _CrossProcessLock(lock_path):
+                current_mtime = full_path.stat().st_mtime_ns
+                if current_mtime != expected_version.value:
+                    raise VersionConflictError(path, expected_version, VersionToken(current_mtime))
+                tmp_path.write_bytes(data)
+                tmp_path.replace(full_path)
+                return full_path.stat().st_mtime_ns
 
         loop = asyncio.get_event_loop()
         new_mtime = await loop.run_in_executor(None, _locked_check_and_write)
