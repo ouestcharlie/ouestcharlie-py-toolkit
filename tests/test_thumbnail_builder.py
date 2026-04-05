@@ -266,10 +266,10 @@ async def test_call_image_proc_photo_order_in_grid(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_generate_partition_thumbnails_returns_chunks(tmp_path: Path) -> None:
-    backend = LocalBackend(root=str(tmp_path))
+    backend = LocalBackend(root=tmp_path)
     photos = [
-        _fake_photo_entry("b.jpg", "sha256:" + "bb" * 32),
-        _fake_photo_entry("a.jpg", "sha256:" + "aa" * 32),
+        _fake_photo_entry("b.jpg", "bb" * 32),
+        _fake_photo_entry("a.jpg", "aa" * 32),
     ]
 
     fake_grid = ThumbnailGridLayout(cols=2, rows=1, tile_size=256, photo_order=[])
@@ -301,8 +301,8 @@ async def test_generate_partition_thumbnails_returns_chunks(tmp_path: Path) -> N
 async def test_generate_partition_thumbnails_writes_avif_to_backend(
     tmp_path: Path,
 ) -> None:
-    backend = LocalBackend(root=str(tmp_path))
-    photos = [_fake_photo_entry("a.jpg", "sha256:" + "aa" * 32)]
+    backend = LocalBackend(root=tmp_path)
+    photos = [_fake_photo_entry("a.jpg", "aa" * 32)]
     fake_grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=[])
 
     with (
@@ -329,11 +329,11 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(
     tmp_path: Path,
 ) -> None:
     """Photos passed to _stage_photos must be sorted by content_hash."""
-    backend = LocalBackend(root=str(tmp_path))
+    backend = LocalBackend(root=tmp_path)
     photos = [
-        _fake_photo_entry("z.jpg", "sha256:" + "zz" * 32),
-        _fake_photo_entry("a.jpg", "sha256:" + "aa" * 32),
-        _fake_photo_entry("m.jpg", "sha256:" + "mm" * 32),
+        _fake_photo_entry("z.jpg", "zz" * 32),
+        _fake_photo_entry("a.jpg", "aa" * 32),
+        _fake_photo_entry("m.jpg", "mm" * 32),
     ]
 
     captured_entries: list[list] = []
@@ -369,8 +369,8 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(
 @pytest.mark.asyncio
 async def test_generate_partition_thumbnails_uses_tier_size(tmp_path: Path) -> None:
     """The tile_size passed to _call_image_proc must match the requested tier."""
-    backend = LocalBackend(root=str(tmp_path))
-    photos = [_fake_photo_entry("a.jpg", "sha256:" + "aa" * 32)]
+    backend = LocalBackend(root=tmp_path)
+    photos = [_fake_photo_entry("a.jpg", "aa" * 32)]
 
     sizes_seen: list[int] = []
 
@@ -400,12 +400,10 @@ async def test_generate_partition_thumbnails_uses_tier_size(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_generate_partition_thumbnails_photo_order_in_grid(
-    tmp_path: Path,
-) -> None:
+async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path) -> None:
     """photo_order in the returned chunk grid must contain all content hashes, sorted."""
-    backend = LocalBackend(root=str(tmp_path))
-    hashes = ["sha256:" + "cc" * 32, "sha256:" + "aa" * 32, "sha256:" + "bb" * 32]
+    backend = LocalBackend(root=tmp_path)
+    hashes = ["cc" * 32, "aa" * 32, "bb" * 32]
     photos = [_fake_photo_entry(f"p{i}.jpg", h) for i, h in enumerate(hashes)]
     staged = [
         {"path": "/tmp/x", "ext": ".jpg", "orientation": 1, "content_hash": h}
@@ -439,10 +437,8 @@ async def test_generate_partition_thumbnails_photo_order_in_grid(
 @pytest.mark.asyncio
 async def test_generate_partition_thumbnails_splits_into_chunks(tmp_path: Path) -> None:
     """More than GRID_MAX_PHOTOS photos must produce multiple chunks."""
-    backend = LocalBackend(root=str(tmp_path))
-    photos = [
-        _fake_photo_entry(f"p{i}.jpg", f"sha256:{i:064x}") for i in range(GRID_MAX_PHOTOS + 1)
-    ]
+    backend = LocalBackend(root=tmp_path)
+    photos = [_fake_photo_entry(f"p{i}.jpg", f"{i:064x}") for i in range(GRID_MAX_PHOTOS + 1)]
 
     call_count = 0
 

@@ -28,7 +28,7 @@ from ouestcharlie_toolkit.schema import (
 
 @pytest.fixture()
 def backend(tmp_path: Path) -> LocalBackend:
-    return LocalBackend(root=str(tmp_path))
+    return LocalBackend(root=tmp_path)
 
 
 @pytest.fixture()
