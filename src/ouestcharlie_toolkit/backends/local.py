@@ -102,12 +102,23 @@ class LocalBackend:
         """Resolve a relative path to an absolute path within the root."""
         full_path = (self.root / path).resolve()
         # Security check: ensure the resolved path is within root.
-        # Use is_relative_to rather than str.startswith so that case
-        # differences on Windows (case-insensitive filesystem) are handled
-        # correctly by pathlib.
-        if not full_path.is_relative_to(self.root):
+        # On Windows, Path.resolve() may add a \\?\ extended-length prefix to
+        # longer paths even when the shorter root path was resolved without it.
+        # Strip that prefix on both sides so is_relative_to works reliably
+        # regardless of total path length.  Case differences are still handled
+        # correctly by pathlib on case-insensitive filesystems.
+        root_check = self.root
+        full_check = full_path
+        if sys.platform == "win32":
+            r = str(root_check)
+            if r.startswith("\\\\?\\"):
+                root_check = Path(r[4:])
+            f = str(full_check)
+            if f.startswith("\\\\?\\"):
+                full_check = Path(f[4:])
+        if not full_check.is_relative_to(root_check):
             raise ValueError(
-                f"Path '{path}' escapes backend root '{self.root}' when resolved as '{full_path} "
+                f"Path '{path}' escapes backend root '{self.root}' when resolved as '{full_path}'"
             )
         return full_path
 
