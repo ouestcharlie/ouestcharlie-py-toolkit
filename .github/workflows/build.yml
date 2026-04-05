@@ -51,6 +51,10 @@ jobs:
       - name: Install build tools
         run: uv pip install --system hatch auditwheel
 
+      - name: Rust unit tests (image-proc)
+        working-directory: image-proc
+        run: cargo test
+
       - name: Build wheel
         run: hatch build --target wheel
         env:
@@ -72,39 +76,6 @@ jobs:
         with:
           name: wheel-${{ matrix.os }}
           path: dist/*.whl
-
-  test-rust:
-    name: Rust unit tests (image-proc)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15-intel
-          - os: macos-latest
-          - os: ubuntu-22.04
-          - os: windows-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install system deps (macOS)
-        if: runner.os == 'macOS'
-        run: brew install nasm inih
-
-      - name: Install nasm (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y nasm
-
-      - name: Install nasm (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: choco install nasm -y --no-progress
-
-      - uses: dtolnay/rust-toolchain@stable
-      - name: cargo test
-        working-directory: image-proc
-        run: cargo test
 
   build-sdist:
     name: Build source distribution
