@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
+import threading
 from pathlib import Path
 
 from ..schema import FileInfo, VersionConflictError, VersionToken
@@ -18,6 +20,10 @@ class LocalBackend:
             root: Root directory path for this backend.
         """
         self.root = Path(root).resolve()
+        # Per-path threading locks for intra-process thread safety.
+        # flock alone is per-process on macOS/BSD and does not serialize threads.
+        self._thread_locks: dict[str, threading.Lock] = {}
+        self._thread_locks_mutex = threading.Lock()
         if not self.root.exists():
             raise FileNotFoundError(f"Backend root does not exist: {self.root}")
         if not self.root.is_dir():
@@ -32,58 +38,92 @@ class LocalBackend:
         return full_path
 
     async def read(self, path: str) -> tuple[bytes, VersionToken]:
-        """Read file contents and its mtime version token."""
+        """Read file contents and its mtime version token.
+
+        Uses ``fstat()`` on the open file descriptor so that the version token
+        is guaranteed to correspond to exactly the bytes that were read.  If
+        ``read_bytes`` and ``stat`` were separate calls (with an asyncio
+        ``await`` in between), a concurrent writer could replace the file
+        between the two calls, producing a content/version mismatch that breaks
+        optimistic concurrency.
+        """
         full_path = self._resolve(path)
-        # Run blocking I/O in executor
+
+        def _read_with_fstat() -> tuple[bytes, int]:
+            import os
+
+            with open(full_path, "rb") as fd:
+                mtime_ns = os.fstat(fd.fileno()).st_mtime_ns
+                data = fd.read()
+            return data, mtime_ns
+
         loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, full_path.read_bytes)
-        stat = await loop.run_in_executor(None, full_path.stat)
-        return data, VersionToken(stat.st_mtime_ns)
+        data, mtime_ns = await loop.run_in_executor(None, _read_with_fstat)
+        return data, VersionToken(mtime_ns)
+
+    def _get_thread_lock(self, key: str) -> threading.Lock:
+        with self._thread_locks_mutex:
+            if key not in self._thread_locks:
+                self._thread_locks[key] = threading.Lock()
+            return self._thread_locks[key]
 
     async def write_conditional(
         self, path: str, data: bytes, expected_version: VersionToken
     ) -> VersionToken:
-        """Write file using atomic rename, checking mtime version first."""
+        """Write file using atomic rename, checking mtime version first.
+
+        Holds both a per-path ``threading.Lock`` (intra-process thread safety)
+        and an exclusive ``fcntl.flock`` on a ``<path>.lock`` sidecar
+        (cross-process safety) for the duration of stat-check + write.
+
+        ``flock`` alone is per-process on macOS/BSD so it does not serialize
+        threads within the same process — the threading lock fills that gap.
+        """
         full_path = self._resolve(path)
-
-        # Check version before write
-        loop = asyncio.get_event_loop()
-        stat = await loop.run_in_executor(None, full_path.stat)
-        current_mtime = stat.st_mtime_ns
-
-        if current_mtime != expected_version.value:
-            raise VersionConflictError(path, expected_version, VersionToken(current_mtime))
-
-        # Write to temp file, then atomic rename
         tmp_path = full_path.with_suffix(full_path.suffix + ".tmp")
+        lock_path = full_path.with_suffix(full_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        thread_lock = self._get_thread_lock(path)
 
-        await loop.run_in_executor(None, tmp_path.write_bytes, data)
-        await loop.run_in_executor(None, tmp_path.replace, full_path)
+        def _locked_check_and_write() -> int:
+            with thread_lock, open(lock_path, "a") as lock_fd:  # noqa: SIM115
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                try:
+                    current_mtime = full_path.stat().st_mtime_ns
+                    if current_mtime != expected_version.value:
+                        raise VersionConflictError(
+                            path, expected_version, VersionToken(current_mtime)
+                        )
+                    tmp_path.write_bytes(data)
+                    tmp_path.replace(full_path)
+                    return full_path.stat().st_mtime_ns
+                finally:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
-        # Return new mtime
-        new_stat = await loop.run_in_executor(None, full_path.stat)
-        return VersionToken(new_stat.st_mtime_ns)
+        loop = asyncio.get_event_loop()
+        new_mtime = await loop.run_in_executor(None, _locked_check_and_write)
+        return VersionToken(new_mtime)
 
     async def write_new(self, path: str, data: bytes) -> VersionToken:
-        """Write a new file, failing if it already exists."""
+        """Write a new file, failing if it already exists.
+
+        Uses O_CREAT|O_EXCL (``'xb'`` mode) so the existence check and the
+        file creation are a single atomic OS operation — no race between
+        concurrent callers.
+        """
         full_path = self._resolve(path)
-
-        if full_path.exists():
-            raise FileExistsError(f"File already exists: {path}")
-
-        # Ensure parent directory exists (parents=True, exist_ok=True).
-        # Note: run_in_executor only accepts positional args, so we use a lambda
-        # to pass keyword arguments correctly.
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None, lambda: full_path.parent.mkdir(parents=True, exist_ok=True)
         )
 
-        # Write the file
-        await loop.run_in_executor(None, full_path.write_bytes, data)
+        def _create_exclusive() -> int:
+            with open(full_path, "xb") as fd:
+                fd.write(data)
+            return full_path.stat().st_mtime_ns
 
-        stat = await loop.run_in_executor(None, full_path.stat)
-        return VersionToken(stat.st_mtime_ns)
+        mtime = await loop.run_in_executor(None, _create_exclusive)
+        return VersionToken(mtime)
 
     async def list_dirs(self, prefix: str) -> list[str]:
         """List immediate subdirectory paths under prefix."""
