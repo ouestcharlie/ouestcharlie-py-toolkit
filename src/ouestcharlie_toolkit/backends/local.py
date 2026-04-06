@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -187,11 +190,15 @@ class LocalBackend:
         return VersionToken(new_mtime)
 
     async def write_new(self, path: str, data: bytes) -> VersionToken:
-        """Write a new file, failing if it already exists.
+        """Write a new file atomically, failing if it already exists.
 
-        Uses O_CREAT|O_EXCL (``'xb'`` mode) so the existence check and the
-        file creation are a single atomic OS operation — no race between
-        concurrent callers.
+        Writes content to a unique tmp file first, then hard-links it to the
+        final path using O_CREAT|O_EXCL semantics (``os.link``).
+        This guarantees that concurrent readers never observe a partial write —
+        the file is either absent or fully written.
+
+        Raises:
+            FileExistsError: If the target path already exists.
         """
         full_path = self._resolve(path)
         loop = asyncio.get_event_loop()
@@ -200,8 +207,18 @@ class LocalBackend:
         )
 
         def _create_exclusive() -> int:
-            with open(full_path, "xb") as fd:
-                fd.write(data)
+            # Write data to a tmp file in the same directory so the link is
+            # guaranteed to stay on the same filesystem/volume.
+            fd, tmp = tempfile.mkstemp(dir=full_path.parent)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                # os.link raises FileExistsError if the target exists — same
+                # semantics as O_CREAT|O_EXCL but the file is already fully written.
+                os.link(tmp, full_path)
+            finally:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(tmp)
             return full_path.stat().st_mtime_ns
 
         mtime = await loop.run_in_executor(None, _create_exclusive)
