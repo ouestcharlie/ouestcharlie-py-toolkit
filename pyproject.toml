@@ -7,10 +7,10 @@ path = "hatch_build.py"
 
 [project]
 name = "ouestcharlie-py-toolkit"
-version = "0.1.0"
+version = "0.2.1"
 description = "Shared Python toolkit for OuEstCharlie agents"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE*"]
 authors = [
@@ -21,14 +21,16 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "mcp>=1.0",
+    "mcp>=1.27",
     "pyexiv2>=2.8",
     "blake3>=1.0.8",
+    "pyjwt>=2.12.0", # suggested by dependabot
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "mypy>=1.0",
+    "pre-commit>=4.5.1",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
@@ -42,8 +44,8 @@ packages = ["src/ouestcharlie_toolkit"]
 artifacts = ["src/ouestcharlie_toolkit/bin/*"]
 
 [tool.ruff]
-target-version = "py311"
-line-length = 88
+target-version = "py312"
+line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
@@ -53,5 +55,9 @@ asyncio_mode = "strict"
 tmp_path_retention_policy = "none"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
+
+[[tool.mypy.overrides]]
+module = "pyexiv2.*"
+ignore_missing_imports = true

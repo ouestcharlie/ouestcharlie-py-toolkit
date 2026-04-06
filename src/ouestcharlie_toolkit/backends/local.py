@@ -3,9 +3,81 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
+import sys
+import tempfile
+import threading
 from pathlib import Path
 
 from ..schema import FileInfo, VersionConflictError, VersionToken
+
+# ---------------------------------------------------------------------------
+# Platform-specific cross-process locking
+# ---------------------------------------------------------------------------
+# Two separate class bodies — one per platform — so each branch only
+# references imports that are statically available on that platform.
+# Pyright evaluates sys.platform checks statically, so this avoids false
+# "attribute not found on None" errors from the try/except-import pattern.
+
+if sys.platform == "win32":
+    import msvcrt as _msvcrt
+
+    class _CrossProcessLock:
+        """Exclusive cross-process lock on a sidecar ``.lock`` file (Windows).
+
+        Uses ``msvcrt.locking(LK_LOCK, 1)`` which spin-waits up to 10 s on
+        1 byte at position 0 of the lock file, then raises ``OSError``.
+        ``msvcrt.locking`` is per-process, so the caller must also hold a
+        ``threading.Lock`` to serialise threads within the same process.
+        """
+
+        def __init__(self, lock_path: Path) -> None:
+            self._lock_path = lock_path
+            self._fd = None
+
+        def __enter__(self) -> _CrossProcessLock:
+            self._fd = open(self._lock_path, "a")  # noqa: SIM115
+            self._fd.flush()
+            _msvcrt.locking(self._fd.fileno(), _msvcrt.LK_LOCK, 1)
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            self._fd.seek(0)
+            _msvcrt.locking(self._fd.fileno(), _msvcrt.LK_UNLCK, 1)
+            self._fd.close()
+            self._fd = None
+
+else:
+    import fcntl as _fcntl
+    from typing import IO
+
+    class _CrossProcessLock:  # type: ignore[no-redef]
+        """Exclusive cross-process lock on a sidecar ``.lock`` file (POSIX).
+
+        Uses ``fcntl.flock(LOCK_EX)`` held on the open fd.
+
+        - **macOS/BSD:** ``flock`` is per-process and does *not* serialise
+          threads within the same process — the caller must also hold a
+          ``threading.Lock``.
+        - **Linux:** ``flock`` is per open-file-description, so it does
+          serialise threads; the ``threading.Lock`` is redundant but harmless.
+        """
+
+        def __init__(self, lock_path: Path) -> None:
+            self._lock_path = lock_path
+            self._fd: IO[str] | None = None
+
+        def __enter__(self) -> _CrossProcessLock:
+            self._fd = open(self._lock_path, "a")  # noqa: SIM115
+            _fcntl.flock(self._fd, _fcntl.LOCK_EX)
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            assert self._fd is not None
+            _fcntl.flock(self._fd, _fcntl.LOCK_UN)
+            self._fd.close()
+            self._fd = None
 
 
 class LocalBackend:
@@ -18,6 +90,12 @@ class LocalBackend:
             root: Root directory path for this backend.
         """
         self.root = Path(root).resolve()
+        # Per-path threading locks for intra-process thread safety.
+        # On macOS/BSD, flock alone is per-process and does not serialise
+        # threads within the same process.  On Windows, msvcrt.locking is
+        # similarly per-process.  The threading lock fills that gap on both.
+        self._thread_locks: dict[str, threading.Lock] = {}
+        self._thread_locks_mutex = threading.Lock()
         if not self.root.exists():
             raise FileNotFoundError(f"Backend root does not exist: {self.root}")
         if not self.root.is_dir():
@@ -26,69 +104,141 @@ class LocalBackend:
     def _resolve(self, path: str) -> Path:
         """Resolve a relative path to an absolute path within the root."""
         full_path = (self.root / path).resolve()
-        # Security check: ensure the resolved path is within root
-        if not str(full_path).startswith(str(self.root)):
-            raise ValueError(f"Path escapes backend root: {path}")
+        # Security check: ensure the resolved path is within root.
+        # On Windows, Path.resolve() may add a \\?\ extended-length prefix to
+        # longer paths even when the shorter root path was resolved without it.
+        # Strip that prefix on both sides so is_relative_to works reliably
+        # regardless of total path length.  Case differences are still handled
+        # correctly by pathlib on case-insensitive filesystems.
+        root_check = self.root
+        full_check = full_path
+        if sys.platform == "win32":
+            r = str(root_check)
+            if r.startswith("\\\\?\\"):
+                root_check = Path(r[4:])
+            f = str(full_check)
+            if f.startswith("\\\\?\\"):
+                full_check = Path(f[4:])
+        if not full_check.is_relative_to(root_check):
+            raise ValueError(
+                f"Path '{path}' escapes backend root '{self.root}' when resolved as '{full_path}'"
+            )
         return full_path
 
     async def read(self, path: str) -> tuple[bytes, VersionToken]:
-        """Read file contents and its mtime version token."""
+        """Read file contents and its mtime version token.
+
+        Uses ``fstat()`` on the open file descriptor so that the version token
+        is guaranteed to correspond to exactly the bytes that were read.  If
+        ``read_bytes`` and ``stat`` were separate calls (with an asyncio
+        ``await`` in between), a concurrent writer could replace the file
+        between the two calls, producing a content/version mismatch that breaks
+        optimistic concurrency.
+        """
         full_path = self._resolve(path)
-        # Run blocking I/O in executor
+
+        def _read_with_fstat() -> tuple[bytes, int]:
+            import os
+
+            with open(full_path, "rb") as fd:
+                mtime_ns = os.fstat(fd.fileno()).st_mtime_ns
+                data = fd.read()
+            return data, mtime_ns
+
         loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, full_path.read_bytes)
-        stat = await loop.run_in_executor(None, full_path.stat)
-        return data, VersionToken(stat.st_mtime_ns)
+        data, mtime_ns = await loop.run_in_executor(None, _read_with_fstat)
+        return data, VersionToken(mtime_ns)
+
+    def _get_thread_lock(self, key: str) -> threading.Lock:
+        with self._thread_locks_mutex:
+            if key not in self._thread_locks:
+                self._thread_locks[key] = threading.Lock()
+            return self._thread_locks[key]
 
     async def write_conditional(
         self, path: str, data: bytes, expected_version: VersionToken
     ) -> VersionToken:
-        """Write file using atomic rename, checking mtime version first."""
+        """Write file using atomic rename, checking mtime version first.
+
+        Holds both a per-path ``threading.Lock`` (intra-process thread safety)
+        and an exclusive ``_CrossProcessLock`` on a ``<path>.lock`` sidecar
+        (cross-process safety) for the duration of stat-check + write.
+
+        On macOS/BSD, ``flock`` is per-process and does not serialise threads
+        within the same process — the threading lock fills that gap.
+        On Windows, ``msvcrt.locking`` is similarly per-process.
+        """
         full_path = self._resolve(path)
+        lock_path = full_path.with_suffix(full_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        thread_lock = self._get_thread_lock(path)
 
-        # Check version before write
+        def _locked_check_and_write() -> int:
+            # Unique tmp path per call avoids Windows name-pending-deletion
+            # races when multiple threads share the same base tmp path.
+            tmp_path = full_path.with_suffix(f".{threading.get_ident()}.tmp")
+            with thread_lock, _CrossProcessLock(lock_path):
+                current_mtime = full_path.stat().st_mtime_ns
+                if current_mtime != expected_version.value:
+                    raise VersionConflictError(path, expected_version, VersionToken(current_mtime))
+                tmp_path.write_bytes(data)
+                tmp_path.replace(full_path)
+                return full_path.stat().st_mtime_ns
+
         loop = asyncio.get_event_loop()
-        stat = await loop.run_in_executor(None, full_path.stat)
-        current_mtime = stat.st_mtime_ns
-
-        if current_mtime != expected_version.value:
-            raise VersionConflictError(
-                path, expected_version, VersionToken(current_mtime)
-            )
-
-        # Write to temp file, then atomic rename
-        tmp_path = full_path.with_suffix(full_path.suffix + ".tmp")
-
-        await loop.run_in_executor(None, tmp_path.write_bytes, data)
-        await loop.run_in_executor(None, tmp_path.replace, full_path)
-
-        # Return new mtime
-        new_stat = await loop.run_in_executor(None, full_path.stat)
-        return VersionToken(new_stat.st_mtime_ns)
+        new_mtime = await loop.run_in_executor(None, _locked_check_and_write)
+        return VersionToken(new_mtime)
 
     async def write_new(self, path: str, data: bytes) -> VersionToken:
-        """Write a new file, failing if it already exists."""
+        """Write a new file atomically, failing if it already exists.
+
+        Writes content to a unique tmp file first, then hard-links it to the
+        final path using O_CREAT|O_EXCL semantics (``os.link``).
+        This guarantees that concurrent readers never observe a partial write —
+        the file is either absent or fully written.
+
+        Raises:
+            FileExistsError: If the target path already exists.
+        """
         full_path = self._resolve(path)
-
-        if full_path.exists():
-            raise FileExistsError(f"File already exists: {path}")
-
-        # Ensure parent directory exists (parents=True, exist_ok=True).
-        # Note: run_in_executor only accepts positional args, so we use a lambda
-        # to pass keyword arguments correctly.
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None, lambda: full_path.parent.mkdir(parents=True, exist_ok=True)
         )
 
-        # Write the file
-        await loop.run_in_executor(None, full_path.write_bytes, data)
+        def _create_exclusive() -> int:
+            # Write data to a tmp file in the same directory so the link is
+            # guaranteed to stay on the same filesystem/volume.
+            fd, tmp = tempfile.mkstemp(dir=full_path.parent)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                # os.link raises FileExistsError if the target exists — same
+                # semantics as O_CREAT|O_EXCL but the file is already fully written.
+                os.link(tmp, full_path)
+            finally:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(tmp)
+            return full_path.stat().st_mtime_ns
 
-        stat = await loop.run_in_executor(None, full_path.stat)
-        return VersionToken(stat.st_mtime_ns)
+        mtime = await loop.run_in_executor(None, _create_exclusive)
+        return VersionToken(mtime)
 
-    async def list_files(self, prefix: str, suffix: str = "") -> list[FileInfo]:
-        """List files under prefix, optionally filtered by suffix."""
+    async def list_dirs(self, prefix: str) -> list[str]:
+        """List immediate subdirectory paths under prefix."""
+        prefix_path = self._resolve(prefix)
+
+        if not prefix_path.exists():
+            return []
+
+        return [p.relative_to(self.root).as_posix() for p in prefix_path.iterdir() if p.is_dir()]
+
+    async def list_files(
+        self,
+        prefix: str,
+        suffixes: frozenset[str] | None = None,
+    ) -> list[FileInfo]:
+        """List direct-child files under prefix, optionally filtered by extension."""
         prefix_path = self._resolve(prefix)
 
         if not prefix_path.exists():
@@ -97,23 +247,25 @@ class LocalBackend:
         if not prefix_path.is_dir():
             raise NotADirectoryError(f"Prefix is not a directory: {prefix}")
 
-        # Use glob pattern
-        pattern = f"**/*{suffix}" if suffix else "**/*"
-
         loop = asyncio.get_event_loop()
+
+        # Build one glob pattern per suffix (or a single catch-all).
+        # case_sensitive=False ensures .JPG matches ".jpg" on POSIX filesystems.
+        patterns = [f"*{s}" for s in suffixes] if suffixes else ["*"]
 
         def _list_files() -> list[FileInfo]:
             results = []
-            for file_path in prefix_path.glob(pattern):
-                if file_path.is_file():
-                    relative = file_path.relative_to(self.root)
-                    stat = file_path.stat()
-                    results.append(
-                        FileInfo(
-                            path=str(relative),
-                            version=VersionToken(stat.st_mtime_ns),
+            for pattern in patterns:
+                for file_path in prefix_path.glob(pattern, case_sensitive=False):
+                    if file_path.is_file():
+                        relative = file_path.relative_to(self.root)
+                        stat = file_path.stat()
+                        results.append(
+                            FileInfo(
+                                path=relative.as_posix(),
+                                version=VersionToken(stat.st_mtime_ns),
+                            )
                         )
-                    )
             return results
 
         return await loop.run_in_executor(None, _list_files)

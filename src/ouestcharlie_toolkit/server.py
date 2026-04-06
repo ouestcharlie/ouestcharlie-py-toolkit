@@ -6,19 +6,19 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
-
-_log = logging.getLogger(__name__)
+from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 
 from .backend import Backend, backend_from_config
 from .manifest import ManifestStore
-from .progress import ProgressReporter
 from .schema import ConfigurationError
 from .xmp import XmpStore
+
+_log = logging.getLogger(__name__)
 
 
 class AgentBase:
@@ -86,27 +86,8 @@ class AgentBase:
         if self._cancelled:
             raise asyncio.CancelledError("Agent cancelled by Woof")
 
-    def progress(self, total: int, initial: int = 0) -> ProgressReporter:
-        """Create a progress reporter for the current tool call.
-
-        Args:
-            total: Total number of items to process.
-            initial: Initial progress value (default: 0).
-
-        Returns:
-            ProgressReporter instance.
-
-        Raises:
-            RuntimeError: If called outside of a tool context.
-        """
-        if self._current_ctx is None:
-            raise RuntimeError("progress() called outside of tool context")
-        return ProgressReporter(self._current_ctx, total, initial)
-
     @asynccontextmanager
-    async def per_photo(
-        self, photo: str, partition: str
-    ) -> AsyncIterator[PerPhotoContext]:
+    async def per_photo(self, photo: str, partition: str) -> AsyncIterator[PerPhotoContext]:
         """Context manager for per-photo processing with error isolation.
 
         Catches exceptions and logs them as permanent/transient errors via MCP
@@ -134,7 +115,10 @@ class AgentBase:
             # Permanent error: photo file missing
             _log.error(
                 "Photo file not found — partition=%r photo=%r: %s",
-                partition, photo, e, exc_info=True,
+                partition,
+                photo,
+                e,
+                exc_info=True,
             )
             await self._log_error(
                 "permanent",
@@ -148,7 +132,10 @@ class AgentBase:
             # Permanent error by default (agents can re-raise transient errors differently)
             _log.error(
                 "Failed to process photo — partition=%r photo=%r: %s",
-                partition, photo, e, exc_info=True,
+                partition,
+                photo,
+                e,
+                exc_info=True,
             )
             await self._log_error(
                 "permanent",

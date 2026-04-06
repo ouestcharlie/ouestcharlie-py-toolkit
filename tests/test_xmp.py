@@ -4,8 +4,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-_SAMPLES = Path(__file__).parent / "sample-images"
-
+from ouestcharlie_toolkit.schema import XmpSidecar
 from ouestcharlie_toolkit.xmp import (
     _decimal_to_xmp_coord,
     _parse_iso_datetime,
@@ -15,7 +14,8 @@ from ouestcharlie_toolkit.xmp import (
     serialize_xmp,
     xmp_path_for,
 )
-from ouestcharlie_toolkit.schema import XmpSidecar
+
+_SAMPLES = Path(__file__).parent / "sample-images"
 
 # ---------------------------------------------------------------------------
 # Path helpers
@@ -70,11 +70,14 @@ def test_parse_iso_datetime_valid():
 
 
 def test_parse_iso_datetime_preserves_subseconds():
-    assert _parse_iso_datetime("2024-07-15T14:30:00.123") == datetime(2024, 7, 15, 14, 30, 0, 123000)
+    assert _parse_iso_datetime("2024-07-15T14:30:00.123") == datetime(
+        2024, 7, 15, 14, 30, 0, 123000
+    )
 
 
 def test_parse_iso_datetime_preserves_timezone():
-    from datetime import timezone, timedelta
+    from datetime import timedelta, timezone
+
     dt = _parse_iso_datetime("2024-07-15T14:30:00.123+01:00")
     assert dt == datetime(2024, 7, 15, 14, 30, 0, 123000, tzinfo=timezone(timedelta(hours=1)))
 
@@ -286,6 +289,7 @@ def test_serialize_xmp_width_height_round_trip():
 def test_serialize_xmp_none_rating_omits_field():
     """When rating is None, xmp:Rating is not written to XMP."""
     from ouestcharlie_toolkit.schema import XmpSidecar
+
     s = XmpSidecar(content_hash="sha256:x")
     assert s.rating is None
     xml = serialize_xmp(s)
@@ -295,6 +299,7 @@ def test_serialize_xmp_none_rating_omits_field():
 def test_serialize_xmp_none_dims_omit_fields():
     """When width/height are None, pixel dimensions are not written to XMP."""
     from ouestcharlie_toolkit.schema import XmpSidecar
+
     s = XmpSidecar(content_hash="sha256:x")
     xml = serialize_xmp(s)
     assert "PixelXDimension" not in xml
@@ -325,7 +330,8 @@ _SAMPLE_XMP_WITH_EXTRAS = """\
 
 
 def test_parse_xmp_preserves_unknown_attr():
-    """Unknown simple attributes are stored in _extra; known fields (e.g. xmp:Rating) become typed."""
+    """Unknown simple attributes are stored in _extra;
+    known fields (e.g. xmp:Rating) become typed."""
     s = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
     # xmp:Rating is now a known field — stored on the typed attribute, not in _extra.
     assert s.rating == 4
@@ -333,7 +339,8 @@ def test_parse_xmp_preserves_unknown_attr():
 
 
 def test_parse_xmp_preserves_unknown_child_element():
-    """Unknown child elements (e.g. lr:hierarchicalSubject bag) are stored in _extra."""
+    """Unknown child elements
+    (e.g. lr:hierarchicalSubject bag) are stored in _extra."""
     s = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
     key = "{http://ns.adobe.com/lightroom/1.0/}hierarchicalSubject"
     assert key in s._extra
@@ -462,8 +469,8 @@ def test_serialize_xmp_empty_tags_omits_subject():
 
 _TIFF = "http://ns.adobe.com/tiff/1.0/"
 _EXIF = "http://ns.adobe.com/exif/1.0/"
-_XAP  = "http://ns.adobe.com/xap/1.0/"
-_PS   = "http://ns.adobe.com/photoshop/1.0/"
+_XAP = "http://ns.adobe.com/xap/1.0/"
+_PS = "http://ns.adobe.com/photoshop/1.0/"
 
 
 def _ref_xmp() -> XmpSidecar:
@@ -487,16 +494,16 @@ def test_ref_xmp_extra_simple_attrs():
 def test_ref_xmp_extra_structured_elements():
     """Structured child elements (rdf:Seq, struct) are stored as XML strings in _extra."""
     extra = _ref_xmp()._extra
-    iso_key   = f"{{{_EXIF}}}ISOSpeedRatings"
+    iso_key = f"{{{_EXIF}}}ISOSpeedRatings"
     flash_key = f"{{{_EXIF}}}Flash"
 
     assert iso_key in extra
     assert extra[iso_key].startswith("<")
-    assert "50" in extra[iso_key]           # ISO 50
+    assert "50" in extra[iso_key]  # ISO 50
 
     assert flash_key in extra
     assert extra[flash_key].startswith("<")
-    assert "False" in extra[flash_key]      # Flash did not fire
+    assert "False" in extra[flash_key]  # Flash did not fire
 
 
 def test_ref_xmp_extra_roundtrip():

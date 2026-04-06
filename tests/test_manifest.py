@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -19,10 +20,7 @@ from ouestcharlie_toolkit.schema import (
     RootSummary,
     VersionConflictError,
     VersionToken,
-    manifest_path,
-    summary_path,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -31,7 +29,7 @@ from ouestcharlie_toolkit.schema import (
 
 @pytest.fixture()
 def backend(tmp_path: Path) -> LocalBackend:
-    return LocalBackend(root=str(tmp_path))
+    return LocalBackend(root=tmp_path)
 
 
 @pytest.fixture()
@@ -55,14 +53,14 @@ def _leaf(partition: str = "2024/2024-07", photos: list[PhotoEntry] | None = Non
 @pytest.mark.asyncio
 async def test_create_leaf_writes_file(store: ManifestStore, tmp_path: Path) -> None:
     await store.create_leaf(_leaf())
-    expected = tmp_path / "2024" / "2024-07" / METADATA_DIR / "manifest.json"
+    expected = tmp_path / METADATA_DIR / "2024" / "2024-07" / "manifest.json"
     assert expected.exists()
 
 
 @pytest.mark.asyncio
 async def test_create_leaf_valid_json(store: ManifestStore, tmp_path: Path) -> None:
     await store.create_leaf(_leaf())
-    path = tmp_path / "2024" / "2024-07" / METADATA_DIR / "manifest.json"
+    path = tmp_path / METADATA_DIR / "2024" / "2024-07" / "manifest.json"
     data = json.loads(path.read_text())
     assert data["partition"] == "2024/2024-07"
     assert data["schemaVersion"] == SCHEMA_VERSION
@@ -142,8 +140,14 @@ async def test_write_leaf_returns_new_version(store: ManifestStore) -> None:
 
 @pytest.mark.asyncio
 async def test_write_leaf_conflict_raises(store: ManifestStore) -> None:
+    import asyncio
+
     await store.create_leaf(_leaf())
     manifest, version = await store.read_leaf("2024/2024-07")
+
+    # Brief pause so the next write lands on a different mtime tick even on
+    # coarse-resolution filesystems (e.g. tmpfs in CI).
+    await asyncio.sleep(0.01)
 
     # Simulate a concurrent write that advances the version.
     await store.write_leaf(manifest, version)
@@ -198,7 +202,9 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
             "tags": ["paris", "vacation"],
         },
     )
-    await store.create_leaf(LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo]))
+    await store.create_leaf(
+        LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo])
+    )
     manifest, _ = await store.read_leaf("p")
     e = manifest.photos[0]
     assert e.searchable["date_taken"] == date
@@ -209,27 +215,6 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
     assert e.searchable["tags"] == ["paris", "vacation"]
     assert e.metadata_version == 3
     assert e.xmp_version_token == "1234567890"
-
-
-# ---------------------------------------------------------------------------
-# Leaf — summary
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_leaf_summary_roundtrip(store: ManifestStore) -> None:
-    leaf = _leaf()
-    leaf.summary = ManifestSummary(
-        path="2024/2024-07",
-        photo_count=42,
-        _stats={"dateTaken": {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)}},
-    )
-    await store.create_leaf(leaf)
-    manifest, _ = await store.read_leaf("2024/2024-07")
-    assert manifest.summary is not None
-    assert manifest.summary.photo_count == 42
-    assert manifest.summary.dateTaken["min"] == datetime(2024, 7, 1)
-    assert manifest.summary.dateTaken["max"] == datetime(2024, 7, 31)
 
 
 # ---------------------------------------------------------------------------
@@ -269,10 +254,12 @@ async def test_read_summary_raises_if_missing(store: ManifestStore) -> None:
 
 @pytest.mark.asyncio
 async def test_read_summary_roundtrip(store: ManifestStore) -> None:
-    original = _summary_with([
-        ManifestSummary(path="2024/2024-07", photo_count=100),
-        ManifestSummary(path="2024/2024-08", photo_count=80),
-    ])
+    original = _summary_with(
+        [
+            ManifestSummary(path="2024/2024-07", photo_count=100),
+            ManifestSummary(path="2024/2024-08", photo_count=80),
+        ]
+    )
     await store.create_summary(original)
     result, _ = await store.read_summary()
     assert result.schema_version == SCHEMA_VERSION
@@ -283,8 +270,10 @@ async def test_read_summary_roundtrip(store: ManifestStore) -> None:
 
 @pytest.mark.asyncio
 async def test_write_summary_conflict_raises(store: ManifestStore) -> None:
-    await store.create_summary(_summary_with())
-    summary, version = await store.read_summary()
+    summary = _summary_with()
+    version = await store.create_summary(summary)
+    # Force some delay
+    await asyncio.sleep(0.001)
     await store.write_summary(summary, version)
     with pytest.raises(VersionConflictError):
         await store.write_summary(summary, version)
@@ -301,16 +290,24 @@ async def test_upsert_partition_creates_summary(store: ManifestStore, tmp_path: 
 
 @pytest.mark.asyncio
 async def test_upsert_partition_replaces_existing(store: ManifestStore) -> None:
-    await store.create_summary(_summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)]))
-    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-07", photo_count=99))
+    await store.create_summary(
+        _summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)])
+    )
+    result = await store.upsert_partition_in_summary(
+        ManifestSummary(path="2024/2024-07", photo_count=99)
+    )
     assert len(result.partitions) == 1
     assert result.partitions[0].photo_count == 99
 
 
 @pytest.mark.asyncio
 async def test_upsert_partition_appends_new(store: ManifestStore) -> None:
-    await store.create_summary(_summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)]))
-    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-08", photo_count=20))
+    await store.create_summary(
+        _summary_with([ManifestSummary(path="2024/2024-07", photo_count=10)])
+    )
+    result = await store.upsert_partition_in_summary(
+        ManifestSummary(path="2024/2024-08", photo_count=20)
+    )
     assert len(result.partitions) == 2
 
 
@@ -319,17 +316,23 @@ async def test_upsert_partition_preserves_extra(store: ManifestStore) -> None:
     s = _summary_with()
     s._extra["futureField"] = "keep-me"
     await store.create_summary(s)
-    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-08", photo_count=5))
+    result = await store.upsert_partition_in_summary(
+        ManifestSummary(path="2024/2024-08", photo_count=5)
+    )
     assert result._extra.get("futureField") == "keep-me"
 
 
 @pytest.mark.asyncio
-async def test_upsert_partition_preserves_other_partitions(store: ManifestStore) -> None:
+async def test_upsert_partition_preserves_other_partitions(
+    store: ManifestStore,
+) -> None:
     partitions = [
         ManifestSummary(path="2024/2024-07", photo_count=10),
         ManifestSummary(path="2024/2024-08", photo_count=20),
     ]
     await store.create_summary(_summary_with(partitions))
-    result = await store.upsert_partition_in_summary(ManifestSummary(path="2024/2024-07", photo_count=99))
+    result = await store.upsert_partition_in_summary(
+        ManifestSummary(path="2024/2024-07", photo_count=99)
+    )
     other = next(p for p in result.partitions if p.path == "2024/2024-08")
     assert other.photo_count == 20

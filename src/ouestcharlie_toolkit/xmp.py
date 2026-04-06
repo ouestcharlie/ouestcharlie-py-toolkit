@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from venv import logger
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from .backend import Backend
-
-_log = logging.getLogger(__name__)
 from .schema import (
     OUESTCHARLIE_NS,
     SCHEMA_VERSION,
@@ -19,6 +17,8 @@ from .schema import (
     VersionToken,
     XmpSidecar,
 )
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # XMP namespace URIs and serialization constants
@@ -58,28 +58,32 @@ _WELL_KNOWN_NS: dict[str, str] = {
 }
 
 # Known rdf:Description attributes — not preserved in _extra.
-_KNOWN_ATTRS: frozenset[str] = frozenset({
-    f"{{{_NS_RDF}}}about",
-    f"{{{_NS_OC}}}contentHash",
-    f"{{{_NS_OC}}}schemaVersion",
-    f"{{{_NS_OC}}}metadataVersion",
-    f"{{{_NS_EXIF}}}DateTimeOriginal",
-    f"{{{_NS_EXIF}}}Make",
-    f"{{{_NS_TIFF}}}Make",
-    f"{{{_NS_EXIF}}}Model",
-    f"{{{_NS_TIFF}}}Model",
-    f"{{{_NS_TIFF}}}Orientation",
-    f"{{{_NS_XMP}}}Rating",
-    f"{{{_NS_EXIF}}}PixelXDimension",
-    f"{{{_NS_EXIF}}}PixelYDimension",
-})
+_KNOWN_ATTRS: frozenset[str] = frozenset(
+    {
+        f"{{{_NS_RDF}}}about",
+        f"{{{_NS_OC}}}contentHash",
+        f"{{{_NS_OC}}}schemaVersion",
+        f"{{{_NS_OC}}}metadataVersion",
+        f"{{{_NS_EXIF}}}DateTimeOriginal",
+        f"{{{_NS_EXIF}}}Make",
+        f"{{{_NS_TIFF}}}Make",
+        f"{{{_NS_EXIF}}}Model",
+        f"{{{_NS_TIFF}}}Model",
+        f"{{{_NS_TIFF}}}Orientation",
+        f"{{{_NS_XMP}}}Rating",
+        f"{{{_NS_EXIF}}}PixelXDimension",
+        f"{{{_NS_EXIF}}}PixelYDimension",
+    }
+)
 
 # Known rdf:Description child element tags — not preserved in _extra.
-_KNOWN_CHILDREN: frozenset[str] = frozenset({
-    f"{{{_NS_EXIF}}}GPSLatitude",
-    f"{{{_NS_EXIF}}}GPSLongitude",
-    f"{{{_NS_DC}}}subject",
-})
+_KNOWN_CHILDREN: frozenset[str] = frozenset(
+    {
+        f"{{{_NS_EXIF}}}GPSLatitude",
+        f"{{{_NS_EXIF}}}GPSLongitude",
+        f"{{{_NS_DC}}}subject",
+    }
+)
 
 
 def _register_et_namespaces() -> None:
@@ -127,7 +131,7 @@ def xmp_path_for(photo_path: str) -> str:
         Path to the XMP sidecar (e.g., "2024/2024-07/IMG_001.xmp").
     """
     p = Path(photo_path)
-    return str(p.with_suffix(".xmp"))
+    return p.with_suffix(".xmp").as_posix()
 
 
 # ---------------------------------------------------------------------------
@@ -323,17 +327,15 @@ class XmpStore:
 
         existing_sidecar: XmpSidecar | None = None
         existing_version: VersionToken | None = None
-        try:
+        with contextlib.suppress(FileNotFoundError):
             existing_sidecar, existing_version = await self.read(photo_path)
-        except FileNotFoundError:
-            pass
 
         if existing_sidecar is not None and not force:
             if not existing_sidecar.content_hash:
                 # Third-party sidecar without ouestcharlie:contentHash.
-                existing_sidecar.content_hash = (
-                    await Photo(self.backend, photo_path).create_identity()
-                )
+                existing_sidecar.content_hash = await Photo(
+                    self.backend, photo_path
+                ).create_identity()
             assert existing_version is not None
             return existing_sidecar, existing_version, False
 
@@ -374,7 +376,9 @@ class XmpStore:
             except VersionConflictError:
                 _log.debug(
                     "Version conflict on %r (attempt %d/%d), retrying",
-                    photo_path, attempt + 1, max_retries,
+                    photo_path,
+                    attempt + 1,
+                    max_retries,
                 )
                 if attempt == max_retries:
                     raise
@@ -577,7 +581,12 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
                 child = ET.fromstring(val)
                 desc.append(child)
             except ET.ParseError:
-                _log.warning("Skipping malformed _extra element for key %r: %r", key, val, exc_info=True)
+                _log.warning(
+                    "Skipping malformed _extra element for key %r: %r",
+                    key,
+                    val,
+                    exc_info=True,
+                )
         else:
             desc.set(key, val)
 

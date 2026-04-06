@@ -4,7 +4,8 @@ from .backend import Backend, backend_from_config
 from .fields import PHOTO_FIELDS, FieldDef, FieldType
 from .logging import setup_logging
 from .manifest import ManifestStore
-from .progress import ProgressReporter
+from .photo import Photo
+from .progress import report_progress
 from .schema import (
     ConfigurationError,
     FileInfo,
@@ -15,7 +16,6 @@ from .schema import (
     VersionToken,
     XmpSidecar,
 )
-from .photo import Photo
 from .server import AgentBase
 from .xmp import XmpStore, xmp_path_for
 
@@ -28,7 +28,7 @@ __all__ = [
     "ManifestStore",
     "Photo",
     "XmpStore",
-    "ProgressReporter",
+    "report_progress",
     # Data models
     "PhotoEntry",
     "ManifestSummary",

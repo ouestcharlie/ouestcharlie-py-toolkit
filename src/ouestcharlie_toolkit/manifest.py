@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 from .backend import Backend
-
-_log = logging.getLogger(__name__)
 from .schema import (
+    SCHEMA_VERSION,
     LeafManifest,
     ManifestSummary,
     RootSummary,
-    SCHEMA_VERSION,
     VersionConflictError,
     VersionToken,
     deserialize_leaf,
@@ -23,6 +21,8 @@ from .schema import (
     serialize_summary,
     summary_path,
 )
+
+_log = logging.getLogger(__name__)
 
 
 class ManifestStore:
@@ -121,7 +121,9 @@ class ManifestStore:
             except VersionConflictError:
                 _log.debug(
                     "Version conflict on leaf manifest %r (attempt %d/%d), retrying",
-                    partition, attempt + 1, max_retries,
+                    partition,
+                    attempt + 1,
+                    max_retries,
                 )
                 if attempt == max_retries:
                     raise
@@ -191,8 +193,7 @@ class ManifestStore:
             try:
                 existing, version = await self.read_summary()
                 partitions = [
-                    p for p in existing.partitions
-                    if p.path != new_partition_summary.path
+                    p for p in existing.partitions if p.path != new_partition_summary.path
                 ]
                 partitions.append(new_partition_summary)
                 updated = RootSummary(
@@ -215,7 +216,8 @@ class ManifestStore:
             except VersionConflictError:
                 _log.debug(
                     "Version conflict updating summary.json (attempt %d/%d), retrying",
-                    attempt + 1, max_retries,
+                    attempt + 1,
+                    max_retries,
                 )
                 if attempt == max_retries:
                     raise

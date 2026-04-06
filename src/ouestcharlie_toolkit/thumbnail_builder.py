@@ -28,7 +28,13 @@ from pathlib import Path
 
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.hashing import content_hash as _hash
-from ouestcharlie_toolkit.schema import METADATA_DIR, ThumbnailChunk, ThumbnailGridLayout, PhotoEntry, thumbnail_avif_path
+from ouestcharlie_toolkit.schema import (
+    PhotoEntry,
+    ThumbnailChunk,
+    ThumbnailGridLayout,
+    preview_jpeg_path,
+    thumbnail_avif_path,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -49,19 +55,6 @@ GRID_MAX_PHOTOS: int = 64
 # JPEG preview settings.
 PREVIEW_JPEG_MAX_LONG_EDGE: int = 1440
 PREVIEW_JPEG_QUALITY: int = 85
-
-# Metadata subdirectory inside .ouestcharlie/ for per-photo JPEG previews.
-PREVIEW_JPEG_SUBDIR: str = "previews"
-
-
-
-def _preview_jpeg_path(partition: str, content_hash: str) -> str:
-    """Relative backend path for a per-photo JPEG preview.
-
-    Example: "2024/2024-07/.ouestcharlie/previews/sha256:abc123.jpg"
-    """
-    prefix = partition.rstrip("/") + "/" if partition else ""
-    return f"{prefix}{METADATA_DIR}/{PREVIEW_JPEG_SUBDIR}/{content_hash}.jpg"
 
 
 def _find_image_proc_binary() -> str:
@@ -91,7 +84,9 @@ def _find_image_proc_binary() -> str:
 
     # __file__ is at ouestcharlie-py-toolkit/src/ouestcharlie_toolkit/thumbnail_builder.py
     # Three parents up reaches ouestcharlie-py-toolkit/.
-    dev_bin = Path(__file__).parent.parent.parent / "image-proc" / "target" / "release" / "image-proc"
+    dev_bin = (
+        Path(__file__).parent.parent.parent / "image-proc" / "target" / "release" / "image-proc"
+    )
     if dev_bin.exists():
         return str(dev_bin)
 
@@ -105,9 +100,9 @@ def _find_image_proc_binary() -> str:
 async def _stage_photos(
     backend: Backend,
     partition: str,
-    photo_entries: list,
+    photo_entries: list[PhotoEntry],
     tmpdir: str,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Read photos from the backend once and write them to ``tmpdir``.
 
     Returns the image-proc ``photos`` payload (list of dicts with path, ext,
@@ -115,24 +110,26 @@ async def _stage_photos(
     content_hash (caller's responsibility).
     """
     prefix = partition.rstrip("/") + "/" if partition else ""
-    photos_payload: list[dict] = []
+    photos_payload: list[dict[str, object]] = []
     for i, entry in enumerate(photo_entries):
         photo_path = f"{prefix}{entry.filename}"
         photo_bytes, _ = await backend.read(photo_path)
         ext = os.path.splitext(entry.filename)[1]
         staged_path = os.path.join(tmpdir, f"photo_{i:06d}{ext}")
         Path(staged_path).write_bytes(photo_bytes)
-        photos_payload.append({
-            "path": staged_path,
-            "ext": ext,
-            "orientation": entry.searchable.get("orientation"),
-            "content_hash": entry.content_hash,
-        })
+        photos_payload.append(
+            {
+                "path": staged_path,
+                "ext": ext,
+                "orientation": entry.searchable.get("orientation"),
+                "content_hash": entry.content_hash,
+            }
+        )
     return photos_payload
 
 
 async def _call_image_proc(
-    staged_photos: list[dict],
+    staged_photos: list[dict[str, object]],
     tile_size: int,
     fit: str,
     quality: int,
@@ -145,13 +142,15 @@ async def _call_image_proc(
     hashing the bytes, naming the output file, and writing to the backend.
     """
     tmp_output = os.path.join(tmpdir, f"output_{tile_size}.avif")
-    payload = json.dumps({
-        "photos": staged_photos,
-        "tile_size": tile_size,
-        "fit": fit,
-        "quality": quality,
-        "output": tmp_output,
-    }).encode()
+    payload = json.dumps(
+        {
+            "photos": staged_photos,
+            "tile_size": tile_size,
+            "fit": fit,
+            "quality": quality,
+            "output": tmp_output,
+        }
+    ).encode()
 
     proc = await asyncio.create_subprocess_exec(
         binary,
@@ -162,9 +161,7 @@ async def _call_image_proc(
     stdout, stderr = await proc.communicate(payload)
 
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"image-proc exited {proc.returncode}: {stderr.decode().strip()}"
-        )
+        raise RuntimeError(f"image-proc exited {proc.returncode}: {stderr.decode().strip()}")
 
     grid_info = json.loads(stdout.decode())
     avif_bytes = Path(tmp_output).read_bytes()
@@ -201,9 +198,9 @@ async def generate_partition_thumbnails(
     """
     binary = _find_image_proc_binary()
     ordered = sorted(photo_entries, key=lambda e: e.content_hash)
-    chunks = [ordered[i:i + GRID_MAX_PHOTOS] for i in range(0, len(ordered), GRID_MAX_PHOTOS)]
+    chunks = [ordered[i : i + GRID_MAX_PHOTOS] for i in range(0, len(ordered), GRID_MAX_PHOTOS)]
 
-    async def _generate_chunk(chunk_entries: list) -> ThumbnailChunk:
+    async def _generate_chunk(chunk_entries: list[PhotoEntry]) -> ThumbnailChunk:
         with tempfile.TemporaryDirectory() as tmpdir:
             staged = await _stage_photos(backend, partition, chunk_entries, tmpdir)
             grid, avif_bytes = await _call_image_proc(
@@ -223,7 +220,11 @@ async def generate_partition_thumbnails(
             await backend.write_new(avif_path, avif_bytes)
         _log.debug(
             "AVIF chunk written: %s (%d bytes, %dx%d grid, %d photos)",
-            avif_path, len(avif_bytes), grid.cols, grid.rows, len(chunk_entries),
+            avif_path,
+            len(avif_bytes),
+            grid.cols,
+            grid.rows,
+            len(chunk_entries),
         )
         return ThumbnailChunk(avif_hash=avif_hash, grid=grid)
 
@@ -243,7 +244,7 @@ async def generate_preview_jpeg(
     WebP), applies EXIF orientation, resizes to ``max_long_edge`` on the long
     edge (preserving aspect ratio), and saves as JPEG.
 
-    The result is cached at ``{partition}/.ouestcharlie/previews/{content_hash}.jpg``.
+    The result is cached at ``.ouestcharlie/{partition}/previews/{content_hash}.jpg``.
     Subsequent calls for the same photo return immediately if the cache file
     already exists on the backend.
 
@@ -256,10 +257,10 @@ async def generate_preview_jpeg(
 
     Returns:
         Backend-relative path of the cached JPEG (e.g.
-        ``"2024/2024-07/.ouestcharlie/previews/sha256:abc123.jpg"``).
+        ``".ouestcharlie/2024/2024-07/previews/sha256:abc123.jpg"``).
     """
     binary = _find_image_proc_binary()
-    cache_path = _preview_jpeg_path(partition, entry.content_hash)
+    cache_path = preview_jpeg_path(partition, entry.content_hash)
 
     # Fast path: already cached.
     if await backend.exists(cache_path):
@@ -276,17 +277,19 @@ async def generate_preview_jpeg(
         Path(staged_path).write_bytes(photo_bytes)
 
         tmp_output = os.path.join(tmpdir, "preview.jpg")
-        payload = json.dumps({
-            "photo": {
-                "path": staged_path,
-                "ext": ext,
-                "orientation": entry.searchable.get("orientation"),
-                "content_hash": entry.content_hash,
-            },
-            "max_long_edge": max_long_edge,
-            "quality": jpeg_quality,
-            "output": tmp_output,
-        }).encode()
+        payload = json.dumps(
+            {
+                "photo": {
+                    "path": staged_path,
+                    "ext": ext,
+                    "orientation": entry.searchable.get("orientation"),
+                    "content_hash": entry.content_hash,
+                },
+                "max_long_edge": max_long_edge,
+                "quality": jpeg_quality,
+                "output": tmp_output,
+            }
+        ).encode()
 
         proc = await asyncio.create_subprocess_exec(
             binary,
@@ -309,6 +312,9 @@ async def generate_preview_jpeg(
 
     _log.debug(
         "JPEG preview written: %s (%d bytes, %dx%d)",
-        cache_path, len(jpeg_bytes), result_info["width"], result_info["height"],
+        cache_path,
+        len(jpeg_bytes),
+        result_info["width"],
+        result_info["height"],
     )
     return cache_path

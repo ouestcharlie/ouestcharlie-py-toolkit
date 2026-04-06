@@ -31,9 +31,7 @@ def _parse_exif_datetime(exif: dict[str, str]) -> datetime | None:
 
     Returns a timezone-aware datetime when an offset is present, naive otherwise.
     """
-    date_str = (
-        exif.get("Exif.Photo.DateTimeOriginal") or exif.get("Exif.Image.DateTime")
-    )
+    date_str = exif.get("Exif.Photo.DateTimeOriginal") or exif.get("Exif.Image.DateTime")
     if not date_str:
         return None
     try:
@@ -77,10 +75,12 @@ _HEX_LOCAL_RE = re.compile(r"^0x[0-9a-fA-F]+$")
 
 # UNDEFINED-type EXIF fields that store ASCII strings as space-separated decimal bytes
 # (e.g. "48 50 50 48" → "0220").  pyexiv2 does not decode these automatically.
-_EXIF_UNDEFINED_ASCII: frozenset[str] = frozenset({
-    "Exif.Photo.ExifVersion",
-    "Exif.Photo.FlashpixVersion",
-})
+_EXIF_UNDEFINED_ASCII: frozenset[str] = frozenset(
+    {
+        "Exif.Photo.ExifVersion",
+        "Exif.Photo.FlashpixVersion",
+    }
+)
 
 
 def _decode_undefined_ascii(val: str) -> str:
@@ -100,32 +100,34 @@ def _decode_undefined_ascii(val: str) -> str:
 
 
 # Keys consumed by typed fields, internal JPEG structure, or binary blobs.
-_EXIF_EXTRA_SKIP: frozenset[str] = frozenset({
-    # Typed fields
-    "Exif.Image.Make",
-    "Exif.Image.Model",
-    "Exif.Image.Orientation",
-    "Exif.Photo.DateTimeOriginal",
-    "Exif.Image.DateTime",
-    "Exif.Photo.SubSecTimeOriginal",
-    "Exif.Photo.SubSecTime",
-    "Exif.Photo.SubSecTimeDigitized",
-    "Exif.Photo.OffsetTimeOriginal",
-    "Exif.Photo.OffsetTime",
-    "Exif.Photo.OffsetTimeDigitized",
-    "Exif.Photo.PixelXDimension",
-    "Exif.Photo.PixelYDimension",
-    "Exif.Image.ImageWidth",
-    "Exif.Image.ImageLength",
-    # Internal JPEG / IFD pointers
-    "Exif.Image.JPEGInterchangeFormat",
-    "Exif.Image.JPEGInterchangeFormatLength",
-    "Exif.Image.ExifTag",
-    "Exif.Image.GPSTag",
-    # Binary blobs
-    "Exif.Photo.MakerNote",
-    "Exif.Photo.UserComment",
-})
+_EXIF_EXTRA_SKIP: frozenset[str] = frozenset(
+    {
+        # Typed fields
+        "Exif.Image.Make",
+        "Exif.Image.Model",
+        "Exif.Image.Orientation",
+        "Exif.Photo.DateTimeOriginal",
+        "Exif.Image.DateTime",
+        "Exif.Photo.SubSecTimeOriginal",
+        "Exif.Photo.SubSecTime",
+        "Exif.Photo.SubSecTimeDigitized",
+        "Exif.Photo.OffsetTimeOriginal",
+        "Exif.Photo.OffsetTime",
+        "Exif.Photo.OffsetTimeDigitized",
+        "Exif.Photo.PixelXDimension",
+        "Exif.Photo.PixelYDimension",
+        "Exif.Image.ImageWidth",
+        "Exif.Image.ImageLength",
+        # Internal JPEG / IFD pointers
+        "Exif.Image.JPEGInterchangeFormat",
+        "Exif.Image.JPEGInterchangeFormatLength",
+        "Exif.Image.ExifTag",
+        "Exif.Image.GPSTag",
+        # Binary blobs
+        "Exif.Photo.MakerNote",
+        "Exif.Photo.UserComment",
+    }
+)
 
 
 def _map_exif_extra(exif: dict[str, str]) -> dict[str, str]:
@@ -142,7 +144,7 @@ def _map_exif_extra(exif: dict[str, str]) -> dict[str, str]:
             val = _decode_undefined_ascii(val)
         for prefix, ns_uri in _EXIF_TO_XMP_NS.items():
             if key.startswith(prefix):
-                local = key[len(prefix):]
+                local = key[len(prefix) :]
                 if _HEX_LOCAL_RE.match(local):
                     local = f"proprietary_{local}"
                 extra[f"{{{ns_uri}}}{local}"] = val
@@ -159,9 +161,10 @@ def _parse_exif_gps(exif: dict[str, str]) -> tuple[float, float] | None:
     if not (lat_ref and lon_ref and lat_raw and lon_raw):
         return None
     try:
+
         def dms_to_decimal(dms: str, ref: str) -> float:
             parts = dms.split()
-            total = sum(_exif_rational_to_float(p) / (60.0 ** i) for i, p in enumerate(parts))
+            total = sum(_exif_rational_to_float(p) / (60.0**i) for i, p in enumerate(parts))
             return -total if ref in ("S", "W") else total
 
         return (dms_to_decimal(lat_raw, lat_ref), dms_to_decimal(lon_raw, lon_ref))
@@ -224,6 +227,7 @@ class Photo:
             XmpSidecar populated with EXIF fields and ``content_hash``.
         """
         import pyexiv2  # lazy: native C extension with system library dependency
+
         pyexiv2.set_log_level(4)  # mute C-level logs: they write to stdout, corrupting MCP stdio
 
         data, _ = await self.backend.read(self.path)
@@ -258,8 +262,12 @@ class Photo:
             except (ValueError, TypeError):
                 return None
 
-        width_s = exif_data.get("Exif.Photo.PixelXDimension") or exif_data.get("Exif.Image.ImageWidth")
-        height_s = exif_data.get("Exif.Photo.PixelYDimension") or exif_data.get("Exif.Image.ImageLength")
+        width_s = exif_data.get("Exif.Photo.PixelXDimension") or exif_data.get(
+            "Exif.Image.ImageWidth"
+        )
+        height_s = exif_data.get("Exif.Photo.PixelYDimension") or exif_data.get(
+            "Exif.Image.ImageLength"
+        )
         width = _int_or_none(width_s)
         height = _int_or_none(height_s)
 

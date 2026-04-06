@@ -2,24 +2,24 @@
 
 from datetime import datetime
 
-from ouestcharlie_toolkit.schema import (
-    VersionToken,
-    FileInfo,
-    PhotoEntry,
-    ManifestSummary,
-    LeafManifest,
-    XmpSidecar,
-    VersionConflictError,
-    ConfigurationError,
-    serialize_leaf,
-    deserialize_leaf,
-    manifest_path,
-    SCHEMA_VERSION,
-    OUESTCHARLIE_NS,
-    METADATA_DIR,
-)
 import pytest
 
+from ouestcharlie_toolkit.schema import (
+    METADATA_DIR,
+    OUESTCHARLIE_NS,
+    SCHEMA_VERSION,
+    ConfigurationError,
+    FileInfo,
+    LeafManifest,
+    ManifestSummary,
+    PhotoEntry,
+    VersionConflictError,
+    VersionToken,
+    XmpSidecar,
+    deserialize_leaf,
+    manifest_path,
+    serialize_leaf,
+)
 
 # ---------------------------------------------------------------------------
 # Version tokens and file info
@@ -214,8 +214,12 @@ def test_partition_summary():
         path="2024/2024-07/",
         photo_count=42,
         _stats={
-            "dateTaken": {"type": "date_range", "min": datetime(2024, 7, 1), "max": datetime(2024, 7, 31)},
-            "rating":    {"type": "int_range",  "min": 2, "max": 5},
+            "dateTaken": {
+                "type": "date_range",
+                "min": datetime(2024, 7, 1),
+                "max": datetime(2024, 7, 31),
+            },
+            "rating": {"type": "int_range", "min": 2, "max": 5},
         },
     )
 
@@ -241,7 +245,7 @@ def test_partition_summary_rating_defaults_none():
 def test_manifest_path_helper():
     """Test manifest path generation."""
     path = manifest_path("2024/2024-07/")
-    assert path == "2024/2024-07/.ouestcharlie/manifest.json"
+    assert path == ".ouestcharlie/2024/2024-07/manifest.json"
 
 
 def test_manifest_path_empty():
@@ -263,7 +267,6 @@ def test_leaf_manifest_creation():
     assert manifest.partition == "2024/2024-07/"
     assert len(manifest.photos) == 1
     assert manifest.photos[0] == photo
-    assert manifest.summary is None
 
 
 def test_leaf_manifest_serialization():
@@ -306,7 +309,15 @@ def test_photo_entry_v1_fields_round_trip():
     photo = PhotoEntry(
         filename="IMG_001.jpg",
         content_hash="sha256:abc",
-        searchable={"make": "Sony", "model": "A7 IV", "rating": 5, "width": 7008, "height": 4672, "tags": ["sunset"], "orientation": 1},
+        searchable={
+            "make": "Sony",
+            "model": "A7 IV",
+            "rating": 5,
+            "width": 7008,
+            "height": 4672,
+            "tags": ["sunset"],
+            "orientation": 1,
+        },
     )
     manifest = LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo])
     restored = deserialize_leaf(serialize_leaf(manifest)).photos[0]
@@ -329,16 +340,26 @@ def test_photo_entry_rejected_rating_round_trip():
 def test_partition_summary_rating_round_trip():
     """rating and date survive serialize → deserialize with nested stat format."""
     summary = ManifestSummary(
-        path="p", photo_count=3,
+        path="p",
+        photo_count=3,
         _stats={
-            "dateTaken": {"type": "date_range", "min": datetime(2024, 1, 1), "max": datetime(2024, 12, 31)},
-            "rating":    {"type": "int_range",  "min": 1, "max": 5},
+            "dateTaken": {
+                "type": "date_range",
+                "min": datetime(2024, 1, 1),
+                "max": datetime(2024, 12, 31),
+            },
+            "rating": {"type": "int_range", "min": 1, "max": 5},
         },
     )
-    from ouestcharlie_toolkit.schema import _summary_to_dict, _summary_from_dict
+    from ouestcharlie_toolkit.schema import _summary_from_dict, _summary_to_dict
+
     d = _summary_to_dict(summary)
     # Verify nested format
-    assert d["dateTaken"] == {"type": "date_range", "min": "2024-01-01T00:00:00", "max": "2024-12-31T00:00:00"}
+    assert d["dateTaken"] == {
+        "type": "date_range",
+        "min": "2024-01-01T00:00:00",
+        "max": "2024-12-31T00:00:00",
+    }
     assert d["rating"] == {"type": "int_range", "min": 1, "max": 5}
     assert "dateMin" not in d and "ratingMin" not in d
     # Verify round-trip
@@ -352,6 +373,98 @@ def test_partition_summary_rating_round_trip():
 # ---------------------------------------------------------------------------
 # XMP sidecars
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# ManifestSummary.from_photos — missing value counts
+# ---------------------------------------------------------------------------
+
+
+def _entry(searchable: dict) -> PhotoEntry:
+    return PhotoEntry(filename="x.jpg", content_hash="sha256:abc", searchable=searchable)
+
+
+def test_from_photos_no_missing_when_all_have_field() -> None:
+    """When every photo has dateTaken, no 'missing' key in the stat."""
+    entries = [
+        _entry({"date_taken": datetime(2024, 1, 1)}),
+        _entry({"date_taken": datetime(2024, 6, 1)}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert "missing" not in summary.dateTaken
+
+
+def test_from_photos_missing_count_for_date_range() -> None:
+    """Photos with None dateTaken are counted in 'missing'."""
+    entries = [
+        _entry({"date_taken": datetime(2024, 1, 1)}),
+        _entry({"date_taken": None}),
+        _entry({}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert summary.dateTaken["missing"] == 2
+
+
+def test_from_photos_missing_count_for_int_range() -> None:
+    """Photos with None rating are counted in 'missing'."""
+    entries = [
+        _entry({"rating": 3}),
+        _entry({"rating": 5}),
+        _entry({"rating": None}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert summary.rating["missing"] == 1
+
+
+def test_from_photos_missing_count_for_gps() -> None:
+    """Photos with None GPS are counted in 'missing' for both lat and lon."""
+    entries = [
+        _entry({"gps": (48.85, 2.35)}),
+        _entry({"gps": None}),
+        _entry({}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert summary.gps["lat"]["missing"] == 2
+    assert summary.gps["lon"]["missing"] == 2
+
+
+def test_from_photos_gps_missing_counted_per_axis() -> None:
+    """lat and lon missing counts are independent when one component is None."""
+    entries = [
+        _entry({"gps": (48.85, 2.35)}),  # both present
+        _entry({"gps": (43.3, None)}),  # lat present, lon missing
+        _entry({"gps": (None, 5.37)}),  # lon present, lat missing
+        _entry({"gps": None}),  # both missing
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    # lat: entries 1 and 3 have a lat value → 2 missing (entries 2 and 3)
+    assert summary.gps["lat"]["min"] == 43.3
+    assert summary.gps["lat"]["max"] == 48.85
+    assert summary.gps["lat"]["missing"] == 2
+    # lon: entries 1 and 2 have a lon value → 2 missing (entries 2 and 3)
+    assert summary.gps["lon"]["min"] == 2.35
+    assert summary.gps["lon"]["max"] == 5.37
+    assert summary.gps["lon"]["missing"] == 2
+
+
+def test_from_photos_no_stat_when_all_missing() -> None:
+    """When all photos lack a field, the stat is absent entirely."""
+    entries = [_entry({}), _entry({"dateTaken": None})]
+    summary = ManifestSummary.from_photos("p", entries)
+    assert summary.dateTaken is None
+
+
+def test_from_photos_missing_survives_round_trip() -> None:
+    """'missing' key is preserved through serialize → deserialize."""
+    from ouestcharlie_toolkit.schema import _summary_from_dict, _summary_to_dict
+
+    entries = [
+        _entry({"rating": 4}),
+        _entry({"rating": None}),
+    ]
+    summary = ManifestSummary.from_photos("p", entries)
+    restored = _summary_from_dict(_summary_to_dict(summary))
+    assert restored.rating["missing"] == 1
 
 
 def test_xmp_sidecar_creation():

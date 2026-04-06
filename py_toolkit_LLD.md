@@ -54,7 +54,7 @@ See [backends/local.py](src/ouestcharlie/backends/local.py) for implementation.
 
 ### Data Model
 
-Manifests are JSON files at well-known paths. The toolkit defines typed models: `PhotoEntry`, `PartitionSummary`, `LeafManifest`, `ParentManifest`.
+Manifests are JSON files at well-known paths. The toolkit defines typed models: `PhotoEntry`, `ManifestSummary`, `RootSummary`, `LeafManifest`.
 
 See [schema.py](src/ouestcharlie/schema.py) for data class definitions and serialization helpers.
 

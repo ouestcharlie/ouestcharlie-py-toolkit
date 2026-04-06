@@ -8,7 +8,6 @@ from typing import Any
 
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -18,17 +17,35 @@ SCHEMA_VERSION = 1
 MANIFEST_FILENAME = "manifest.json"
 SUMMARY_FILENAME = "summary.json"
 METADATA_DIR = ".ouestcharlie"
+PREVIEW_JPEG_SUBDIR = "previews"
 
 
 def manifest_path(partition: str) -> str:
-    """Well-known manifest path for a partition, e.g. '2024/2024-07/' -> '2024/2024-07/.ouestcharlie/manifest.json'."""
-    prefix = partition.rstrip("/") + "/" if partition else ""
-    return f"{prefix}{METADATA_DIR}/{MANIFEST_FILENAME}"
+    """Well-known manifest path for a partition.
+
+    All metadata lives under a single ``.ouestcharlie/`` tree at the backend
+    root, mirroring the partition directory structure.
+
+    Example: ``'2024/2024-07/'`` → ``'.ouestcharlie/2024/2024-07/manifest.json'``.
+    Root partition (``''``) → ``'.ouestcharlie/manifest.json'``.
+    """
+    suffix = partition.rstrip("/") + "/" if partition else ""
+    return f"{METADATA_DIR}/{suffix}{MANIFEST_FILENAME}"
 
 
 def summary_path() -> str:
     """Well-known path for the root summary file: '.ouestcharlie/summary.json'."""
     return f"{METADATA_DIR}/{SUMMARY_FILENAME}"
+
+
+def preview_jpeg_path(partition: str, content_hash: str) -> str:
+    """Backend-relative path for a per-photo JPEG preview cache file.
+
+    Example: ``'2024/2024-07'`` → ``'.ouestcharlie/2024/2024-07/previews/sha256:abc.jpg'``.
+    Root partition (``''``) → ``'.ouestcharlie/previews/sha256:abc.jpg'``.
+    """
+    suffix = partition.rstrip("/") + "/" if partition else ""
+    return f"{METADATA_DIR}/{suffix}{PREVIEW_JPEG_SUBDIR}/{content_hash}.jpg"
 
 
 # ---------------------------------------------------------------------------
@@ -179,31 +196,48 @@ class ManifestSummary:
         stats: dict[str, Any] = {}
         for fdef in field_config:
             if fdef.summary_range:
-                values = [v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None]
+                values = [
+                    v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None
+                ]
                 if not values:
                     continue
+                missing = len(entries) - len(values)
                 if fdef.type == FieldType.DATE_RANGE:
-                    stats[fdef.name] = {
+                    stat: dict[str, Any] = {
                         "type": "date_range",
                         "min": min(values, key=_naive),
                         "max": max(values, key=_naive),
                     }
                 elif fdef.type == FieldType.INT_RANGE:
-                    stats[fdef.name] = {"type": "int_range", "min": min(values), "max": max(values)}
-            elif fdef.summary_gps_bbox and fdef.type is FieldType.GPS_BOX:
-                values = [v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None]
-                if values:
-                    lats = [v[0] for v in values]
-                    lons = [v[1] for v in values]
-                    stats[fdef.name] = {
-                        "type": "gps_bbox",
-                        "minLat": min(lats), "maxLat": max(lats),
-                        "minLon": min(lons), "maxLon": max(lons),
+                    stat = {
+                        "type": "int_range",
+                        "min": min(values),
+                        "max": max(values),
                     }
+                else:
+                    continue
+                if missing:
+                    stat["missing"] = missing
+                stats[fdef.name] = stat
+            elif fdef.summary_gps_bbox and fdef.type is FieldType.GPS_BOX:
+                all_gps = [e.searchable.get(fdef.entry_attr) for e in entries]
+                lats = [v[0] for v in all_gps if v is not None and v[0] is not None]
+                lons = [v[1] for v in all_gps if v is not None and v[1] is not None]
+                if lats or lons:
+                    missing_lat = len(entries) - len(lats)
+                    missing_lon = len(entries) - len(lons)
+                    lat_stat: dict[str, Any] = {"min": min(lats), "max": max(lats)} if lats else {}
+                    lon_stat: dict[str, Any] = {"min": min(lons), "max": max(lons)} if lons else {}
+                    if missing_lat:
+                        lat_stat["missing"] = missing_lat
+                    if missing_lon:
+                        lon_stat["missing"] = missing_lon
+                    stats[fdef.name] = {"type": "gps_bbox", "lat": lat_stat, "lon": lon_stat}
         return cls(path=partition, photo_count=len(entries), _stats=stats)
 
     def __getattr__(self, name: str) -> Any:
-        """Return the typed stat dict for a field, e.g. summary.rating → {"type": "int_range", ...}."""
+        """Return the typed stat dict for a field,
+        e.g. summary.rating → {"type": "int_range", ...}."""
         return self.__dict__.get("_stats", {}).get(name)
 
     def __eq__(self, other: object) -> bool:
@@ -235,10 +269,10 @@ class ThumbnailGridLayout:
     a photo's tile index only changes if its content changes, not on renames.
     """
 
-    cols: int                   # number of columns in the AVIF grid
-    rows: int                   # number of rows in the AVIF grid
-    tile_size: int              # short edge in pixels (e.g. 256 or 1440)
-    photo_order: list[str]      # content_hashes in row-major tile order
+    cols: int  # number of columns in the AVIF grid
+    rows: int  # number of rows in the AVIF grid
+    tile_size: int  # short edge in pixels (e.g. 256 or 1440)
+    photo_order: list[str]  # content_hashes in row-major tile order
 
 
 @dataclass
@@ -254,7 +288,7 @@ class ThumbnailChunk:
     ``thumbnail_avif_path(partition, chunk.avif_hash)``.
     """
 
-    avif_hash: str             # 22-char BLAKE3 of the AVIF content
+    avif_hash: str  # 22-char BLAKE3 of the AVIF content
     grid: ThumbnailGridLayout  # cols, rows, tile_size, photo_order
 
 
@@ -262,11 +296,12 @@ def thumbnail_avif_path(partition: str, avif_hash: str, tier: str = "thumbnail")
     """Reconstruct the backend-relative path for a thumbnail AVIF chunk.
 
     Example: thumbnail_avif_path("2024/Jul", "Kf3QzA2_nBcR8xYvLm1P9w")
-             → "2024/Jul/.ouestcharlie/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+             → ".ouestcharlie/2024/Jul/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+    Root partition (``''``) → ``'.ouestcharlie/thumbnails-{hash}.avif'``.
     """
-    prefix = partition.rstrip("/") + "/" if partition else ""
+    suffix = partition.rstrip("/") + "/" if partition else ""
     stem = "thumbnails" if tier == "thumbnail" else "previews"
-    return f"{prefix}{METADATA_DIR}/{stem}-{avif_hash}.avif"
+    return f"{METADATA_DIR}/{suffix}{stem}-{avif_hash}.avif"
 
 
 @dataclass
@@ -276,7 +311,6 @@ class LeafManifest:
     schema_version: int
     partition: str
     photos: list[PhotoEntry] = field(default_factory=list)
-    summary: ManifestSummary | None = None
     thumbnail_chunks: list[ThumbnailChunk] = field(default_factory=list)
     _extra: dict[str, Any] = field(default_factory=dict)
 
@@ -314,7 +348,7 @@ class XmpSidecar:
     camera_model: str | None = None
     orientation: int | None = None
     rating: int | None = None  # xmp:Rating (0=unrated, 1-5=stars, -1=rejected)
-    width: int | None = None   # pixel width (exif:PixelXDimension / tiff:ImageWidth)
+    width: int | None = None  # pixel width (exif:PixelXDimension / tiff:ImageWidth)
     height: int | None = None  # pixel height (exif:PixelYDimension / tiff:ImageLength)
     tags: list[str] = field(default_factory=list)
     # Unknown XMP attributes and child elements from third-party apps (Lightroom, darktable, …).
@@ -395,13 +429,18 @@ def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
                 out["min"] = stat["min"].isoformat()
             if stat.get("max") is not None:
                 out["max"] = stat["max"].isoformat()
+            if stat.get("missing"):
+                out["missing"] = stat["missing"]
             d[name] = out
         elif t == "int_range":
             d[name] = stat
         elif t == "bloom":
             val = stat.get("value")
             if val:
-                d[name] = {"type": "bloom", "value": val.hex() if isinstance(val, bytes) else val}
+                d[name] = {
+                    "type": "bloom",
+                    "value": val.hex() if isinstance(val, bytes) else val,
+                }
         elif t == "gps_bbox":
             d[name] = stat  # all values are plain floats; pass through as-is
     d.update(s._extra)
@@ -417,26 +456,43 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
         if not isinstance(stat, dict):
             continue
         if fd.summary_range and fd.type is FieldType.DATE_RANGE:
-            stats[fd.name] = {
+            parsed: dict[str, Any] = {
                 "type": "date_range",
                 "min": datetime.fromisoformat(stat["min"]) if "min" in stat else None,
                 "max": datetime.fromisoformat(stat["max"]) if "max" in stat else None,
             }
+            if stat.get("missing"):
+                parsed["missing"] = stat["missing"]
+            stats[fd.name] = parsed
         elif fd.summary_range and fd.type is FieldType.INT_RANGE:
-            stats[fd.name] = {"type": "int_range", "min": stat.get("min"), "max": stat.get("max")}
+            parsed = {
+                "type": "int_range",
+                "min": stat.get("min"),
+                "max": stat.get("max"),
+            }
+            if stat.get("missing"):
+                parsed["missing"] = stat["missing"]
+            stats[fd.name] = parsed
         elif fd.summary_bloom_attr:
             hex_val = stat.get("value", "")
             if hex_val:
                 stats[fd.name] = {"type": "bloom", "value": bytes.fromhex(hex_val)}
         elif fd.summary_gps_bbox and fd.type is FieldType.GPS_BOX:
-            stats[fd.name] = {
-                "type": "gps_bbox",
-                "minLat": stat.get("minLat"), "maxLat": stat.get("maxLat"),
-                "minLon": stat.get("minLon"), "maxLon": stat.get("maxLon"),
-            }
+            raw_lat = stat.get("lat", {})
+            raw_lon = stat.get("lon", {})
+            parsed_lat: dict[str, Any] = {"min": raw_lat.get("min"), "max": raw_lat.get("max")}
+            if raw_lat.get("missing"):
+                parsed_lat["missing"] = raw_lat["missing"]
+            parsed_lon: dict[str, Any] = {"min": raw_lon.get("min"), "max": raw_lon.get("max")}
+            if raw_lon.get("missing"):
+                parsed_lon["missing"] = raw_lon["missing"]
+            stats[fd.name] = {"type": "gps_bbox", "lat": parsed_lat, "lon": parsed_lon}
     hashes_stat = d.get("hashes")
     if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
-        stats["hashes"] = {"type": "bloom", "value": bytes.fromhex(hashes_stat["value"])}
+        stats["hashes"] = {
+            "type": "bloom",
+            "value": bytes.fromhex(hashes_stat["value"]),
+        }
     extra = {k: v for k, v in d.items() if k not in known_keys}
     return ManifestSummary(
         path=d["path"],
@@ -485,8 +541,6 @@ def serialize_leaf(manifest: LeafManifest) -> dict[str, Any]:
         "partition": manifest.partition,
         "photos": [_photo_entry_to_dict(p) for p in manifest.photos],
     }
-    if manifest.summary is not None:
-        d["summary"] = _summary_to_dict(manifest.summary)
     if manifest.thumbnail_chunks:
         d["thumbnailChunks"] = [_thumbnail_chunk_to_dict(c) for c in manifest.thumbnail_chunks]
     d.update(manifest._extra)
@@ -501,7 +555,6 @@ def deserialize_leaf(d: dict[str, Any]) -> LeafManifest:
         schema_version=d.get("schemaVersion", SCHEMA_VERSION),
         partition=d["partition"],
         photos=[_photo_entry_from_dict(p) for p in d.get("photos", [])],
-        summary=_summary_from_dict(d["summary"]) if d.get("summary") else None,
         thumbnail_chunks=[_thumbnail_chunk_from_dict(c) for c in d.get("thumbnailChunks", [])],
         _extra=extra,
     )

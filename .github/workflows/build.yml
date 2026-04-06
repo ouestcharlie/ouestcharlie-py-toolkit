@@ -4,9 +4,12 @@ on:
   pull_request:
   push:
     tags: ["v*"]
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: "Run unit tests after building"
+        type: boolean
+        default: true
 
 jobs:
   build-wheel:
@@ -16,58 +19,62 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: macos-15-intel    # macOS Intel
           - os: macos-latest      # macOS arm64
-          - os: ubuntu-22.04      # Linux x86_64 — uses cibuildwheel for manylinux tag
+          - os: ubuntu-22.04      # Linux x86_64
           - os: windows-latest    # Windows x86_64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      # macOS / Windows: install deps and build directly with hatch
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'
         run: brew install nasm inih
+
+      - name: Install nasm (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nasm
 
       - name: Install nasm (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: choco install nasm -y --no-progress
 
-      - name: Set up Rust (macOS / Windows)
-        if: runner.os != 'Linux'
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
 
-      - uses: actions/setup-python@v5
+      - uses: Swatinem/rust-cache@v2
         with:
-          python-version: "3.11"
+          workspaces: image-proc
 
-      - name: Install hatch (macOS / Windows)
-        if: runner.os != 'Linux'
-        run: pip install hatch
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
-      - name: Build wheel (macOS / Windows)
-        if: runner.os != 'Linux'
+      - name: Install build tools
+        run: pip install hatch auditwheel
+
+      - name: Rust unit tests (image-proc)
+        working-directory: image-proc
+        run: cargo test --release
+
+      - name: Build wheel
         run: hatch build --target wheel
         env:
           IMAGE_PROC_FEATURE_RAW: "1"
 
-      # Linux: build inside a manylinux container via cibuildwheel
-      # Rust and nasm are installed inside the container by CIBW_BEFORE_BUILD.
-      - name: Build wheel (Linux — manylinux)
-        if: runner.os == 'Linux'
-        uses: pypa/cibuildwheel@v2
-        with:
-          output-dir: dist
-        env:
-          CIBW_BUILD: "cp311-manylinux_x86_64"
-          CIBW_MANYLINUX_X86_64_IMAGE: quay.io/pypa/manylinux_2_28_x86_64
-          CIBW_BEFORE_BUILD: |
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-            source "$HOME/.cargo/env"
-            dnf install -y nasm
-          CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" IMAGE_PROC_FEATURE_RAW=1'
+      - name: Install wheel and run tests
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
+        run: |
+          pip install --find-links dist/ ouestcharlie-py-toolkit pytest pytest-asyncio
+          python -m pytest tests/ -v
 
-      - uses: actions/upload-artifact@v4
+      - name: Repair wheel (Linux — retag linux_x86_64 → manylinux)
+        if: runner.os == 'Linux'
+        run: |
+          auditwheel repair dist/*.whl -w dist/
+          rm dist/*-linux_x86_64.whl
+
+      - uses: actions/upload-artifact@v6
         with:
           name: wheel-${{ matrix.os }}
           path: dist/*.whl
@@ -76,15 +83,15 @@ jobs:
     name: Build source distribution
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install hatch
         run: pip install hatch
       - name: Build sdist
         run: hatch build --target sdist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: sdist
           path: dist/*.tar.gz
