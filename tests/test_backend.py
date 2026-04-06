@@ -393,6 +393,12 @@ async def test_write_conditional_concurrent_serialised() -> None:
         )
         successes = [r for r in results if not isinstance(r, Exception)]
         conflicts = [r for r in results if isinstance(r, VersionConflictError)]
+        unexpected = [
+            r
+            for r in results
+            if isinstance(r, Exception) and not isinstance(r, VersionConflictError)
+        ]
+        assert not unexpected, f"Unexpected exceptions from write_conditional: {unexpected}"
         assert len(successes) >= 1
         assert len(successes) + len(conflicts) == 10
         # The file on disk must contain a coherent payload from one writer

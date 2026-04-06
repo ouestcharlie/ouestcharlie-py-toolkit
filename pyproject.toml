@@ -21,7 +21,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "mcp>=1.0",
+    "mcp>=1.27",
     "pyexiv2>=2.8",
     "blake3>=1.0.8",
     "pyjwt>=2.12.0", # suggested by dependabot
