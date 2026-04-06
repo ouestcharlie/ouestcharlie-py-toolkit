@@ -89,7 +89,7 @@ class Backend(Protocol):
         ...
 
 
-def backend_from_config(config: dict) -> Backend:
+def backend_from_config(config: dict[str, str]) -> Backend:
     """Factory function to create a Backend instance from configuration.
 
     Args:

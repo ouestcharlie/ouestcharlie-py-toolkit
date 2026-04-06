@@ -100,9 +100,9 @@ def _find_image_proc_binary() -> str:
 async def _stage_photos(
     backend: Backend,
     partition: str,
-    photo_entries: list,
+    photo_entries: list[PhotoEntry],
     tmpdir: str,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Read photos from the backend once and write them to ``tmpdir``.
 
     Returns the image-proc ``photos`` payload (list of dicts with path, ext,
@@ -110,7 +110,7 @@ async def _stage_photos(
     content_hash (caller's responsibility).
     """
     prefix = partition.rstrip("/") + "/" if partition else ""
-    photos_payload: list[dict] = []
+    photos_payload: list[dict[str, object]] = []
     for i, entry in enumerate(photo_entries):
         photo_path = f"{prefix}{entry.filename}"
         photo_bytes, _ = await backend.read(photo_path)
@@ -129,7 +129,7 @@ async def _stage_photos(
 
 
 async def _call_image_proc(
-    staged_photos: list[dict],
+    staged_photos: list[dict[str, object]],
     tile_size: int,
     fit: str,
     quality: int,
@@ -200,7 +200,7 @@ async def generate_partition_thumbnails(
     ordered = sorted(photo_entries, key=lambda e: e.content_hash)
     chunks = [ordered[i : i + GRID_MAX_PHOTOS] for i in range(0, len(ordered), GRID_MAX_PHOTOS)]
 
-    async def _generate_chunk(chunk_entries: list) -> ThumbnailChunk:
+    async def _generate_chunk(chunk_entries: list[PhotoEntry]) -> ThumbnailChunk:
         with tempfile.TemporaryDirectory() as tmpdir:
             staged = await _stage_photos(backend, partition, chunk_entries, tmpdir)
             grid, avif_bytes = await _call_image_proc(

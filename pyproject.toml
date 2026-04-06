@@ -7,7 +7,7 @@ path = "hatch_build.py"
 
 [project]
 name = "ouestcharlie-py-toolkit"
-version = "0.1.1"
+version = "0.2.0"
 description = "Shared Python toolkit for OuEstCharlie agents"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -57,3 +57,7 @@ tmp_path_retention_policy = "none"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[[tool.mypy.overrides]]
+module = "pyexiv2.*"
+ignore_missing_imports = true

@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from mcp.server.fastmcp import Context
+from mcp.server.fastmcp import Context
 
 _log = logging.getLogger(__name__)
 
 
 async def report_progress(
-    ctx: Context,
+    ctx: Context,  # type: ignore[type-arg]
     progress: int,
     total: int,
     message: str = "",
