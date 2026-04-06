@@ -166,12 +166,14 @@ class LocalBackend:
         On Windows, ``msvcrt.locking`` is similarly per-process.
         """
         full_path = self._resolve(path)
-        tmp_path = full_path.with_suffix(full_path.suffix + ".tmp")
         lock_path = full_path.with_suffix(full_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         thread_lock = self._get_thread_lock(path)
 
         def _locked_check_and_write() -> int:
+            # Unique tmp path per call avoids Windows name-pending-deletion
+            # races when multiple threads share the same base tmp path.
+            tmp_path = full_path.with_suffix(f".{threading.get_ident()}.tmp")
             with thread_lock, _CrossProcessLock(lock_path):
                 current_mtime = full_path.stat().st_mtime_ns
                 if current_mtime != expected_version.value:

@@ -46,14 +46,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v6
-
       - name: Install build tools
-        run: uv pip install --system hatch auditwheel
+        run: pip install hatch auditwheel
 
       - name: Rust unit tests (image-proc)
         working-directory: image-proc
-        run: cargo test
+        run: cargo test --release
 
       - name: Build wheel
         run: hatch build --target wheel
