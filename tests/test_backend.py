@@ -7,9 +7,62 @@ from pathlib import Path
 
 import pytest
 
-from ouestcharlie_toolkit.backend import backend_from_config
+from ouestcharlie_toolkit.backend import (
+    ConfigurationError,
+    FileInfo,
+    VersionConflictError,
+    VersionToken,
+    backend_from_config,
+)
 from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.schema import ConfigurationError, VersionConflictError
+
+# ---------------------------------------------------------------------------
+# VersionToken, FileInfo, exceptions
+# ---------------------------------------------------------------------------
+
+
+def test_version_token():
+    """Test VersionToken creation and access."""
+    token = VersionToken(12345)
+    assert token.value == 12345
+
+
+def test_version_token_equality():
+    """Test VersionToken equality comparison."""
+    token1 = VersionToken(12345)
+    token2 = VersionToken(12345)
+    token3 = VersionToken(54321)
+    assert token1 == token2
+    assert token1 != token3
+
+
+def test_file_info():
+    """Test FileInfo creation."""
+    token = VersionToken("etag-abc123")
+    info = FileInfo(path="2024/photo.jpg", version=token)
+    assert info.path == "2024/photo.jpg"
+    assert info.version == token
+
+
+def test_version_conflict_error():
+    """Test VersionConflictError creation and attributes."""
+    expected = VersionToken("v1")
+    actual = VersionToken("v2")
+    error = VersionConflictError("test.jpg", expected, actual)
+
+    assert error.path == "test.jpg"
+    assert error.expected == expected
+    assert error.actual == actual
+    assert "test.jpg" in str(error)
+    assert "v1" in str(error)
+    assert "v2" in str(error)
+
+
+def test_configuration_error():
+    """Test ConfigurationError can be raised."""
+    with pytest.raises(ConfigurationError):
+        raise ConfigurationError("Invalid config")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -360,6 +413,57 @@ async def test_write_new_concurrent_only_one_succeeds() -> None:
         errors = [r for r in results if isinstance(r, FileExistsError)]
         assert len(successes) == 1
         assert len(errors) == 9
+
+
+# ---------------------------------------------------------------------------
+# LocalBackend.write_conditional — lock_dir placement
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_lock_file_default_placement() -> None:
+    """Without lock_dir the .lock file is created next to the target file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=tmpdir)
+        version = await backend.write_new("f.txt", b"v1")
+        await backend.write_conditional("f.txt", b"v2", version)
+        assert (Path(tmpdir) / "f.txt.lock").exists()
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_lock_file_in_lock_dir() -> None:
+    """With lock_dir the .lock file is created inside the given directory."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / ".ouestcharlie").mkdir()
+        backend = LocalBackend(root=tmpdir)
+        version = await backend.write_new("f.txt", b"v1")
+        await backend.write_conditional("f.txt", b"v2", version, ".ouestcharlie")
+        assert (Path(tmpdir) / ".ouestcharlie" / "f.txt.lock").exists()
+        assert not (Path(tmpdir) / "f.txt.lock").exists()
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_lock_dir_created_if_missing() -> None:
+    """lock_dir is created automatically if it does not yet exist."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=tmpdir)
+        version = await backend.write_new("f.txt", b"v1")
+        await backend.write_conditional("f.txt", b"v2", version, ".ouestcharlie")
+        assert (Path(tmpdir) / ".ouestcharlie" / "f.txt.lock").exists()
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_lock_dir_nested() -> None:
+    """lock_dir works with nested paths (e.g. .ouestcharlie/partition)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "2024" / "July").mkdir(parents=True)
+        backend = LocalBackend(root=tmpdir)
+        version = await backend.write_new("2024/July/photo.xmp", b"<xmp/>")
+        await backend.write_conditional(
+            "2024/July/photo.xmp", b"<xmp2/>", version, ".ouestcharlie/2024/July"
+        )
+        assert (Path(tmpdir) / ".ouestcharlie" / "2024" / "July" / "photo.xmp.lock").exists()
+        assert not (Path(tmpdir) / "2024" / "July" / "photo.xmp.lock").exists()
 
 
 # ---------------------------------------------------------------------------

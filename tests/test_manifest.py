@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from ouestcharlie_toolkit.backend import VersionConflictError, VersionToken
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
@@ -18,8 +19,6 @@ from ouestcharlie_toolkit.schema import (
     ManifestSummary,
     PhotoEntry,
     RootSummary,
-    VersionConflictError,
-    VersionToken,
 )
 
 # ---------------------------------------------------------------------------

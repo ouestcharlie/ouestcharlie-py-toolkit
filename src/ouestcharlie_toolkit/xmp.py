@@ -9,12 +9,11 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from .backend import Backend
+from .backend import Backend, VersionConflictError, VersionToken
 from .schema import (
+    METADATA_DIR,
     OUESTCHARLIE_NS,
     SCHEMA_VERSION,
-    VersionConflictError,
-    VersionToken,
     XmpSidecar,
 )
 
@@ -132,6 +131,22 @@ def xmp_path_for(photo_path: str) -> str:
     """
     p = Path(photo_path)
     return p.with_suffix(".xmp").as_posix()
+
+
+def xmp_lock_dir_for(photo_path: str) -> str:
+    """Compute the lock directory for a photo's XMP sidecar.
+
+    Lock files are placed under the METADATA_DIR tree, mirroring the photo's
+    partition, so they never appear next to original photo files.
+
+    Args:
+        photo_path: Path to the photo file (e.g., "2024/2024-07/IMG_001.jpg").
+
+    Returns:
+        Backend-relative lock directory (e.g., ".ouestcharlie/2024/2024-07").
+    """
+    parent = Path(photo_path).parent.as_posix()
+    return f"{METADATA_DIR}/{parent}" if parent != "." else METADATA_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -277,9 +292,12 @@ class XmpStore:
             VersionConflictError: If the sidecar was modified since read.
         """
         xmp_path = xmp_path_for(photo_path)
+        lock_dir = xmp_lock_dir_for(photo_path)
         sidecar.metadata_version += 1
         xml = serialize_xmp(sidecar)
-        return await self.backend.write_conditional(xmp_path, xml.encode("utf-8"), expected_version)
+        return await self.backend.write_conditional(
+            xmp_path, xml.encode("utf-8"), expected_version, lock_dir
+        )
 
     async def create(self, photo_path: str, sidecar: XmpSidecar) -> VersionToken:
         """Create a new XMP sidecar (fails if it already exists).

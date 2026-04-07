@@ -2,77 +2,18 @@
 
 from datetime import datetime
 
-import pytest
-
 from ouestcharlie_toolkit.schema import (
     METADATA_DIR,
     OUESTCHARLIE_NS,
     SCHEMA_VERSION,
-    ConfigurationError,
-    FileInfo,
     LeafManifest,
     ManifestSummary,
     PhotoEntry,
-    VersionConflictError,
-    VersionToken,
     XmpSidecar,
     deserialize_leaf,
     manifest_path,
     serialize_leaf,
 )
-
-# ---------------------------------------------------------------------------
-# Version tokens and file info
-# ---------------------------------------------------------------------------
-
-
-def test_version_token():
-    """Test VersionToken creation and access."""
-    token = VersionToken(12345)
-    assert token.value == 12345
-
-
-def test_version_token_equality():
-    """Test VersionToken equality comparison."""
-    token1 = VersionToken(12345)
-    token2 = VersionToken(12345)
-    token3 = VersionToken(54321)
-    assert token1 == token2
-    assert token1 != token3
-
-
-def test_file_info():
-    """Test FileInfo creation."""
-    token = VersionToken("etag-abc123")
-    info = FileInfo(path="2024/photo.jpg", version=token)
-    assert info.path == "2024/photo.jpg"
-    assert info.version == token
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-
-def test_version_conflict_error():
-    """Test VersionConflictError creation and attributes."""
-    expected = VersionToken("v1")
-    actual = VersionToken("v2")
-    error = VersionConflictError("test.jpg", expected, actual)
-
-    assert error.path == "test.jpg"
-    assert error.expected == expected
-    assert error.actual == actual
-    assert "test.jpg" in str(error)
-    assert "v1" in str(error)
-    assert "v2" in str(error)
-
-
-def test_configuration_error():
-    """Test ConfigurationError can be raised."""
-    with pytest.raises(ConfigurationError):
-        raise ConfigurationError("Invalid config")
-
 
 # ---------------------------------------------------------------------------
 # Photo entries

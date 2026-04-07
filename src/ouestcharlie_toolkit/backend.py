@@ -2,9 +2,54 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Any, Protocol
 
-from .schema import FileInfo, VersionToken
+# ---------------------------------------------------------------------------
+# Version token and file info
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VersionToken:
+    """Opaque version token returned by backends. Callers pass it back to
+    write_conditional without inspecting its value."""
+
+    value: Any
+
+
+@dataclass(frozen=True)
+class FileInfo:
+    """Metadata about a file returned by Backend.list_files."""
+
+    path: str
+    version: VersionToken
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class VersionConflictError(Exception):
+    """Raised when a conditional write fails because the file was modified."""
+
+    def __init__(self, path: str, expected: VersionToken, actual: VersionToken) -> None:
+        self.path = path
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"Version conflict on {path}: expected {expected.value}, got {actual.value}"
+        )
+
+
+class ConfigurationError(Exception):
+    """Raised for invalid or missing configuration (backend root missing, bad credentials, etc.)."""
+
+
+# ---------------------------------------------------------------------------
+# Backend protocol
+# ---------------------------------------------------------------------------
 
 
 class Backend(Protocol):
@@ -22,9 +67,23 @@ class Backend(Protocol):
         ...
 
     async def write_conditional(
-        self, path: str, data: bytes, expected_version: VersionToken
+        self,
+        path: str,
+        data: bytes,
+        expected_version: VersionToken,
+        lock_dir: str | None = None,
     ) -> VersionToken:
         """Write file if its version matches expected_version (optimistic concurrency).
+
+        Args:
+            path: Backend-relative path to the file.
+            data: New file contents.
+            expected_version: Version token from the last read.
+            lock_dir: Backend-relative directory where the ``.lock`` sidecar file
+                should be created.  Callers should pass the ``METADATA_DIR``
+                subdirectory for the relevant partition so that lock files are
+                kept out of the user's photo folders.  When ``None`` the lock
+                file is placed next to the target file.
 
         Returns:
             New version token after successful write.
@@ -102,8 +161,6 @@ def backend_from_config(config: dict[str, str]) -> Backend:
     Raises:
         ConfigurationError: If config is invalid or backend type is unsupported.
     """
-    from .schema import ConfigurationError
-
     backend_type = config.get("type")
 
     if backend_type == "filesystem":
