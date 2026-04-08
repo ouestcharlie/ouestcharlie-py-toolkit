@@ -1,4 +1,4 @@
-"""Shared data models, exceptions, and constants for the OuEstCharlie toolkit."""
+"""Shared data models and constants for the OuEstCharlie toolkit."""
 
 from __future__ import annotations
 
@@ -46,48 +46,6 @@ def preview_jpeg_path(partition: str, content_hash: str) -> str:
     """
     suffix = partition.rstrip("/") + "/" if partition else ""
     return f"{METADATA_DIR}/{suffix}{PREVIEW_JPEG_SUBDIR}/{content_hash}.jpg"
-
-
-# ---------------------------------------------------------------------------
-# Version token (opaque to callers)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class VersionToken:
-    """Opaque version token returned by backends. Callers pass it back to
-    write_conditional without inspecting its value."""
-
-    value: Any
-
-
-@dataclass(frozen=True)
-class FileInfo:
-    """Metadata about a file returned by Backend.list_files."""
-
-    path: str
-    version: VersionToken
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-
-class VersionConflictError(Exception):
-    """Raised when a conditional write fails because the file was modified."""
-
-    def __init__(self, path: str, expected: VersionToken, actual: VersionToken) -> None:
-        self.path = path
-        self.expected = expected
-        self.actual = actual
-        super().__init__(
-            f"Version conflict on {path}: expected {expected.value}, got {actual.value}"
-        )
-
-
-class ConfigurationError(Exception):
-    """Raised for invalid or missing configuration (backend root missing, bad credentials, etc.)."""
 
 
 # ---------------------------------------------------------------------------

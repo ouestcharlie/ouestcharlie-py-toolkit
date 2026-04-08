@@ -48,7 +48,14 @@ Implementation uses:
 
 See [backends/local.py](src/ouestcharlie/backends/local.py) for implementation.
 
-**Race window**: Between reading `mtime` and renaming, another writer could modify the file. For V1 (single-device, sequential agent execution by Woof), this window is acceptable. For future multi-agent concurrency, the backend can use `flock` or a compare-and-swap mechanism.
+**Cross-process locking**: `write_conditional` holds two locks simultaneously for the duration of the stat-check + rename:
+
+1. A per-path `threading.Lock` (intra-process thread safety) — required on macOS/BSD where `flock` is per-process and does not serialise threads within the same process.
+2. A `_CrossProcessLock` on a `<filename>.lock` sidecar file (cross-process safety):
+   - macOS/Linux: `fcntl.flock(LOCK_EX)` on the open fd.
+   - Windows: `msvcrt.locking(LK_LOCK, 1)` on the open fd.
+
+Callers pass a `lock_dir` (backend-relative path) to `write_conditional` so that `.lock` files are always created inside a `METADATA_DIR` (`.ouestcharlie/`) directory, never next to original photos. The lock files persist on disk — this is normal for `flock`-based locking; the OS-level lock releases when the fd is closed.
 
 ## Manifest Read-Edit with Consistency
 

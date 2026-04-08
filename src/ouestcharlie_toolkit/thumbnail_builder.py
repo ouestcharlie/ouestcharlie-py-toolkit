@@ -215,7 +215,9 @@ async def generate_partition_thumbnails(
         avif_path = thumbnail_avif_path(partition, avif_hash, tier)
         if await backend.exists(avif_path):
             _, version = await backend.read(avif_path)
-            await backend.write_conditional(avif_path, avif_bytes, version)
+            await backend.write_conditional(
+                avif_path, avif_bytes, version, avif_path.rsplit("/", 1)[0]
+            )
         else:
             await backend.write_new(avif_path, avif_bytes)
         _log.debug(

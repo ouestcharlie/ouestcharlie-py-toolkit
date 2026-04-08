@@ -6,14 +6,13 @@ import json
 import logging
 from collections.abc import Callable
 
-from .backend import Backend
+from .backend import Backend, VersionConflictError, VersionToken
 from .schema import (
+    METADATA_DIR,
     SCHEMA_VERSION,
     LeafManifest,
     ManifestSummary,
     RootSummary,
-    VersionConflictError,
-    VersionToken,
     deserialize_leaf,
     deserialize_summary,
     manifest_path,
@@ -74,7 +73,9 @@ class ManifestStore:
         """
         path = manifest_path(manifest.partition)
         data = json.dumps(serialize_leaf(manifest), ensure_ascii=False, indent=2).encode("utf-8")
-        return await self.backend.write_conditional(path, data, expected_version)
+        return await self.backend.write_conditional(
+            path, data, expected_version, path.rsplit("/", 1)[0]
+        )
 
     async def create_leaf(self, manifest: LeafManifest) -> VersionToken:
         """Create a new leaf manifest (fails if it already exists).
@@ -159,7 +160,7 @@ class ManifestStore:
         """
         path = summary_path()
         data = json.dumps(serialize_summary(summary), ensure_ascii=False, indent=2).encode("utf-8")
-        return await self.backend.write_conditional(path, data, expected_version)
+        return await self.backend.write_conditional(path, data, expected_version, METADATA_DIR)
 
     async def create_summary(self, summary: RootSummary) -> VersionToken:
         """Create the root summary (fails if it already exists).

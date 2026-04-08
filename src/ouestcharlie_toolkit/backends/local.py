@@ -10,7 +10,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from ..schema import FileInfo, VersionConflictError, VersionToken
+from ..backend import FileInfo, VersionConflictError, VersionToken
 
 # ---------------------------------------------------------------------------
 # Platform-specific cross-process locking
@@ -156,7 +156,11 @@ class LocalBackend:
             return self._thread_locks[key]
 
     async def write_conditional(
-        self, path: str, data: bytes, expected_version: VersionToken
+        self,
+        path: str,
+        data: bytes,
+        expected_version: VersionToken,
+        lock_dir: str | None = None,
     ) -> VersionToken:
         """Write file using atomic rename, checking mtime version first.
 
@@ -169,7 +173,10 @@ class LocalBackend:
         On Windows, ``msvcrt.locking`` is similarly per-process.
         """
         full_path = self._resolve(path)
-        lock_path = full_path.with_suffix(full_path.suffix + ".lock")
+        if lock_dir is not None:
+            lock_path = self._resolve(lock_dir) / (full_path.name + ".lock")
+        else:
+            lock_path = full_path.with_suffix(full_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         thread_lock = self._get_thread_lock(path)
 

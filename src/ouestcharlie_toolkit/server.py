@@ -13,9 +13,8 @@ from typing import Any
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 
-from .backend import Backend, backend_from_config
+from .backend import Backend, ConfigurationError, backend_from_config
 from .manifest import ManifestStore
-from .schema import ConfigurationError
 from .xmp import XmpStore
 
 _log = logging.getLogger(__name__)

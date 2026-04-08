@@ -1,23 +1,26 @@
 """OuEstCharlie toolkit - shared Python library for photo management agents."""
 
-from .backend import Backend, backend_from_config
+from .backend import (
+    Backend,
+    ConfigurationError,
+    FileInfo,
+    VersionConflictError,
+    VersionToken,
+    backend_from_config,
+)
 from .fields import PHOTO_FIELDS, FieldDef, FieldType
 from .logging import setup_logging
 from .manifest import ManifestStore
 from .photo import Photo
 from .progress import report_progress
 from .schema import (
-    ConfigurationError,
-    FileInfo,
     LeafManifest,
     ManifestSummary,
     PhotoEntry,
-    VersionConflictError,
-    VersionToken,
     XmpSidecar,
 )
 from .server import AgentBase
-from .xmp import XmpStore, xmp_path_for
+from .xmp import XmpStore, xmp_lock_dir_for, xmp_path_for
 
 __version__ = "0.1.0"
 
@@ -47,4 +50,5 @@ __all__ = [
     "backend_from_config",
     "setup_logging",
     "xmp_path_for",
+    "xmp_lock_dir_for",
 ]
