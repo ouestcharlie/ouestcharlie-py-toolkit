@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from ..backend import FileInfo, VersionConflictError, VersionToken
@@ -78,6 +79,26 @@ else:
             _fcntl.flock(self._fd, _fcntl.LOCK_UN)
             self._fd.close()
             self._fd = None
+
+
+def _atomic_replace(src: Path, dst: Path) -> None:
+    """Rename src over dst atomically.
+
+    On Windows, ``MoveFileEx(MOVEFILE_REPLACE_EXISTING)`` can transiently fail
+    with ``PermissionError`` when antivirus software (e.g. Windows Defender)
+    briefly holds a handle on the destination file after it was written.
+    Retry with exponential back-off to ride out such transient holds.
+    On POSIX, ``os.rename`` is atomic so one attempt is sufficient.
+    """
+    max_attempts = 5 if sys.platform == "win32" else 1
+    for attempt in range(max_attempts):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if attempt == max_attempts - 1:
+                raise
+            time.sleep(0.01 * (2**attempt))  # 10 ms, 20 ms, 40 ms, 80 ms
 
 
 class LocalBackend:
@@ -189,7 +210,7 @@ class LocalBackend:
                 if current_mtime != expected_version.value:
                     raise VersionConflictError(path, expected_version, VersionToken(current_mtime))
                 tmp_path.write_bytes(data)
-                tmp_path.replace(full_path)
+                _atomic_replace(tmp_path, full_path)
                 return full_path.stat().st_mtime_ns
 
         loop = asyncio.get_event_loop()
