@@ -3,6 +3,9 @@ name: Build (reusable)
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   build-wheel:
     name: Build wheel on ${{ matrix.os }}
