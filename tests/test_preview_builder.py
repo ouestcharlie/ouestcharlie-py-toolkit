@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -46,33 +45,11 @@ async def test_generate_preview_jpeg_uses_persistent_proc(tmp_path: Path) -> Non
 
     image_proc.request = fake_request
 
-    cache_path = await generate_preview_jpeg(backend, "", entry, image_proc=image_proc)
+    cache_path = await generate_preview_jpeg(image_proc, backend, "", entry)
 
     assert cache_path.endswith(".jpg")
     data, _ = await backend.read(cache_path)
     assert data == b"FAKE_PREVIEW_JPEG"
-
-
-@pytest.mark.asyncio
-async def test_generate_preview_jpeg_spawns_proc_when_none(tmp_path: Path) -> None:
-    """When image_proc=None, generate_preview_jpeg falls back to spawning a subprocess."""
-    backend = LocalBackend(root=tmp_path)
-    (tmp_path / "photo.jpg").write_bytes(b"FAKE_JPEG")
-    entry = _fake_entry("photo.jpg", "sha256:" + "cd" * 32)
-
-    class _FakeProc:
-        returncode = 0
-
-        async def communicate(self, input=None):
-            data = json.loads(input.decode())
-            Path(data["output"]).write_bytes(b"SPAWNED_PREVIEW")
-            return json.dumps({"width": 800, "height": 600}).encode(), b""
-
-    with patch("asyncio.create_subprocess_exec", return_value=_FakeProc()):
-        cache_path = await generate_preview_jpeg(backend, "", entry, image_proc=None)
-
-    data, _ = await backend.read(cache_path)
-    assert data == b"SPAWNED_PREVIEW"
 
 
 @pytest.mark.asyncio
@@ -86,7 +63,7 @@ async def test_generate_preview_jpeg_skips_generation_when_cached(tmp_path: Path
 
     image_proc = AsyncMock(spec=PersistentImageProc)
 
-    result = await generate_preview_jpeg(backend, "", entry, image_proc=image_proc)
+    result = await generate_preview_jpeg(image_proc, backend, "", entry)
 
     assert result == cache_path
     image_proc.request.assert_not_called()

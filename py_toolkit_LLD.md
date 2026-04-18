@@ -273,7 +273,7 @@ Image processing is split across three modules:
 - `_stage_photos(backend, partition, photo_entries, tmpdir)` — reads photos from backend and writes them to a temp directory
 
 **`preview_builder.py`** — on-demand JPEG preview generation:
-- `generate_preview_jpeg(backend, partition, entry, image_proc=None)` — generates and caches a single-photo JPEG preview; accepts an optional `PersistentImageProc` instance (Wally) or falls back to spawning a subprocess (Whitebeard / standalone)
+- `generate_preview_jpeg(backend, partition, entry, image_proc)` — generates and caches a single-photo JPEG preview.
 
 ## Dependencies
 

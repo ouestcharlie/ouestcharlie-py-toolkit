@@ -11,14 +11,66 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
+
+# Fallback when pyproject.toml is not reachable (non-editable wheel installs).
+_FALLBACK_MIN_VERSION = (0, 2, 0)
+
+
+def _required_image_proc_version() -> tuple[int, ...]:
+    """Read image_proc_min_version from pyproject.toml, or return the fallback."""
+    pyproject = Path(__file__).parent.parent.parent / "pyproject.toml"
+    try:
+        with open(pyproject, "rb") as fh:
+            data = tomllib.load(fh)
+        ver_str: str = data["tool"]["ouestcharlie"]["image_proc_min_version"]
+        return tuple(int(x) for x in ver_str.split("."))
+    except (FileNotFoundError, KeyError, ValueError):
+        return _FALLBACK_MIN_VERSION
+
+
+def _verify_image_proc_version(binary: str) -> None:
+    """Raise FileNotFoundError if *binary* is older than the required version."""
+    required = _required_image_proc_version()
+    req_str = ".".join(str(x) for x in required)
+    try:
+        result = subprocess.run(
+            [binary, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FileNotFoundError(f"image-proc --version failed: {exc}") from exc
+
+    parts = result.stdout.strip().split()
+    if len(parts) != 2 or parts[0] != "image-proc":
+        raise FileNotFoundError(
+            f"image-proc at {binary!r} does not support --version "
+            f"(got {result.stdout.strip()!r}). "
+            f"Rebuild with `cargo build --release` (need >= {req_str})."
+        )
+    try:
+        version = tuple(int(x) for x in parts[1].split("."))
+    except ValueError as exc:
+        raise FileNotFoundError(f"Cannot parse image-proc version {parts[1]!r}") from exc
+
+    if version < required:
+        raise FileNotFoundError(
+            f"image-proc {parts[1]} is too old; need >= {req_str}. "
+            "Rebuild with `cargo build --release`."
+        )
 
 
 def _find_image_proc_binary() -> str:
@@ -86,6 +138,7 @@ class OneTimeImageProc:
         """
         if self._binary is None:
             self._binary = _find_image_proc_binary()
+            _verify_image_proc_version(self._binary)
         proc = await asyncio.create_subprocess_exec(
             self._binary,
             stdin=asyncio.subprocess.PIPE,
@@ -141,6 +194,7 @@ class PersistentImageProc:
             return self._proc
         if self._binary is None:
             self._binary = _find_image_proc_binary()
+            _verify_image_proc_version(self._binary)
         _log.debug("Starting persistent image-proc: %s", self._binary)
         self._proc = await asyncio.create_subprocess_exec(
             self._binary,
@@ -159,16 +213,37 @@ class PersistentImageProc:
         async with self._lock:
             proc = await self._ensure_running()
             assert proc.stdin is not None and proc.stdout is not None
+            output_path = payload.get("output", "<unknown>")
+            _log.debug(
+                "PersistentImageProc send: pid=%d output=%s",
+                proc.pid,
+                output_path,
+            )
             line = (json.dumps(payload) + "\n").encode()
             proc.stdin.write(line)
             await proc.stdin.drain()
+            _log.debug(
+                "PersistentImageProc waiting for response: pid=%d output=%s", proc.pid, output_path
+            )
             response_line = await proc.stdout.readline()
             if not response_line:
                 rc = proc.returncode
                 raise RuntimeError(f"image-proc closed stdout unexpectedly (exit code {rc})")
             result = json.loads(response_line.decode())
             if "error" in result:
+                _log.error(
+                    "PersistentImageProc error: pid=%d output=%s error=%r",
+                    proc.pid,
+                    output_path,
+                    result["error"],
+                )
                 raise RuntimeError(f"image-proc error: {result['error']}")
+            _log.debug(
+                "PersistentImageProc response received: pid=%d output=%s result=%s",
+                proc.pid,
+                output_path,
+                result,
+            )
             return result
 
     async def close(self) -> None:
@@ -184,3 +259,8 @@ class PersistentImageProc:
         except TimeoutError:
             _log.warning("image-proc did not exit cleanly; terminating")
             proc.terminate()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            if proc.returncode is None:
+                _log.warning("image-proc did not exit after SIGTERM; killing")
+                proc.kill()

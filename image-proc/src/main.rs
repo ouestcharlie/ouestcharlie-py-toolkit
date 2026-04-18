@@ -53,7 +53,7 @@
 //! The caller is responsible for ordering photos by content_hash before
 //! passing them here, to ensure stable tile indices.
 
-use std::io::{self, Read};
+use std::io::{self};
 use std::path::{Path, PathBuf};
 
 use image::{DynamicImage, GenericImageView, RgbImage};
@@ -131,6 +131,12 @@ enum Response {
 
 fn main() {
     use std::io::BufRead;
+
+    // Support `--version` for version negotiation with the Python toolkit.
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("image-proc {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
 
     let stdin = io::stdin();
     let stdout = io::stdout();
