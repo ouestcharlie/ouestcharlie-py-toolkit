@@ -120,27 +120,56 @@ struct JpegPreviewOutput {
 // Main
 // ---------------------------------------------------------------------------
 
+/// Response envelope: either a successful result or an in-band error.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Response {
+    AvifGrid(AvifGridOutput),
+    JpegPreview(JpegPreviewOutput),
+    Error { error: String },
+}
+
 fn main() {
-    let mut stdin = String::new();
-    io::stdin().read_to_string(&mut stdin).expect("failed to read stdin");
+    use std::io::BufRead;
 
-    let request: Request = match serde_json::from_str(&stdin) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("image-proc error: invalid JSON input: {e}");
-            std::process::exit(1);
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut out = io::BufWriter::new(stdout.lock());
+
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("image-proc: failed to read line: {e}");
+                break;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
         }
-    };
 
-    match request {
-        Request::AvifGrid(input) => match run_avif_grid(input) {
-            Ok(out) => println!("{}", serde_json::to_string(&out).unwrap()),
-            Err(e) => { eprintln!("image-proc error: {e}"); std::process::exit(1); }
-        },
-        Request::JpegPreview(input) => match run_jpeg_preview(input) {
-            Ok(out) => println!("{}", serde_json::to_string(&out).unwrap()),
-            Err(e) => { eprintln!("image-proc error: {e}"); std::process::exit(1); }
-        },
+        let response = match serde_json::from_str::<Request>(&line) {
+            Err(e) => Response::Error { error: format!("invalid JSON input: {e}") },
+            Ok(Request::AvifGrid(input)) => match run_avif_grid(input) {
+                Ok(out) => Response::AvifGrid(out),
+                Err(e) => Response::Error { error: e.to_string() },
+            },
+            Ok(Request::JpegPreview(input)) => match run_jpeg_preview(input) {
+                Ok(out) => Response::JpegPreview(out),
+                Err(e) => Response::Error { error: e.to_string() },
+            },
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        use std::io::Write;
+        if let Err(e) = writeln!(out, "{json}") {
+            eprintln!("image-proc: failed to write response: {e}");
+            break;
+        }
+        if let Err(e) = out.flush() {
+            eprintln!("image-proc: failed to flush: {e}");
+            break;
+        }
     }
 }
 
