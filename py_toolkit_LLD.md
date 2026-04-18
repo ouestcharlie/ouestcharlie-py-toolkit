@@ -136,11 +136,34 @@ Errors follow the three-category model from [controller_api.json](../../controll
 
 ## Image Processing
 
-The `image-proc` Rust CLI (in `image-proc/`) handles all pixel-level operations: decoding, orientation, resize, fit, and encoding. It is invoked via `asyncio.create_subprocess_exec` with a JSON payload on stdin and returns a JSON result on stdout. Two commands are supported, dispatched by the shape of the input (untagged serde enum).
+The `image-proc` Rust CLI (in `image-proc/`) handles all pixel-level operations: decoding, orientation, resize, fit, and encoding. Two commands are supported, dispatched by the shape of the input (untagged serde enum).
+
+### Protocol — persistent newline-delimited JSON
+
+`image-proc` runs as a persistent subprocess: it reads one JSON request per line from stdin and writes one JSON response per line to stdout. This eliminates per-request subprocess startup cost (significant on Windows).
+
+- Requests and responses are newline-terminated JSON objects.
+- Errors are returned in-band as `{"error": "…"}` — the process does not exit on error.
+- The process exits when stdin is closed.
+
+Two Python wrappers in `image_proc.py` implement this protocol:
+
+| Class | Strategy | Use case |
+|---|---|---|
+| `OneTimeImageProc` | Spawns a fresh process per `request()` call; uses `communicate()` | `thumbnail_builder` — chunks already run in parallel via `asyncio.gather`, no shared process needed |
+| `PersistentImageProc` | Keeps one process alive across calls; uses asyncio.Lock to serialise requests | Wally's `MediaMiddleware` — one process for all preview requests in the session |
+
+`PersistentImageProc` restarts the process automatically if it crashes. Both classes expose the same interface:
+
+```python
+result: dict = await proc.request(payload_dict)
+```
+
+`PersistentImageProc` additionally implements `async def close()` and the async context manager protocol.
 
 ### `avif_grid` command — thumbnail AVIF grid
 
-Called by `generate_partition_thumbnails()` to produce per-partition thumbnail AVIF chunks. Only the `"thumbnail"` tier is generated at indexing time (256 px, center-crop); the preview tier is replaced by lazy per-photo JPEG generation.
+Called by `generate_partition_thumbnails()` via `OneTimeImageProc` to produce per-partition thumbnail AVIF chunks. Only the `"thumbnail"` tier is generated at indexing time (256 px, center-crop); the preview tier is replaced by lazy per-photo JPEG generation.
 
 Photos are sorted by `content_hash`, then split into chunks of at most `GRID_MAX_PHOTOS = 64` entries each, yielding a maximum 8×8 grid per file. Chunks are encoded in parallel via `asyncio.gather`. Each AVIF file is named `thumbnails-{avif_hash}.avif`, where `avif_hash` is the 22-char BLAKE3 of the file's content — the filename is determined after encoding.
 
@@ -151,7 +174,7 @@ Python: sort photos by content_hash → split into chunks of ≤64
   ↓  (asyncio.gather — one coroutine per chunk, each in its own tmpdir)
   Per chunk:
     Python: stage chunk's photo bytes to tmpdir
-      ↓  (asyncio.create_subprocess_exec)
+      ↓  (OneTimeImageProc.request → asyncio.create_subprocess_exec)
     image-proc avif_grid (Rust):
       rayon::par_iter — decode → apply orientation → resize → fit to square
       sequential      — YUV420 conversion → AVIF grid encoding (libavif)
@@ -159,7 +182,7 @@ Python: sort photos by content_hash → split into chunks of ≤64
     Python: hash bytes → name file → write to backend as thumbnails-{hash}.avif
 ```
 
-**Stdin** (detected by presence of `"photos"` array):
+**Request** (detected by presence of `"photos"` array):
 ```json
 {
   "photos": [
@@ -175,16 +198,16 @@ Python: sort photos by content_hash → split into chunks of ≤64
 - `fit` — `"crop"` (center-crop to square, thumbnails) or `"pad"` (letterbox with black).
 - Photos must be pre-sorted by `content_hash` (Python's responsibility) for stable tile indices.
 
-**Stdout:**
+**Response:**
 ```json
 { "cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["Kf3QzA2_nBcR8xYvLm1P9w", "aB1cD2eF3gH4i5jK6lM7nO", ...] }
 ```
 
 ### `jpeg_preview` command — on-demand preview JPEG
 
-Called by `generate_preview_jpeg()` to produce a single-photo preview JPEG. Invoked by Wally's HTTP server on cache miss.
+Called by `generate_preview_jpeg()` to produce a single-photo preview JPEG. Invoked by Wally's HTTP server on cache miss via a shared `PersistentImageProc` instance.
 
-**Stdin** (detected by presence of `"photo"` object):
+**Request** (detected by presence of `"photo"` object):
 ```json
 {
   "photo": { "path": "/tmp/staged.cr2", "ext": ".cr2", "orientation": 1, "content_hash": "Kf3QzA2_nBcR8xYvLm1P9w" },
@@ -197,7 +220,7 @@ Called by `generate_preview_jpeg()` to produce a single-photo preview JPEG. Invo
 - `max_long_edge` — the output JPEG's long edge is capped at this value; aspect ratio is preserved.
 - `quality` — JPEG quality 1–95.
 
-**Stdout:**
+**Response:**
 ```json
 { "width": 1440, "height": 960 }
 ```
@@ -235,15 +258,22 @@ ThumbnailChunk(
 )
 ```
 
-### Python Entry Points
+### Python Modules
 
-`thumbnail_builder.py` exposes:
+Image processing is split across three modules:
+
+**`image_proc.py`** — subprocess management and binary discovery:
+- `_find_image_proc_binary()` — resolves binary path via `IMAGE_PROC_BINARY` env var, bundled wheel binary, `$PATH`, or dev build (`image-proc/target/release/image-proc`)
+- `OneTimeImageProc` — spawns a fresh process per `request()` call; used by `thumbnail_builder`
+- `PersistentImageProc` — keeps one process alive with `asyncio.Lock` serialisation; used by Wally's `MediaMiddleware`
+
+**`thumbnail_builder.py`** — AVIF grid generation:
 - `generate_partition_thumbnails(backend, partition, photo_entries, tier="thumbnail")` — top-level orchestrator; returns `list[ThumbnailChunk]`
-- `generate_preview_jpeg(backend, partition, entry, max_long_edge=1440, jpeg_quality=85)` — generates and caches a single-photo JPEG preview; called by Wally's HTTP server
-- `_call_image_proc(...)` — calls image-proc for one chunk, returns `(ThumbnailGridLayout, avif_bytes)`
-- `_avif_path(partition, tier, chunk_hash)` — backend path for a chunk: `{partition}/.ouestcharlie/thumbnails-{hash}.avif`
-- `_preview_jpeg_path(partition, content_hash)` — canonical backend path for a preview JPEG (`{partition}/.ouestcharlie/previews/{content_hash}.jpg`)
-- `_find_image_proc_binary()` — resolves binary path via `IMAGE_PROC_BINARY` env var, `$PATH`, or dev build (`image-proc/target/release/image-proc`)
+- `_call_image_proc(staged_photos, tile_size, fit, quality, tmpdir)` — calls image-proc via `OneTimeImageProc` for one chunk; returns `(ThumbnailGridLayout, avif_bytes)`
+- `_stage_photos(backend, partition, photo_entries, tmpdir)` — reads photos from backend and writes them to a temp directory
+
+**`preview_builder.py`** — on-demand JPEG preview generation:
+- `generate_preview_jpeg(backend, partition, entry, image_proc=None)` — generates and caches a single-photo JPEG preview; accepts an optional `PersistentImageProc` instance (Wally) or falls back to spawning a subprocess (Whitebeard / standalone)
 
 ## Dependencies
 

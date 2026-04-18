@@ -18,11 +18,8 @@ from ouestcharlie_toolkit.schema import (
 )
 from ouestcharlie_toolkit.thumbnail_builder import (
     GRID_MAX_PHOTOS,
-    PersistentImageProc,
     _call_image_proc,
-    _find_image_proc_binary,
     generate_partition_thumbnails,
-    generate_preview_jpeg,
 )
 
 _SAMPLE_JPG = Path(__file__).parent / "sample-images" / "001.jpg"
@@ -107,35 +104,6 @@ def test_avif_path_root_partition() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _find_avif_grid_binary
-# ---------------------------------------------------------------------------
-
-
-def test_find_binary_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("IMAGE_PROC_BINARY", "/custom/image-proc")
-    assert _find_image_proc_binary() == "/custom/image-proc"
-
-
-def test_find_binary_uses_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("IMAGE_PROC_BINARY", raising=False)
-    with (
-        patch("pathlib.Path.exists", return_value=False),
-        patch("shutil.which", return_value="/usr/local/bin/image-proc"),
-    ):
-        assert _find_image_proc_binary() == "/usr/local/bin/image-proc"
-
-
-def test_find_binary_raises_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("IMAGE_PROC_BINARY", raising=False)
-    with (
-        patch("shutil.which", return_value=None),
-        patch("pathlib.Path.exists", return_value=False),
-        pytest.raises(FileNotFoundError, match="image-proc binary not found"),
-    ):
-        _find_image_proc_binary()
-
-
-# ---------------------------------------------------------------------------
 # _call_image_proc — returns (ThumbnailGridLayout, bytes), no backend write
 # ---------------------------------------------------------------------------
 
@@ -168,7 +136,6 @@ async def test_call_image_proc_returns_bytes(tmp_path: Path) -> None:
             fit="crop",
             quality=55,
             tmpdir=str(tmp_path),
-            binary="fake-avif-grid",
         )
 
     assert avif_bytes == b"FAKE_AVIF_CONTENT"
@@ -207,7 +174,6 @@ async def test_call_image_proc_passes_correct_json(tmp_path: Path) -> None:
             fit="crop",
             quality=55,
             tmpdir=str(tmp_path),
-            binary="fake-avif-grid",
         )
 
     assert len(captured) == 1
@@ -235,7 +201,6 @@ async def test_call_image_proc_raises_on_nonzero_exit(tmp_path: Path) -> None:
             fit="crop",
             quality=55,
             tmpdir=str(tmp_path),
-            binary="fake-avif-grid",
         )
 
 
@@ -255,7 +220,6 @@ async def test_call_image_proc_photo_order_in_grid(tmp_path: Path) -> None:
             fit="crop",
             quality=55,
             tmpdir=str(tmp_path),
-            binary="fake-avif-grid",
         )
 
     assert grid.photo_order == hashes
@@ -277,10 +241,6 @@ async def test_generate_partition_thumbnails_returns_chunks(tmp_path: Path) -> N
     fake_grid = ThumbnailGridLayout(cols=2, rows=1, tile_size=256, photo_order=[])
 
     with (
-        patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
         patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=[]),
@@ -308,10 +268,6 @@ async def test_generate_partition_thumbnails_writes_avif_to_backend(
     fake_grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=[])
 
     with (
-        patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
         patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=[]),
@@ -348,10 +304,6 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
-        patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             side_effect=capture_stage,
         ),
@@ -362,7 +314,6 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(
     ):
         await generate_partition_thumbnails(backend, "", photos)
 
-    # _stage_photos receives photos sorted by content_hash.
     assert len(captured_entries) == 1
     hashes = [e.content_hash for e in captured_entries[0]]
     assert hashes == sorted(hashes)
@@ -382,10 +333,6 @@ async def test_generate_partition_thumbnails_uses_tier_size(tmp_path: Path) -> N
         return grid, b"FAKE"
 
     with (
-        patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
         patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=[]),
@@ -419,10 +366,6 @@ async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path)
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
-        patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=staged),
         ),
@@ -452,10 +395,6 @@ async def test_generate_partition_thumbnails_splits_into_chunks(tmp_path: Path) 
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
-        patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=[]),
         ),
@@ -467,166 +406,3 @@ async def test_generate_partition_thumbnails_splits_into_chunks(tmp_path: Path) 
         chunks = await generate_partition_thumbnails(backend, "", photos)
 
     assert len(chunks) == 2
-
-
-# ---------------------------------------------------------------------------
-# PersistentImageProc
-# ---------------------------------------------------------------------------
-
-
-def _make_fake_proc(responses: list[dict]):
-    """Return a fake asyncio subprocess that replies with JSON lines from *responses*."""
-
-    encoded = b"".join((json.dumps(r) + "\n").encode() for r in responses)
-    stdout = AsyncMock()
-    stdout.readline = AsyncMock(
-        side_effect=[
-            *(line + b"\n" for line in encoded.split(b"\n") if line),
-            b"",  # EOF
-        ]
-    )
-    stdin = MagicMock()
-    stdin.write = MagicMock()
-    stdin.drain = AsyncMock()
-    stdin.is_closing = MagicMock(return_value=False)
-    stdin.close = MagicMock()
-
-    proc = MagicMock()
-    proc.stdin = stdin
-    proc.stdout = stdout
-    proc.returncode = None
-    proc.wait = AsyncMock(return_value=0)
-    return proc
-
-
-@pytest.mark.asyncio
-async def test_persistent_image_proc_request_returns_result() -> None:
-    fake_proc = _make_fake_proc([{"width": 1440, "height": 960}])
-    with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
-        async with PersistentImageProc(binary="fake-image-proc") as proc:
-            result = await proc.request(
-                {"photo": {}, "max_long_edge": 1440, "quality": 85, "output": "/tmp/x.jpg"}
-            )
-    assert result == {"width": 1440, "height": 960}
-
-
-@pytest.mark.asyncio
-async def test_persistent_image_proc_raises_on_error_response() -> None:
-    fake_proc = _make_fake_proc([{"error": "bad photo format"}])
-    with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
-        async with PersistentImageProc(binary="fake-image-proc") as proc:
-            with pytest.raises(RuntimeError, match="bad photo format"):
-                await proc.request({})
-
-
-@pytest.mark.asyncio
-async def test_persistent_image_proc_raises_on_empty_stdout() -> None:
-    """EOF on stdout (process died) raises RuntimeError."""
-    fake_proc = _make_fake_proc([])
-    with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
-        async with PersistentImageProc(binary="fake-image-proc") as proc:
-            with pytest.raises(RuntimeError, match="closed stdout"):
-                await proc.request({})
-
-
-@pytest.mark.asyncio
-async def test_persistent_image_proc_restarts_after_crash() -> None:
-    """If the process has exited, the next request spawns a fresh one."""
-    dead_proc = _make_fake_proc([])
-    dead_proc.returncode = 1  # simulate crashed process
-
-    live_proc = _make_fake_proc([{"width": 800, "height": 600}])
-
-    call_count = 0
-
-    async def fake_spawn(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return live_proc  # always return live proc; dead_proc is pre-set on _proc
-
-    proc_wrapper = PersistentImageProc(binary="fake-image-proc")
-    proc_wrapper._proc = dead_proc  # inject dead process
-
-    with patch("asyncio.create_subprocess_exec", side_effect=fake_spawn):
-        result = await proc_wrapper.request({"output": "/tmp/x.jpg"})
-
-    assert result == {"width": 800, "height": 600}
-    assert call_count == 1  # spawned exactly once
-    await proc_wrapper.close()
-
-
-# ---------------------------------------------------------------------------
-# generate_preview_jpeg — persistent image_proc path
-# ---------------------------------------------------------------------------
-
-
-def _fake_photo_entry_preview(filename: str, content_hash: str) -> MagicMock:
-    entry = MagicMock()
-    entry.filename = filename
-    entry.content_hash = content_hash
-    entry.searchable = {"orientation": 1}
-    return entry
-
-
-@pytest.mark.asyncio
-async def test_generate_preview_jpeg_uses_persistent_proc(tmp_path: Path) -> None:
-    """When image_proc is provided, generate_preview_jpeg uses it instead of spawning."""
-    backend = LocalBackend(root=tmp_path)
-    (tmp_path / "photo.jpg").write_bytes(b"FAKE_JPEG")
-    entry = _fake_photo_entry_preview("photo.jpg", "sha256:" + "ab" * 32)
-
-    image_proc = AsyncMock(spec=PersistentImageProc)
-
-    async def fake_request(payload: dict) -> dict:
-        # Write the expected output file so generate_preview_jpeg can read it.
-        Path(payload["output"]).write_bytes(b"FAKE_PREVIEW_JPEG")
-        return {"width": 1440, "height": 960}
-
-    image_proc.request = fake_request
-
-    cache_path = await generate_preview_jpeg(backend, "", entry, image_proc=image_proc)
-
-    assert cache_path.endswith(".jpg")
-    data, _ = await backend.read(cache_path)
-    assert data == b"FAKE_PREVIEW_JPEG"
-
-
-@pytest.mark.asyncio
-async def test_generate_preview_jpeg_spawns_proc_when_none(tmp_path: Path) -> None:
-    """When image_proc=None, generate_preview_jpeg falls back to spawning a subprocess."""
-    backend = LocalBackend(root=tmp_path)
-    (tmp_path / "photo.jpg").write_bytes(b"FAKE_JPEG")
-    entry = _fake_photo_entry_preview("photo.jpg", "sha256:" + "cd" * 32)
-
-    class _FakeProc:
-        returncode = 0
-
-        async def communicate(self, input=None):
-            data = json.loads(input.decode())
-            Path(data["output"]).write_bytes(b"SPAWNED_PREVIEW")
-            return json.dumps({"width": 800, "height": 600}).encode(), b""
-
-    with patch("asyncio.create_subprocess_exec", return_value=_FakeProc()):
-        cache_path = await generate_preview_jpeg(backend, "", entry, image_proc=None)
-
-    data, _ = await backend.read(cache_path)
-    assert data == b"SPAWNED_PREVIEW"
-
-
-@pytest.mark.asyncio
-async def test_generate_preview_jpeg_skips_generation_when_cached(tmp_path: Path) -> None:
-    """If the preview already exists in the backend, generation is skipped entirely."""
-    from ouestcharlie_toolkit.schema import preview_jpeg_path
-
-    backend = LocalBackend(root=tmp_path)
-    entry = _fake_photo_entry_preview("photo.jpg", "sha256:" + "ef" * 32)
-    cache_path = preview_jpeg_path("", entry.content_hash)
-
-    await backend.write_new(cache_path, b"CACHED_PREVIEW")
-
-    image_proc = AsyncMock(spec=PersistentImageProc)
-
-    result = await generate_preview_jpeg(backend, "", entry, image_proc=image_proc)
-
-    assert result == cache_path
-    image_proc.request.assert_not_called()
