@@ -189,7 +189,7 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
     date = datetime(2024, 7, 15, 14, 30, 0)
     photo = PhotoEntry(
         filename="IMG_001.jpg",
-        content_hash="sha256:abc",
+        content_hash="abc",
         metadata_version=3,
         xmp_version_token="1234567890",
         searchable={
