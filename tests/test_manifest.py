@@ -40,7 +40,7 @@ def _leaf(partition: str = "2024/2024-07", photos: list[PhotoEntry] | None = Non
     return LeafManifest(
         schema_version=SCHEMA_VERSION,
         partition=partition,
-        photos=photos or [PhotoEntry(filename="IMG_001.jpg", content_hash="sha256:abc")],
+        photos=photos or [PhotoEntry(filename="IMG_001.jpg", content_hash="abc")],
     )
 
 
@@ -99,7 +99,7 @@ async def test_read_leaf_roundtrip(store: ManifestStore) -> None:
     assert manifest.schema_version == SCHEMA_VERSION
     assert len(manifest.photos) == 1
     assert manifest.photos[0].filename == "IMG_001.jpg"
-    assert manifest.photos[0].content_hash == "sha256:abc"
+    assert manifest.photos[0].content_hash == "abc"
     assert isinstance(version, VersionToken)
 
 
@@ -122,7 +122,7 @@ async def test_write_leaf_updates_content(store: ManifestStore) -> None:
     await store.create_leaf(_leaf())
     manifest, version = await store.read_leaf("2024/2024-07")
 
-    manifest.photos.append(PhotoEntry(filename="IMG_002.jpg", content_hash="sha256:def"))
+    manifest.photos.append(PhotoEntry(filename="IMG_002.jpg", content_hash="def"))
     await store.write_leaf(manifest, version)
 
     updated, _ = await store.read_leaf("2024/2024-07")
@@ -166,7 +166,7 @@ async def test_read_modify_write_leaf(store: ManifestStore) -> None:
     await store.create_leaf(_leaf())
 
     def add_photo(m: LeafManifest) -> LeafManifest:
-        m.photos.append(PhotoEntry(filename="IMG_002.jpg", content_hash="sha256:def"))
+        m.photos.append(PhotoEntry(filename="IMG_002.jpg", content_hash="def"))
         return m
 
     updated = await store.read_modify_write_leaf("2024/2024-07", add_photo)
@@ -189,7 +189,7 @@ async def test_leaf_photo_entry_full_roundtrip(store: ManifestStore) -> None:
     date = datetime(2024, 7, 15, 14, 30, 0)
     photo = PhotoEntry(
         filename="IMG_001.jpg",
-        content_hash="sha256:abc",
+        content_hash="abc",
         metadata_version=3,
         xmp_version_token="1234567890",
         searchable={

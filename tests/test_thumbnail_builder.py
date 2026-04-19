@@ -19,7 +19,6 @@ from ouestcharlie_toolkit.schema import (
 from ouestcharlie_toolkit.thumbnail_builder import (
     GRID_MAX_PHOTOS,
     _call_image_proc,
-    _find_image_proc_binary,
     generate_partition_thumbnails,
 )
 
@@ -105,35 +104,6 @@ def test_avif_path_root_partition() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _find_avif_grid_binary
-# ---------------------------------------------------------------------------
-
-
-def test_find_binary_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("IMAGE_PROC_BINARY", "/custom/image-proc")
-    assert _find_image_proc_binary() == "/custom/image-proc"
-
-
-def test_find_binary_uses_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("IMAGE_PROC_BINARY", raising=False)
-    with (
-        patch("pathlib.Path.exists", return_value=False),
-        patch("shutil.which", return_value="/usr/local/bin/image-proc"),
-    ):
-        assert _find_image_proc_binary() == "/usr/local/bin/image-proc"
-
-
-def test_find_binary_raises_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("IMAGE_PROC_BINARY", raising=False)
-    with (
-        patch("shutil.which", return_value=None),
-        patch("pathlib.Path.exists", return_value=False),
-        pytest.raises(FileNotFoundError, match="image-proc binary not found"),
-    ):
-        _find_image_proc_binary()
-
-
-# ---------------------------------------------------------------------------
 # _call_image_proc — returns (ThumbnailGridLayout, bytes), no backend write
 # ---------------------------------------------------------------------------
 
@@ -154,7 +124,7 @@ def _staged(
 
 @pytest.mark.asyncio
 async def test_call_image_proc_returns_bytes(tmp_path: Path) -> None:
-    staged = [_staged(tmp_path, "sha256:" + "aa" * 32)]
+    staged = [_staged(tmp_path, "Kf3QzA2nBcR8xYvLm1P9w")]
 
     with patch(
         "asyncio.create_subprocess_exec",
@@ -166,7 +136,6 @@ async def test_call_image_proc_returns_bytes(tmp_path: Path) -> None:
             fit="crop",
             quality=55,
             tmpdir=str(tmp_path),
-            binary="fake-avif-grid",
         )
 
     assert avif_bytes == b"FAKE_AVIF_CONTENT"
@@ -178,7 +147,7 @@ async def test_call_image_proc_returns_bytes(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_call_image_proc_passes_correct_json(tmp_path: Path) -> None:
     """The JSON payload sent to avif-grid must include photos, tile_size, fit, quality."""
-    staged = [_staged(tmp_path, "sha256:" + "cc" * 32, orientation=6)]
+    staged = [_staged(tmp_path, "Kf3QzA2nBcR8xYvLm1P9w", orientation=6)]
     captured: list[dict] = []
 
     class _CapturingProcess:
@@ -194,7 +163,7 @@ async def test_call_image_proc_passes_correct_json(tmp_path: Path) -> None:
                     "cols": 1,
                     "rows": 1,
                     "tileSize": 256,
-                    "photoOrder": ["sha256:" + "cc" * 32],
+                    "photoOrder": ["Kf3QzA2nBcR8xYvLm1P9w"],
                 }
             ).encode(), b""
 
@@ -205,7 +174,6 @@ async def test_call_image_proc_passes_correct_json(tmp_path: Path) -> None:
             fit="crop",
             quality=55,
             tmpdir=str(tmp_path),
-            binary="fake-avif-grid",
         )
 
     assert len(captured) == 1
@@ -216,12 +184,12 @@ async def test_call_image_proc_passes_correct_json(tmp_path: Path) -> None:
     assert len(payload["photos"]) == 1
     assert payload["photos"][0]["ext"] == ".jpg"
     assert payload["photos"][0]["orientation"] == 6
-    assert payload["photos"][0]["content_hash"] == "sha256:" + "cc" * 32
+    assert payload["photos"][0]["content_hash"] == "Kf3QzA2nBcR8xYvLm1P9w"
 
 
 @pytest.mark.asyncio
 async def test_call_image_proc_raises_on_nonzero_exit(tmp_path: Path) -> None:
-    staged = [_staged(tmp_path, "sha256:" + "dd" * 32)]
+    staged = [_staged(tmp_path, "Kf3QzA2nBcR8xYvLm1P9w")]
 
     with (
         patch("asyncio.create_subprocess_exec", return_value=_FakeAvifProcessError()),
@@ -233,14 +201,13 @@ async def test_call_image_proc_raises_on_nonzero_exit(tmp_path: Path) -> None:
             fit="crop",
             quality=55,
             tmpdir=str(tmp_path),
-            binary="fake-avif-grid",
         )
 
 
 @pytest.mark.asyncio
 async def test_call_image_proc_photo_order_in_grid(tmp_path: Path) -> None:
     """photo_order in the returned grid must reflect the photoOrder from Rust output."""
-    hashes = ["sha256:" + "aa" * 32, "sha256:" + "bb" * 32]
+    hashes = ["Kf3QzA2nBcR8xYvLm1P9w", "KfAbc123A2nBcR8xYvLm1P"]
     staged = [_staged(tmp_path, h) for h in hashes]
 
     with patch(
@@ -253,7 +220,6 @@ async def test_call_image_proc_photo_order_in_grid(tmp_path: Path) -> None:
             fit="crop",
             quality=55,
             tmpdir=str(tmp_path),
-            binary="fake-avif-grid",
         )
 
     assert grid.photo_order == hashes
@@ -275,10 +241,6 @@ async def test_generate_partition_thumbnails_returns_chunks(tmp_path: Path) -> N
     fake_grid = ThumbnailGridLayout(cols=2, rows=1, tile_size=256, photo_order=[])
 
     with (
-        patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
         patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=[]),
@@ -306,10 +268,6 @@ async def test_generate_partition_thumbnails_writes_avif_to_backend(
     fake_grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=[])
 
     with (
-        patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
         patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=[]),
@@ -346,10 +304,6 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
-        patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             side_effect=capture_stage,
         ),
@@ -360,7 +314,6 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(
     ):
         await generate_partition_thumbnails(backend, "", photos)
 
-    # _stage_photos receives photos sorted by content_hash.
     assert len(captured_entries) == 1
     hashes = [e.content_hash for e in captured_entries[0]]
     assert hashes == sorted(hashes)
@@ -380,10 +333,6 @@ async def test_generate_partition_thumbnails_uses_tier_size(tmp_path: Path) -> N
         return grid, b"FAKE"
 
     with (
-        patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
         patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=[]),
@@ -417,10 +366,6 @@ async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path)
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
-        patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=staged),
         ),
@@ -449,10 +394,6 @@ async def test_generate_partition_thumbnails_splits_into_chunks(tmp_path: Path) 
         return grid, f"FAKE{call_count}".encode()
 
     with (
-        patch(
-            "ouestcharlie_toolkit.thumbnail_builder._find_image_proc_binary",
-            return_value="fake-bin",
-        ),
         patch(
             "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
             new=AsyncMock(return_value=[]),

@@ -10,7 +10,7 @@
 //! ```json
 //! {
 //!   "photos": [
-//!     { "path": "/tmp/staged.jpg", "ext": ".jpg", "orientation": 6, "content_hash": "sha256:..." },
+//!     { "path": "/tmp/staged.jpg", "ext": ".jpg", "orientation": 6, "content_hash": "Kf3QzA2nBcR8xYvLm1P9w"},
 //!     ...
 //!   ],
 //!   "tile_size": 256,
@@ -23,7 +23,7 @@
 //!
 //! Output:
 //! ```json
-//! {"cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["sha256:aaa...", ...]}
+//! {"cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["Kf3QzA2nBcR8xYvLm1P9w", ...]}
 //! ```
 //!
 //! # Command: jpeg_preview (when "photo" singular field is present)
@@ -33,7 +33,7 @@
 //!
 //! ```json
 //! {
-//!   "photo": { "path": "/tmp/staged.cr2", "ext": ".cr2", "orientation": 6, "content_hash": "sha256:..." },
+//!   "photo": { "path": "/tmp/staged.cr2", "ext": ".cr2", "orientation": 6, "content_hash": "Kf3QzA2nBcR8xYvLm1P9w"},
 //!   "max_long_edge": 1440,
 //!   "quality": 85,
 //!   "output": "/tmp/preview.jpg"
@@ -53,7 +53,7 @@
 //! The caller is responsible for ordering photos by content_hash before
 //! passing them here, to ensure stable tile indices.
 
-use std::io::{self, Read};
+use std::io::{self};
 use std::path::{Path, PathBuf};
 
 use image::{DynamicImage, GenericImageView, RgbImage};
@@ -120,27 +120,77 @@ struct JpegPreviewOutput {
 // Main
 // ---------------------------------------------------------------------------
 
-fn main() {
-    let mut stdin = String::new();
-    io::stdin().read_to_string(&mut stdin).expect("failed to read stdin");
+/// Response envelope: either a successful result or an in-band error.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Response {
+    AvifGrid(AvifGridOutput),
+    JpegPreview(JpegPreviewOutput),
+    Error { error: String },
+}
 
-    let request: Request = match serde_json::from_str(&stdin) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("image-proc error: invalid JSON input: {e}");
-            std::process::exit(1);
-        }
+/// Process one JSON line and return the serialised response line.
+/// Extracted from `main` so it can be unit-tested independently.
+fn process_line(line: &str, expected_major: u64) -> Response {
+    let value: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => return Response::Error { error: format!("invalid JSON input: {e}") },
     };
+    match value.get("protocol_version").and_then(|v| v.as_u64()) {
+        None => Response::Error { error: "missing or invalid protocol_version field".to_string() },
+        Some(proto) if proto != expected_major => Response::Error {
+            error: format!("unsupported protocol version {proto}, expected {expected_major}"),
+        },
+        Some(_) => match serde_json::from_value::<Request>(value) {
+            Err(e) => Response::Error { error: format!("invalid request: {e}") },
+            Ok(Request::AvifGrid(input)) => match run_avif_grid(input) {
+                Ok(out) => Response::AvifGrid(out),
+                Err(e) => Response::Error { error: e.to_string() },
+            },
+            Ok(Request::JpegPreview(input)) => match run_jpeg_preview(input) {
+                Ok(out) => Response::JpegPreview(out),
+                Err(e) => Response::Error { error: e.to_string() },
+            },
+        },
+    }
+}
 
-    match request {
-        Request::AvifGrid(input) => match run_avif_grid(input) {
-            Ok(out) => println!("{}", serde_json::to_string(&out).unwrap()),
-            Err(e) => { eprintln!("image-proc error: {e}"); std::process::exit(1); }
-        },
-        Request::JpegPreview(input) => match run_jpeg_preview(input) {
-            Ok(out) => println!("{}", serde_json::to_string(&out).unwrap()),
-            Err(e) => { eprintln!("image-proc error: {e}"); std::process::exit(1); }
-        },
+fn main() {
+    use std::io::{BufRead, Write};
+
+    // Support `--version` for version negotiation with the Python toolkit.
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("image-proc {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut out = io::BufWriter::new(stdout.lock());
+    let expected_major: u64 = env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap_or(1);
+
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("image-proc: failed to read line: {e}");
+                break;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let response = process_line(&line, expected_major);
+        let json = serde_json::to_string(&response).unwrap();
+        if let Err(e) = writeln!(out, "{json}") {
+            eprintln!("image-proc: failed to write response: {e}");
+            break;
+        }
+        if let Err(e) = out.flush() {
+            eprintln!("image-proc: failed to flush: {e}");
+            break;
+        }
     }
 }
 
@@ -394,7 +444,7 @@ mod tests {
         // 2000×1000 landscape; after resize_long_edge(1440) → 1440×720
         solid(2000, 1000, Rgb([200, 100, 50])).save(&input_path).unwrap();
         let result = run_jpeg_preview(JpegPreviewInput {
-            photo: PhotoInput { path: input_path, ext: ".jpg".into(), orientation: None, content_hash: "sha256:t".into() },
+            photo: PhotoInput { path: input_path, ext: ".jpg".into(), orientation: None, content_hash: "Kf3QzA2nBcR8xYvLm1P9w".into() },
             max_long_edge: 1440, quality: 85, output: output_path.clone(),
         }).unwrap();
         assert_eq!(result.width, 1440);
@@ -410,7 +460,7 @@ mod tests {
         // 800×600 — fits within 1440 → unchanged
         solid(800, 600, Rgb([100, 150, 200])).save(&input_path).unwrap();
         let result = run_jpeg_preview(JpegPreviewInput {
-            photo: PhotoInput { path: input_path, ext: ".jpg".into(), orientation: None, content_hash: "sha256:t2".into() },
+            photo: PhotoInput { path: input_path, ext: ".jpg".into(), orientation: None, content_hash: "Mw9xLpQrNvBsHtYjKdAcZg".into() },
             max_long_edge: 1440, quality: 85, output: output_path,
         }).unwrap();
         assert_eq!(result.width, 800);
@@ -428,7 +478,7 @@ mod tests {
     fn avif_grid_single_photo_produces_valid_file() {
         let output = std::env::temp_dir().join("avif_grid_1.avif");
         let result = run_avif_grid(AvifGridInput {
-            photos: vec![make_jpeg("ag1_a.jpg", 300, 300, Rgb([200, 100, 50]), "sha256:aaaa")],
+            photos: vec![make_jpeg("ag1_a.jpg", 300, 300, Rgb([200, 100, 50]), "Aaaa3QzA2nBcR8xYvLm1Pw")],
             tile_size: 64,
             fit: "crop".into(),
             quality: 55,
@@ -437,7 +487,7 @@ mod tests {
         assert_eq!(result.cols, 1);
         assert_eq!(result.rows, 1);
         assert_eq!(result.tile_size, 64);
-        assert_eq!(result.photo_order, vec!["sha256:aaaa"]);
+        assert_eq!(result.photo_order, vec!["Aaaa3QzA2nBcR8xYvLm1Pw"]);
         assert!(output.exists());
         assert!(output.metadata().unwrap().len() > 0, "output file should be non-empty");
     }
@@ -446,10 +496,10 @@ mod tests {
     fn avif_grid_four_photos_two_by_two() {
         let output = std::env::temp_dir().join("avif_grid_4.avif");
         let photos = vec![
-            make_jpeg("ag4_a.jpg", 200, 200, Rgb([255,   0,   0]), "sha256:a1"),
-            make_jpeg("ag4_b.jpg", 200, 200, Rgb([  0, 255,   0]), "sha256:a2"),
-            make_jpeg("ag4_c.jpg", 200, 200, Rgb([  0,   0, 255]), "sha256:a3"),
-            make_jpeg("ag4_d.jpg", 200, 200, Rgb([255, 255,   0]), "sha256:a4"),
+            make_jpeg("ag4_a.jpg", 200, 200, Rgb([255,   0,   0]), "Artc3QzA2nBcR8xYvLm1Pw"),
+            make_jpeg("ag4_b.jpg", 200, 200, Rgb([  0, 255,   0]), "Brtc3QzA2nBcR8xYvLm1Pw"),
+            make_jpeg("ag4_c.jpg", 200, 200, Rgb([  0,   0, 255]), "Crtc3QzA2nBcR8xYvLm1Pw"),
+            make_jpeg("ag4_d.jpg", 200, 200, Rgb([255, 255,   0]), "Drtc3QzA2nBcR8xYvLm1Pw"),
         ];
         let hashes: Vec<String> = photos.iter().map(|p| p.content_hash.clone()).collect();
         let result = run_avif_grid(AvifGridInput {
@@ -470,7 +520,7 @@ mod tests {
         // 5 photos → cols=3, rows=2 → 6 cells (1 padding tile)
         let output = std::env::temp_dir().join("avif_grid_5.avif");
         let photos: Vec<PhotoInput> = (0..5).map(|i| {
-            make_jpeg(&format!("ag5_{i}.jpg"), 100, 100, Rgb([i * 50, 100, 200]), &format!("sha256:b{i}"))
+            make_jpeg(&format!("ag5_{i}.jpg"), 100, 100, Rgb([i * 50, 100, 200]), &format!("Photo{i:0>17}"))
         }).collect();
         let result = run_avif_grid(AvifGridInput {
             photos,
@@ -488,7 +538,7 @@ mod tests {
     #[test]
     fn avif_grid_photo_order_matches_input_hashes() {
         let output = std::env::temp_dir().join("avif_grid_order.avif");
-        let hashes = vec!["sha256:z3", "sha256:a1", "sha256:m2"];
+        let hashes = vec!["Zrt3zA2nBcR8xYvLm1P9wx", "Art3zA2nBcR8xYvLm1P9wx", "Mrt3zA2nBcR8xYvLm1P9wx"];
         let photos: Vec<PhotoInput> = hashes.iter().enumerate().map(|(i, h)| {
             make_jpeg(&format!("ago_{i}.jpg"), 80, 80, Rgb([100, 100, 100]), h)
         }).collect();
@@ -514,5 +564,59 @@ mod tests {
             output,
         });
         assert!(err.is_err());
+    }
+
+    // ---------------------------------------------------------------------------
+    // process_line / protocol version checks
+    // ---------------------------------------------------------------------------
+
+    fn error_msg(r: Response) -> String {
+        match r {
+            Response::Error { error } => error,
+            _ => panic!("expected Error response, got something else"),
+        }
+    }
+
+    #[test]
+    fn test_missing_protocol_version() {
+        let line = r#"{"photo": {"path": "/tmp/x.jpg", "ext": ".jpg", "content_hash": "abc"}, "max_long_edge": 1440, "quality": 85, "output": "/tmp/out.jpg"}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("missing or invalid protocol_version"), "got: {err}");
+    }
+
+    #[test]
+    fn test_wrong_major_version() {
+        let line = r#"{"protocol_version": 2, "photo": {"path": "/tmp/x.jpg", "ext": ".jpg", "content_hash": "abc"}, "max_long_edge": 1440, "quality": 85, "output": "/tmp/out.jpg"}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("unsupported protocol version 2, expected 1"), "got: {err}");
+    }
+
+    #[test]
+    fn test_version_zero_rejected() {
+        let line = r#"{"protocol_version": 0, "photo": {"path": "/tmp/x.jpg", "ext": ".jpg", "content_hash": "abc"}, "max_long_edge": 1440, "quality": 85, "output": "/tmp/out.jpg"}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("unsupported protocol version 0, expected 1"), "got: {err}");
+    }
+
+    #[test]
+    fn test_protocol_version_string_rejected() {
+        // protocol_version must be an integer, not a string.
+        let line = r#"{"protocol_version": "1", "photo": {"path": "/tmp/x.jpg", "ext": ".jpg", "content_hash": "abc"}, "max_long_edge": 1440, "quality": 85, "output": "/tmp/out.jpg"}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("missing or invalid protocol_version"), "got: {err}");
+    }
+
+    #[test]
+    fn test_invalid_json() {
+        let err = error_msg(process_line("not json", 1));
+        assert!(err.contains("invalid JSON input"), "got: {err}");
+    }
+
+    #[test]
+    fn test_correct_version_dispatches_to_invalid_request() {
+        // Correct protocol_version but unrecognised shape → invalid request, not version error.
+        let line = r#"{"protocol_version": 1, "unknown_command": true}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("invalid request"), "got: {err}");
     }
 }

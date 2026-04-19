@@ -162,7 +162,7 @@ _SAMPLE_XMP = """\
       xmlns:exif='http://ns.adobe.com/exif/1.0/'
       xmlns:tiff='http://ns.adobe.com/tiff/1.0/'
       xmlns:dc='http://purl.org/dc/elements/1.1/'
-      ouestcharlie:contentHash='sha256:abc123'
+      ouestcharlie:contentHash='KfAbc123A2nBcR8xYvLm1P'
       ouestcharlie:schemaVersion='1'
       ouestcharlie:metadataVersion='2'
       exif:DateTimeOriginal='2024-07-15T14:30:00'
@@ -185,7 +185,7 @@ _SAMPLE_XMP = """\
 
 def test_parse_xmp_content_hash():
     s = parse_xmp(_SAMPLE_XMP)
-    assert s.content_hash == "sha256:abc123"
+    assert s.content_hash == "KfAbc123A2nBcR8xYvLm1P"
 
 
 def test_parse_xmp_schema_metadata_version():
@@ -237,7 +237,7 @@ _SAMPLE_XMP_WITH_RATING_AND_DIMS = """\
       xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'
       xmlns:xmp='http://ns.adobe.com/xmp/1.0/'
       xmlns:exif='http://ns.adobe.com/exif/1.0/'
-      ouestcharlie:contentHash='sha256:abc'
+      ouestcharlie:contentHash='abc'
       ouestcharlie:schemaVersion='1'
       ouestcharlie:metadataVersion='1'
       xmp:Rating='3'
@@ -290,7 +290,7 @@ def test_serialize_xmp_none_rating_omits_field():
     """When rating is None, xmp:Rating is not written to XMP."""
     from ouestcharlie_toolkit.schema import XmpSidecar
 
-    s = XmpSidecar(content_hash="sha256:x")
+    s = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx")
     assert s.rating is None
     xml = serialize_xmp(s)
     assert "Rating" not in xml
@@ -300,7 +300,7 @@ def test_serialize_xmp_none_dims_omit_fields():
     """When width/height are None, pixel dimensions are not written to XMP."""
     from ouestcharlie_toolkit.schema import XmpSidecar
 
-    s = XmpSidecar(content_hash="sha256:x")
+    s = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx")
     xml = serialize_xmp(s)
     assert "PixelXDimension" not in xml
     assert "PixelYDimension" not in xml
@@ -314,7 +314,7 @@ _SAMPLE_XMP_WITH_EXTRAS = """\
       xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'
       xmlns:xmp='http://ns.adobe.com/xmp/1.0/'
       xmlns:lr='http://ns.adobe.com/lightroom/1.0/'
-      ouestcharlie:contentHash='sha256:abc123'
+      ouestcharlie:contentHash='abc123'
       ouestcharlie:schemaVersion='1'
       ouestcharlie:metadataVersion='1'
       xmp:Rating='4'>
@@ -375,13 +375,13 @@ def test_parse_xmp_minimal():
         "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
         "<rdf:Description rdf:about=''"
         " xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'"
-        " ouestcharlie:contentHash='sha256:xyz'"
+        " ouestcharlie:contentHash='KfAbc123A2nBcR8xYvLm1P'"
         " ouestcharlie:schemaVersion='1'"
         " ouestcharlie:metadataVersion='1'/>"
         "</rdf:RDF></x:xmpmeta>"
     )
     s = parse_xmp(xml)
-    assert s.content_hash == "sha256:xyz"
+    assert s.content_hash == "KfAbc123A2nBcR8xYvLm1P"
     assert s.date_taken is None
     assert s.gps is None
     assert s.tags == []
@@ -402,7 +402,7 @@ def test_parse_xmp_invalid_xml():
 def test_serialize_xmp_fresh():
     """Serialize a fresh XmpSidecar (no _raw_xml) produces valid parseable XMP."""
     sidecar = XmpSidecar(
-        content_hash="sha256:def456",
+        content_hash="KfDef456A2nBcR8xYvLm1P",
         schema_version=1,
         metadata_version=1,
         date_taken=datetime(2024, 7, 15, 14, 30, 0),
@@ -415,7 +415,7 @@ def test_serialize_xmp_fresh():
     xml = serialize_xmp(sidecar)
 
     assert "<?xpacket" in xml
-    assert "sha256:def456" in xml
+    assert "KfDef456A2nBcR8xYvLm1P" in xml
     assert "Nikon" in xml
     assert "Z9" in xml
     assert "street" in xml
@@ -442,7 +442,7 @@ def test_serialize_xmp_roundtrip():
 
 def test_serialize_xmp_increments_metadata_version():
     """XmpStore.write increments metadata_version; serialize itself just writes what's set."""
-    s = XmpSidecar(content_hash="sha256:aaa", metadata_version=3)
+    s = XmpSidecar(content_hash="KfAaaZzA2nBcR8xYvLm1Pw", metadata_version=3)
     xml = serialize_xmp(s)
     restored = parse_xmp(xml)
     assert restored.metadata_version == 3
@@ -450,7 +450,7 @@ def test_serialize_xmp_increments_metadata_version():
 
 def test_serialize_xmp_no_optional_fields():
     """Serializing with None optionals does not emit those attributes/elements."""
-    s = XmpSidecar(content_hash="sha256:bbb")
+    s = XmpSidecar(content_hash="KfBbbZzA2nBcR8xYvLm1Pw")
     xml = serialize_xmp(s)
     assert "GPSLatitude" not in xml
     assert "DateTimeOriginal" not in xml
@@ -458,7 +458,7 @@ def test_serialize_xmp_no_optional_fields():
 
 
 def test_serialize_xmp_empty_tags_omits_subject():
-    s = XmpSidecar(content_hash="sha256:ccc", tags=[])
+    s = XmpSidecar(content_hash="KfCccZzA2nBcR8xYvLm1Pw", tags=[])
     xml = serialize_xmp(s)
     assert "<rdf:li>" not in xml
 

@@ -36,10 +36,18 @@ class CustomBuildHook(BuildHookInterface):
         bin_dir = Path(__file__).parent / "src" / "ouestcharlie_toolkit" / "bin"
         bin_dir.mkdir(exist_ok=True)
         dst = bin_dir / binary_name
-        shutil.copy2(src, dst)
 
-        if sys.platform != "win32":
-            dst.chmod(dst.stat().st_mode | 0o111)
+        if self.target_name == "editable" and sys.platform != "win32":
+            # Editable install: create a symlink so that subsequent
+            # `cargo build --release` runs are picked up immediately
+            # without reinstalling the wheel.
+            if dst.exists() or dst.is_symlink():
+                dst.unlink()
+            dst.symlink_to(src.resolve())
+        else:
+            shutil.copy2(src, dst)
+            if sys.platform != "win32":
+                dst.chmod(dst.stat().st_mode | 0o111)
 
         # Mark the wheel as platform-specific (not pure Python)
         build_data["pure_python"] = False

@@ -57,10 +57,16 @@ jobs:
         env:
           IMAGE_PROC_FEATURE_RAW: "1"
 
-      - name: Install wheel and run tests
-        run: |
-          pip install --find-links dist/ ouestcharlie-py-toolkit pytest pytest-asyncio
-          python -m pytest tests/ -v
+      - name: Install wheel
+        working-directory: dist
+        shell: bash
+        run: pip install ouestcharlie_py_toolkit-*.whl pytest pytest-asyncio
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -v
+      
+      - name: Run integration tests
+        run: python -m pytest tests_integration/ -v
 
       - name: Repair wheel (Linux — retag linux_x86_64 → manylinux)
         if: runner.os == 'Linux'

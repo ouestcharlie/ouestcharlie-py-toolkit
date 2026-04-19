@@ -41,8 +41,8 @@ def summary_path() -> str:
 def preview_jpeg_path(partition: str, content_hash: str) -> str:
     """Backend-relative path for a per-photo JPEG preview cache file.
 
-    Example: ``'2024/2024-07'`` → ``'.ouestcharlie/2024/2024-07/previews/sha256:abc.jpg'``.
-    Root partition (``''``) → ``'.ouestcharlie/previews/sha256:abc.jpg'``.
+    Example: ``'2024/2024-07'`` → ``'.ouestcharlie/2024/2024-07/previews/Kf3QzA2nBcR8xYvLP9w.jpg'``.
+    Root partition (``''``) → ``'.ouestcharlie/previews/Kf3QzA2nBcR8xYvLm1P9w.jpg'``.
     """
     suffix = partition.rstrip("/") + "/" if partition else ""
     return f"{METADATA_DIR}/{suffix}{PREVIEW_JPEG_SUBDIR}/{content_hash}.jpg"
