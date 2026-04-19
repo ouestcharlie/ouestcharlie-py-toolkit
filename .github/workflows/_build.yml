@@ -60,7 +60,7 @@ jobs:
       - name: Install wheel and run tests
         run: |
           pip install --find-links dist/ ouestcharlie-py-toolkit pytest pytest-asyncio
-          python -m pytest tests/ -v
+          python -m pytest tests/ tests_integration/ -v
 
       - name: Repair wheel (Linux — retag linux_x86_64 → manylinux)
         if: runner.os == 'Linux'

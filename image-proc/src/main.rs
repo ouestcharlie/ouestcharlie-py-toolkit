@@ -129,8 +129,34 @@ enum Response {
     Error { error: String },
 }
 
+/// Process one JSON line and return the serialised response line.
+/// Extracted from `main` so it can be unit-tested independently.
+fn process_line(line: &str, expected_major: u64) -> Response {
+    let value: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => return Response::Error { error: format!("invalid JSON input: {e}") },
+    };
+    match value.get("protocol_version").and_then(|v| v.as_u64()) {
+        None => Response::Error { error: "missing or invalid protocol_version field".to_string() },
+        Some(proto) if proto != expected_major => Response::Error {
+            error: format!("unsupported protocol version {proto}, expected {expected_major}"),
+        },
+        Some(_) => match serde_json::from_value::<Request>(value) {
+            Err(e) => Response::Error { error: format!("invalid request: {e}") },
+            Ok(Request::AvifGrid(input)) => match run_avif_grid(input) {
+                Ok(out) => Response::AvifGrid(out),
+                Err(e) => Response::Error { error: e.to_string() },
+            },
+            Ok(Request::JpegPreview(input)) => match run_jpeg_preview(input) {
+                Ok(out) => Response::JpegPreview(out),
+                Err(e) => Response::Error { error: e.to_string() },
+            },
+        },
+    }
+}
+
 fn main() {
-    use std::io::BufRead;
+    use std::io::{BufRead, Write};
 
     // Support `--version` for version negotiation with the Python toolkit.
     if std::env::args().nth(1).as_deref() == Some("--version") {
@@ -141,6 +167,7 @@ fn main() {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
+    let expected_major: u64 = env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap_or(1);
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -154,20 +181,8 @@ fn main() {
             continue;
         }
 
-        let response = match serde_json::from_str::<Request>(&line) {
-            Err(e) => Response::Error { error: format!("invalid JSON input: {e}") },
-            Ok(Request::AvifGrid(input)) => match run_avif_grid(input) {
-                Ok(out) => Response::AvifGrid(out),
-                Err(e) => Response::Error { error: e.to_string() },
-            },
-            Ok(Request::JpegPreview(input)) => match run_jpeg_preview(input) {
-                Ok(out) => Response::JpegPreview(out),
-                Err(e) => Response::Error { error: e.to_string() },
-            },
-        };
-
+        let response = process_line(&line, expected_major);
         let json = serde_json::to_string(&response).unwrap();
-        use std::io::Write;
         if let Err(e) = writeln!(out, "{json}") {
             eprintln!("image-proc: failed to write response: {e}");
             break;
@@ -549,5 +564,59 @@ mod tests {
             output,
         });
         assert!(err.is_err());
+    }
+
+    // ---------------------------------------------------------------------------
+    // process_line / protocol version checks
+    // ---------------------------------------------------------------------------
+
+    fn error_msg(r: Response) -> String {
+        match r {
+            Response::Error { error } => error,
+            _ => panic!("expected Error response, got something else"),
+        }
+    }
+
+    #[test]
+    fn test_missing_protocol_version() {
+        let line = r#"{"photo": {"path": "/tmp/x.jpg", "ext": ".jpg", "content_hash": "abc"}, "max_long_edge": 1440, "quality": 85, "output": "/tmp/out.jpg"}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("missing or invalid protocol_version"), "got: {err}");
+    }
+
+    #[test]
+    fn test_wrong_major_version() {
+        let line = r#"{"protocol_version": 2, "photo": {"path": "/tmp/x.jpg", "ext": ".jpg", "content_hash": "abc"}, "max_long_edge": 1440, "quality": 85, "output": "/tmp/out.jpg"}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("unsupported protocol version 2, expected 1"), "got: {err}");
+    }
+
+    #[test]
+    fn test_version_zero_rejected() {
+        let line = r#"{"protocol_version": 0, "photo": {"path": "/tmp/x.jpg", "ext": ".jpg", "content_hash": "abc"}, "max_long_edge": 1440, "quality": 85, "output": "/tmp/out.jpg"}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("unsupported protocol version 0, expected 1"), "got: {err}");
+    }
+
+    #[test]
+    fn test_protocol_version_string_rejected() {
+        // protocol_version must be an integer, not a string.
+        let line = r#"{"protocol_version": "1", "photo": {"path": "/tmp/x.jpg", "ext": ".jpg", "content_hash": "abc"}, "max_long_edge": 1440, "quality": 85, "output": "/tmp/out.jpg"}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("missing or invalid protocol_version"), "got: {err}");
+    }
+
+    #[test]
+    fn test_invalid_json() {
+        let err = error_msg(process_line("not json", 1));
+        assert!(err.contains("invalid JSON input"), "got: {err}");
+    }
+
+    #[test]
+    fn test_correct_version_dispatches_to_invalid_request() {
+        // Correct protocol_version but unrecognised shape → invalid request, not version error.
+        let line = r#"{"protocol_version": 1, "unknown_command": true}"#;
+        let err = error_msg(process_line(line, 1));
+        assert!(err.contains("invalid request"), "got: {err}");
     }
 }

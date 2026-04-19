@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ouestcharlie_toolkit.image_proc import (
+    IMAGE_PROC_PROTOCOL_MAJOR_VERSION,
     OneTimeImageProc,
     PersistentImageProc,
     _find_image_proc_binary,
@@ -52,13 +53,20 @@ def test_find_binary_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _find_image_proc_binary() == "/custom/image-proc"
 
 
-def test_find_binary_uses_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_binary_uses_bundled(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.delenv("IMAGE_PROC_BINARY", raising=False)
+    fake_bin = tmp_path / "image-proc"
+    fake_bin.touch()
     with (
-        patch("pathlib.Path.exists", return_value=False),
-        patch("shutil.which", return_value="/usr/local/bin/image-proc"),
+        patch("pathlib.Path.exists", return_value=True),
+        patch(
+            "ouestcharlie_toolkit.image_proc.Path.__truediv__",
+            return_value=fake_bin,
+        ),
     ):
-        assert _find_image_proc_binary() == "/usr/local/bin/image-proc"
+        # bundled path exists → returned directly
+        result = _find_image_proc_binary()
+    assert result == str(fake_bin)
 
 
 def test_find_binary_raises_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -116,6 +124,26 @@ async def test_one_time_image_proc_raises_on_error_response() -> None:
 
 
 @pytest.mark.asyncio
+async def test_one_time_image_proc_injects_protocol_version() -> None:
+    """request() must inject protocol_version into the payload sent to the subprocess."""
+    sent_payloads: list[dict] = []
+
+    class _CapturingProc:
+        returncode = 0
+
+        async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
+            sent_payloads.append(json.loads(input.decode().strip()))
+            return (json.dumps({"width": 800, "height": 600}) + "\n").encode(), b""
+
+    with patch("asyncio.create_subprocess_exec", return_value=_CapturingProc()):
+        proc = OneTimeImageProc(binary="fake-image-proc")
+        await proc.request({"output": "/tmp/x.jpg"})
+
+    assert len(sent_payloads) == 1
+    assert sent_payloads[0]["protocol_version"] == IMAGE_PROC_PROTOCOL_MAJOR_VERSION
+
+
+@pytest.mark.asyncio
 async def test_one_time_image_proc_spawns_new_process_per_request() -> None:
     """Each request() call must spawn a fresh subprocess."""
     call_count = 0
@@ -136,6 +164,29 @@ async def test_one_time_image_proc_spawns_new_process_per_request() -> None:
 # ---------------------------------------------------------------------------
 # PersistentImageProc
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persistent_image_proc_injects_protocol_version() -> None:
+    """request() must inject protocol_version into every payload written to stdin."""
+    sent_lines: list[bytes] = []
+
+    fake_proc = _make_fake_proc([{"width": 1440, "height": 960}])
+    original_write = fake_proc.stdin.write
+
+    def capturing_write(data: bytes) -> None:
+        sent_lines.append(data)
+        return original_write(data)
+
+    fake_proc.stdin.write = capturing_write
+
+    with patch("asyncio.create_subprocess_exec", return_value=fake_proc):
+        async with PersistentImageProc(binary="fake-image-proc") as proc:
+            await proc.request({"output": "/tmp/x.jpg"})
+
+    assert len(sent_lines) == 1
+    payload = json.loads(sent_lines[0].decode().strip())
+    assert payload["protocol_version"] == IMAGE_PROC_PROTOCOL_MAJOR_VERSION
 
 
 @pytest.mark.asyncio

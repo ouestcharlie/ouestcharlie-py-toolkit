@@ -98,8 +98,14 @@ IMAGE_PROC_FEATURE_HEIC=1 hatch build  # enables libheif-rs (requires brew insta
 **Always use `.venv/bin/python -m pytest`** — do not use `.venv/bin/pytest` or a system `python`:
 
 ```bash
-# Run all tests
+# Unit tests (no binary required — all image-proc calls are mocked)
 .venv/bin/python -m pytest tests/ -v
+
+# Integration tests (spawn the real image-proc binary)
+.venv/bin/python -m pytest tests_integration/ -v
+
+# Both together
+.venv/bin/python -m pytest tests/ tests_integration/ -v
 
 # Run a specific file
 .venv/bin/python -m pytest tests/test_photo.py -v --tb=short
@@ -107,7 +113,9 @@ IMAGE_PROC_FEATURE_HEIC=1 hatch build  # enables libheif-rs (requires brew insta
 
 > Why: `pytest` on PATH or `uv run pytest` may resolve to the wrong Python or fail on native dependencies.
 
-To run the Rust tests:
+Integration tests require the `image-proc` binary to be built (`uv sync` or `cargo build --release`). They are skipped automatically when the binary is absent.
+
+To run the Rust unit tests:
 
 ```bash
 cd image-proc && cargo test

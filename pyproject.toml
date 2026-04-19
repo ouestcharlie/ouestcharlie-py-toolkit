@@ -5,11 +5,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.hooks.custom]
 path = "hatch_build.py"
 
-[tool.ouestcharlie]
-# Minimum image-proc binary version required by this toolkit release.
-# Bump this whenever the Python↔Rust JSON protocol changes.
-image_proc_min_version = "0.2.0"
-
 [project]
 name = "ouestcharlie-py-toolkit"
 version = "0.5.0"

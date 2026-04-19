@@ -143,6 +143,8 @@ The `image-proc` Rust CLI (in `image-proc/`) handles all pixel-level operations:
 `image-proc` runs as a persistent subprocess: it reads one JSON request per line from stdin and writes one JSON response per line to stdout. This eliminates per-request subprocess startup cost (significant on Windows).
 
 - Requests and responses are newline-terminated JSON objects.
+- Every request includes `"protocol_version": <major>` (integer). image-proc checks that `major == CARGO_PKG_VERSION_MAJOR`; a mismatch returns `{"error": "unsupported protocol version X, expected Y"}` without exiting.
+- The Python constant `IMAGE_PROC_PROTOCOL_MAJOR_VERSION` in `image_proc.py` must equal the major component of `image-proc/Cargo.toml` `version`. Bump both together for any breaking protocol change.
 - Errors are returned in-band as `{"error": "…"}` — the process does not exit on error.
 - The process exits when stdin is closed.
 

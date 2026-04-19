@@ -15,62 +15,15 @@ import contextlib
 import json
 import logging
 import os
-import shutil
-import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
-# Fallback when pyproject.toml is not reachable (non-editable wheel installs).
-_FALLBACK_MIN_VERSION = (0, 2, 0)
-
-
-def _required_image_proc_version() -> tuple[int, ...]:
-    """Read image_proc_min_version from pyproject.toml, or return the fallback."""
-    pyproject = Path(__file__).parent.parent.parent / "pyproject.toml"
-    try:
-        with open(pyproject, "rb") as fh:
-            data = tomllib.load(fh)
-        ver_str: str = data["tool"]["ouestcharlie"]["image_proc_min_version"]
-        return tuple(int(x) for x in ver_str.split("."))
-    except (FileNotFoundError, KeyError, ValueError):
-        return _FALLBACK_MIN_VERSION
-
-
-def _verify_image_proc_version(binary: str) -> None:
-    """Raise FileNotFoundError if *binary* is older than the required version."""
-    required = _required_image_proc_version()
-    req_str = ".".join(str(x) for x in required)
-    try:
-        result = subprocess.run(
-            [binary, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            stdin=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise FileNotFoundError(f"image-proc --version failed: {exc}") from exc
-
-    parts = result.stdout.strip().split()
-    if len(parts) != 2 or parts[0] != "image-proc":
-        raise FileNotFoundError(
-            f"image-proc at {binary!r} does not support --version "
-            f"(got {result.stdout.strip()!r}). "
-            f"Rebuild with `cargo build --release` (need >= {req_str})."
-        )
-    try:
-        version = tuple(int(x) for x in parts[1].split("."))
-    except ValueError as exc:
-        raise FileNotFoundError(f"Cannot parse image-proc version {parts[1]!r}") from exc
-
-    if version < required:
-        raise FileNotFoundError(
-            f"image-proc {parts[1]} is too old; need >= {req_str}. "
-            "Rebuild with `cargo build --release`."
-        )
+# Major version of the Python↔image-proc JSON protocol.
+# Must match the major component of the Cargo.toml version in image-proc/.
+# Bump both together whenever the protocol changes in a breaking way.
+IMAGE_PROC_PROTOCOL_MAJOR_VERSION = 1
 
 
 def _find_image_proc_binary() -> str:
@@ -79,9 +32,6 @@ def _find_image_proc_binary() -> str:
     Resolution order:
     1. IMAGE_PROC_BINARY environment variable
     2. Bundled binary inside the installed wheel (bin/image-proc[.exe])
-    3. image-proc on $PATH (shutil.which)
-    4. ../../image-proc/target/release/image-proc relative to this file (dev build)
-       i.e. ouestcharlie-py-toolkit/image-proc/target/release/image-proc
     """
     env_bin = os.environ.get("IMAGE_PROC_BINARY")
     if env_bin:
@@ -91,18 +41,6 @@ def _find_image_proc_binary() -> str:
     bundled = Path(__file__).parent / "bin" / binary_name
     if bundled.exists():
         return str(bundled)
-
-    on_path = shutil.which("image-proc")
-    if on_path:
-        return on_path
-
-    # __file__ is at ouestcharlie-py-toolkit/src/ouestcharlie_toolkit/image_proc.py
-    # Three parents up reaches ouestcharlie-py-toolkit/.
-    dev_bin = (
-        Path(__file__).parent.parent.parent / "image-proc" / "target" / "release" / "image-proc"
-    )
-    if dev_bin.exists():
-        return str(dev_bin)
 
     raise FileNotFoundError(
         "image-proc binary not found. "
@@ -138,13 +76,13 @@ class OneTimeImageProc:
         """
         if self._binary is None:
             self._binary = _find_image_proc_binary()
-            _verify_image_proc_version(self._binary)
         proc = await asyncio.create_subprocess_exec(
             self._binary,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        payload = {**payload, "protocol_version": IMAGE_PROC_PROTOCOL_MAJOR_VERSION}
         line = (json.dumps(payload) + "\n").encode()
         stdout, stderr = await proc.communicate(line)
         if proc.returncode != 0:
@@ -194,7 +132,6 @@ class PersistentImageProc:
             return self._proc
         if self._binary is None:
             self._binary = _find_image_proc_binary()
-            _verify_image_proc_version(self._binary)
         _log.debug("Starting persistent image-proc: %s", self._binary)
         self._proc = await asyncio.create_subprocess_exec(
             self._binary,
@@ -219,6 +156,7 @@ class PersistentImageProc:
                 proc.pid,
                 output_path,
             )
+            payload = {**payload, "protocol_version": IMAGE_PROC_PROTOCOL_MAJOR_VERSION}
             line = (json.dumps(payload) + "\n").encode()
             proc.stdin.write(line)
             await proc.stdin.drain()
