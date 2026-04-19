@@ -10,7 +10,7 @@
 //! ```json
 //! {
 //!   "photos": [
-//!     { "path": "/tmp/staged.jpg", "ext": ".jpg", "orientation": 6, "content_hash": "sha256:..." },
+//!     { "path": "/tmp/staged.jpg", "ext": ".jpg", "orientation": 6, "content_hash": "Kf3QzA2nBcR8xYvLm1P9w"},
 //!     ...
 //!   ],
 //!   "tile_size": 256,
@@ -23,7 +23,7 @@
 //!
 //! Output:
 //! ```json
-//! {"cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["sha256:aaa...", ...]}
+//! {"cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["Kf3QzA2nBcR8xYvLm1P9w", ...]}
 //! ```
 //!
 //! # Command: jpeg_preview (when "photo" singular field is present)
@@ -33,7 +33,7 @@
 //!
 //! ```json
 //! {
-//!   "photo": { "path": "/tmp/staged.cr2", "ext": ".cr2", "orientation": 6, "content_hash": "sha256:..." },
+//!   "photo": { "path": "/tmp/staged.cr2", "ext": ".cr2", "orientation": 6, "content_hash": "Kf3QzA2nBcR8xYvLm1P9w"},
 //!   "max_long_edge": 1440,
 //!   "quality": 85,
 //!   "output": "/tmp/preview.jpg"
@@ -444,7 +444,7 @@ mod tests {
         // 2000×1000 landscape; after resize_long_edge(1440) → 1440×720
         solid(2000, 1000, Rgb([200, 100, 50])).save(&input_path).unwrap();
         let result = run_jpeg_preview(JpegPreviewInput {
-            photo: PhotoInput { path: input_path, ext: ".jpg".into(), orientation: None, content_hash: "sha256:t".into() },
+            photo: PhotoInput { path: input_path, ext: ".jpg".into(), orientation: None, content_hash: "Kf3QzA2nBcR8xYvLm1P9w".into() },
             max_long_edge: 1440, quality: 85, output: output_path.clone(),
         }).unwrap();
         assert_eq!(result.width, 1440);
@@ -460,7 +460,7 @@ mod tests {
         // 800×600 — fits within 1440 → unchanged
         solid(800, 600, Rgb([100, 150, 200])).save(&input_path).unwrap();
         let result = run_jpeg_preview(JpegPreviewInput {
-            photo: PhotoInput { path: input_path, ext: ".jpg".into(), orientation: None, content_hash: "sha256:t2".into() },
+            photo: PhotoInput { path: input_path, ext: ".jpg".into(), orientation: None, content_hash: "Mw9xLpQrNvBsHtYjKdAcZg".into() },
             max_long_edge: 1440, quality: 85, output: output_path,
         }).unwrap();
         assert_eq!(result.width, 800);
@@ -478,7 +478,7 @@ mod tests {
     fn avif_grid_single_photo_produces_valid_file() {
         let output = std::env::temp_dir().join("avif_grid_1.avif");
         let result = run_avif_grid(AvifGridInput {
-            photos: vec![make_jpeg("ag1_a.jpg", 300, 300, Rgb([200, 100, 50]), "sha256:aaaa")],
+            photos: vec![make_jpeg("ag1_a.jpg", 300, 300, Rgb([200, 100, 50]), "Aaaa3QzA2nBcR8xYvLm1Pw")],
             tile_size: 64,
             fit: "crop".into(),
             quality: 55,
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(result.cols, 1);
         assert_eq!(result.rows, 1);
         assert_eq!(result.tile_size, 64);
-        assert_eq!(result.photo_order, vec!["sha256:aaaa"]);
+        assert_eq!(result.photo_order, vec!["Aaaa3QzA2nBcR8xYvLm1Pw"]);
         assert!(output.exists());
         assert!(output.metadata().unwrap().len() > 0, "output file should be non-empty");
     }
@@ -496,10 +496,10 @@ mod tests {
     fn avif_grid_four_photos_two_by_two() {
         let output = std::env::temp_dir().join("avif_grid_4.avif");
         let photos = vec![
-            make_jpeg("ag4_a.jpg", 200, 200, Rgb([255,   0,   0]), "sha256:a1"),
-            make_jpeg("ag4_b.jpg", 200, 200, Rgb([  0, 255,   0]), "sha256:a2"),
-            make_jpeg("ag4_c.jpg", 200, 200, Rgb([  0,   0, 255]), "sha256:a3"),
-            make_jpeg("ag4_d.jpg", 200, 200, Rgb([255, 255,   0]), "sha256:a4"),
+            make_jpeg("ag4_a.jpg", 200, 200, Rgb([255,   0,   0]), "Artc3QzA2nBcR8xYvLm1Pw"),
+            make_jpeg("ag4_b.jpg", 200, 200, Rgb([  0, 255,   0]), "Brtc3QzA2nBcR8xYvLm1Pw"),
+            make_jpeg("ag4_c.jpg", 200, 200, Rgb([  0,   0, 255]), "Crtc3QzA2nBcR8xYvLm1Pw"),
+            make_jpeg("ag4_d.jpg", 200, 200, Rgb([255, 255,   0]), "Drtc3QzA2nBcR8xYvLm1Pw"),
         ];
         let hashes: Vec<String> = photos.iter().map(|p| p.content_hash.clone()).collect();
         let result = run_avif_grid(AvifGridInput {
@@ -520,7 +520,7 @@ mod tests {
         // 5 photos → cols=3, rows=2 → 6 cells (1 padding tile)
         let output = std::env::temp_dir().join("avif_grid_5.avif");
         let photos: Vec<PhotoInput> = (0..5).map(|i| {
-            make_jpeg(&format!("ag5_{i}.jpg"), 100, 100, Rgb([i * 50, 100, 200]), &format!("sha256:b{i}"))
+            make_jpeg(&format!("ag5_{i}.jpg"), 100, 100, Rgb([i * 50, 100, 200]), &format!("Photo{i:0>17}"))
         }).collect();
         let result = run_avif_grid(AvifGridInput {
             photos,
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn avif_grid_photo_order_matches_input_hashes() {
         let output = std::env::temp_dir().join("avif_grid_order.avif");
-        let hashes = vec!["sha256:z3", "sha256:a1", "sha256:m2"];
+        let hashes = vec!["Zrt3zA2nBcR8xYvLm1P9wx", "Art3zA2nBcR8xYvLm1P9wx", "Mrt3zA2nBcR8xYvLm1P9wx"];
         let photos: Vec<PhotoInput> = hashes.iter().enumerate().map(|(i, h)| {
             make_jpeg(&format!("ago_{i}.jpg"), 80, 80, Rgb([100, 100, 100]), h)
         }).collect();

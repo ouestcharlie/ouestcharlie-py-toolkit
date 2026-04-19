@@ -22,9 +22,9 @@ from ouestcharlie_toolkit.schema import (
 
 def test_photo_entry_minimal():
     """Test PhotoEntry with minimal required fields."""
-    photo = PhotoEntry(filename="test.jpg", content_hash="sha256:abc123")
+    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbc123A2nBcR8xYvLm1P")
     assert photo.filename == "test.jpg"
-    assert photo.content_hash == "sha256:abc123"
+    assert photo.content_hash == "KfAbc123A2nBcR8xYvLm1P"
     assert photo.searchable == {}
     assert photo.searchable.get("date_taken") is None
     assert photo.searchable.get("make") is None
@@ -36,7 +36,7 @@ def test_photo_entry_with_metadata():
     date = datetime(2024, 7, 15, 14, 30, 0)
     photo = PhotoEntry(
         filename="IMG_001.jpg",
-        content_hash="sha256:def456",
+        content_hash="KfDef456A2nBcR8xYvLm1P",
         metadata_version=2,
         searchable={
             "date_taken": date,
@@ -66,7 +66,7 @@ def test_photo_entry_with_metadata():
 
 def test_photo_entry_optional_fields_default_none():
     """rating, width, height default to None (absent from searchable)."""
-    photo = PhotoEntry(filename="test.jpg", content_hash="sha256:abc")
+    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbcZzA2nBcR8xYvLm1Pw")
     assert photo.searchable.get("rating") is None
     assert photo.searchable.get("width") is None
     assert photo.searchable.get("height") is None
@@ -74,7 +74,7 @@ def test_photo_entry_optional_fields_default_none():
 
 def test_photo_entry_extra_fields():
     """Test PhotoEntry preserves unknown fields via _extra."""
-    photo = PhotoEntry(filename="test.jpg", content_hash="sha256:abc")
+    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbcZzA2nBcR8xYvLm1Pw")
     photo._extra["customField"] = "custom value"
     assert photo._extra["customField"] == "custom value"
 
@@ -86,10 +86,10 @@ def test_photo_entry_extra_fields():
 
 def test_from_sidecar_basic_fields():
     """filename, content_hash, metadata_version and xmp_version_token are transferred."""
-    sidecar = XmpSidecar(content_hash="sha256:abc", metadata_version=3)
-    entry = PhotoEntry.from_sidecar("photo.jpg", sidecar, "sha256:abc", "tok1")
+    sidecar = XmpSidecar(content_hash="KfAbcZzA2nBcR8xYvLm1Pw", metadata_version=3)
+    entry = PhotoEntry.from_sidecar("photo.jpg", sidecar, "KfAbcZzA2nBcR8xYvLm1Pw", "tok1")
     assert entry.filename == "photo.jpg"
-    assert entry.content_hash == "sha256:abc"
+    assert entry.content_hash == "KfAbcZzA2nBcR8xYvLm1Pw"
     assert entry.metadata_version == 3
     assert entry.xmp_version_token == "tok1"
 
@@ -97,14 +97,14 @@ def test_from_sidecar_basic_fields():
 def test_from_sidecar_searchable_fields():
     """Scalar searchable fields (make, model, rating, width, height) are populated."""
     sidecar = XmpSidecar(
-        content_hash="sha256:x",
+        content_hash="KfXZzA2nBcR8xYvLm1P9wx",
         camera_make="Canon",
         camera_model="EOS R5",
         rating=4,
         width=6000,
         height=4000,
     )
-    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
     assert entry.searchable["make"] == "Canon"
     assert entry.searchable["model"] == "EOS R5"
     assert entry.searchable["rating"] == 4
@@ -115,30 +115,30 @@ def test_from_sidecar_searchable_fields():
 def test_from_sidecar_date_taken():
     """date_taken is placed in searchable under the correct key."""
     dt = datetime(2024, 7, 15, 10, 30)
-    sidecar = XmpSidecar(content_hash="sha256:x", date_taken=dt)
-    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    sidecar = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx", date_taken=dt)
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
     assert entry.searchable["date_taken"] == dt
 
 
 def test_from_sidecar_gps():
     """GPS tuple is placed in searchable."""
-    sidecar = XmpSidecar(content_hash="sha256:x", gps=(48.8566, 2.3522))
-    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    sidecar = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx", gps=(48.8566, 2.3522))
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
     assert entry.searchable["gps"] == (48.8566, 2.3522)
 
 
 def test_from_sidecar_tags_defensive_copy():
     """tags list is copied so mutations do not affect the sidecar."""
-    sidecar = XmpSidecar(content_hash="sha256:x", tags=["a", "b"])
-    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    sidecar = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx", tags=["a", "b"])
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
     entry.searchable["tags"].append("c")
     assert sidecar.tags == ["a", "b"]
 
 
 def test_from_sidecar_none_fields_present():
     """Fields absent on the sidecar produce None values in searchable (not missing keys)."""
-    sidecar = XmpSidecar(content_hash="sha256:x")
-    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "sha256:x", "v1")
+    sidecar = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx")
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
     # All sidecar-mapped fields appear as None rather than being absent
     assert "rating" in entry.searchable
     assert entry.searchable["rating"] is None
@@ -197,7 +197,7 @@ def test_manifest_path_empty():
 
 def test_leaf_manifest_creation():
     """Test LeafManifest creation."""
-    photo = PhotoEntry(filename="test.jpg", content_hash="sha256:abc123")
+    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbc123A2nBcR8xYvLm1P")
     manifest = LeafManifest(
         schema_version=SCHEMA_VERSION,
         partition="2024/2024-07/",
@@ -212,7 +212,7 @@ def test_leaf_manifest_creation():
 
 def test_leaf_manifest_serialization():
     """Test LeafManifest serialization."""
-    photo = PhotoEntry(filename="test.jpg", content_hash="sha256:abc123")
+    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbc123A2nBcR8xYvLm1P")
     manifest = LeafManifest(
         schema_version=SCHEMA_VERSION,
         partition="2024/2024-07/",
@@ -228,7 +228,7 @@ def test_leaf_manifest_serialization():
 
 def test_leaf_manifest_deserialization():
     """Test LeafManifest deserialization round-trip."""
-    photo = PhotoEntry(filename="test.jpg", content_hash="sha256:abc123")
+    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbc123A2nBcR8xYvLm1P")
     manifest = LeafManifest(
         schema_version=SCHEMA_VERSION,
         partition="2024/2024-07/",
@@ -242,14 +242,14 @@ def test_leaf_manifest_deserialization():
     assert deserialized.schema_version == SCHEMA_VERSION
     assert len(deserialized.photos) == 1
     assert deserialized.photos[0].filename == "test.jpg"
-    assert deserialized.photos[0].content_hash == "sha256:abc123"
+    assert deserialized.photos[0].content_hash == "KfAbc123A2nBcR8xYvLm1P"
 
 
 def test_photo_entry_v1_fields_round_trip():
     """All queryable fields survive serialize → deserialize."""
     photo = PhotoEntry(
         filename="IMG_001.jpg",
-        content_hash="sha256:abc",
+        content_hash="KfAbcZzA2nBcR8xYvLm1Pw",
         searchable={
             "make": "Sony",
             "model": "A7 IV",
@@ -272,7 +272,9 @@ def test_photo_entry_v1_fields_round_trip():
 
 def test_photo_entry_rejected_rating_round_trip():
     """rating=-1 (rejected) survives serialize → deserialize."""
-    photo = PhotoEntry(filename="x.jpg", content_hash="sha256:abc", searchable={"rating": -1})
+    photo = PhotoEntry(
+        filename="x.jpg", content_hash="KfAbcZzA2nBcR8xYvLm1Pw", searchable={"rating": -1}
+    )
     manifest = LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo])
     restored = deserialize_leaf(serialize_leaf(manifest)).photos[0]
     assert restored.searchable["rating"] == -1
@@ -322,7 +324,9 @@ def test_partition_summary_rating_round_trip():
 
 
 def _entry(searchable: dict) -> PhotoEntry:
-    return PhotoEntry(filename="x.jpg", content_hash="sha256:abc", searchable=searchable)
+    return PhotoEntry(
+        filename="x.jpg", content_hash="KfAbcZzA2nBcR8xYvLm1Pw", searchable=searchable
+    )
 
 
 def test_from_photos_no_missing_when_all_have_field() -> None:
@@ -411,7 +415,7 @@ def test_from_photos_missing_survives_round_trip() -> None:
 def test_xmp_sidecar_creation():
     """Test XmpSidecar creation including queryable fields."""
     xmp = XmpSidecar(
-        content_hash="sha256:xyz789",
+        content_hash="KfXyz789A2nBcR8xYvLm1P",
         date_taken=datetime(2024, 7, 15),
         camera_make="Canon",
         camera_model="EOS R5",
@@ -421,7 +425,7 @@ def test_xmp_sidecar_creation():
         height=4000,
     )
 
-    assert xmp.content_hash == "sha256:xyz789"
+    assert xmp.content_hash == "KfXyz789A2nBcR8xYvLm1P"
     assert xmp.date_taken == datetime(2024, 7, 15)
     assert xmp.camera_make == "Canon"
     assert xmp.camera_model == "EOS R5"

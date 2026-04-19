@@ -53,7 +53,7 @@ async def generate_preview_jpeg(
 
     Returns:
         Backend-relative path of the cached JPEG (e.g.
-        ``".ouestcharlie/2024/2024-07/previews/sha256:abc123.jpg"``).
+        ``".ouestcharlie/2024/2024-07/previews/Kf3QzA2nBcR8xYvLm1P9w.jpg"``).
     """
     cache_path = preview_jpeg_path(partition, entry.content_hash)
 

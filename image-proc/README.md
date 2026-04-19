@@ -34,15 +34,15 @@ Reads JSON from stdin, writes result JSON to stdout:
 ```bash
 echo '{
   "photos": [
-    { "path": "/tmp/photo0.jpg", "ext": ".jpg", "orientation": 1, "content_hash": "sha256:aaa..." },
-    { "path": "/tmp/photo1.cr2", "ext": ".cr2", "orientation": 6, "content_hash": "sha256:bbb..." }
+    { "path": "/tmp/photo0.jpg", "ext": ".jpg", "orientation": 1, "content_hash": "Kf3QzA2nBcR8xYvLm1P9w" },
+    { "path": "/tmp/photo1.cr2", "ext": ".cr2", "orientation": 6, "content_hash": "MpLnKjHgTrQxWvYsBdFcNz" }
   ],
   "tile_size": 256,
   "fit": "crop",
   "quality": 55,
   "output": "/tmp/thumbnails.avif"
 }' | image-proc
-# stdout: {"cols":2,"rows":1,"tileSize":256,"photoOrder":["sha256:aaa...","sha256:bbb..."]}
+# stdout: {"cols":2,"rows":1,"tileSize":256,"photoOrder":["Kf3QzA2nBcR8xYvLm1P9w","MpLnKjHgTrQxWvYsBdFcNz"]}
 ```
 
 ### Parameters
@@ -53,7 +53,7 @@ echo '{
 | `photos[].path` | string | Absolute path to the staged photo file |
 | `photos[].ext` | string | File extension including dot (e.g. `".jpg"`, `".cr2"`) |
 | `photos[].orientation` | int or null | TIFF orientation value 1–8; `null` means no transform |
-| `photos[].content_hash` | string | `sha256:<hex>` — echoed back in `photoOrder` |
+| `photos[].content_hash` | string | Content hash (22-char base64url BLAKE3) — echoed back in `photoOrder` |
 | `tile_size` | int | Square tile side in pixels |
 | `fit` | string | `"crop"` (center-crop) or `"pad"` (letterbox with black) |
 | `quality` | int | AVIF quality 0–100 (higher = better) |

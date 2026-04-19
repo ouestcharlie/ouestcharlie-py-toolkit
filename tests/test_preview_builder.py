@@ -35,7 +35,7 @@ async def test_generate_preview_jpeg_uses_persistent_proc(tmp_path: Path) -> Non
     """When image_proc is provided, generate_preview_jpeg uses it instead of spawning."""
     backend = LocalBackend(root=tmp_path)
     (tmp_path / "photo.jpg").write_bytes(b"FAKE_JPEG")
-    entry = _fake_entry("photo.jpg", "sha256:" + "ab" * 32)
+    entry = _fake_entry("photo.jpg", "Kf3QzA2nBcR8xYvLm1P9w")
 
     image_proc = AsyncMock(spec=PersistentImageProc)
 
@@ -56,7 +56,7 @@ async def test_generate_preview_jpeg_uses_persistent_proc(tmp_path: Path) -> Non
 async def test_generate_preview_jpeg_skips_generation_when_cached(tmp_path: Path) -> None:
     """If the preview already exists in the backend, generation is skipped entirely."""
     backend = LocalBackend(root=tmp_path)
-    entry = _fake_entry("photo.jpg", "sha256:" + "ef" * 32)
+    entry = _fake_entry("photo.jpg", "Kf3QzA2nBcR8xYvLm1P9w")
     cache_path = preview_jpeg_path("", entry.content_hash)
 
     await backend.write_new(cache_path, b"CACHED_PREVIEW")

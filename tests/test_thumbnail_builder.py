@@ -124,7 +124,7 @@ def _staged(
 
 @pytest.mark.asyncio
 async def test_call_image_proc_returns_bytes(tmp_path: Path) -> None:
-    staged = [_staged(tmp_path, "sha256:" + "aa" * 32)]
+    staged = [_staged(tmp_path, "Kf3QzA2nBcR8xYvLm1P9w")]
 
     with patch(
         "asyncio.create_subprocess_exec",
@@ -147,7 +147,7 @@ async def test_call_image_proc_returns_bytes(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_call_image_proc_passes_correct_json(tmp_path: Path) -> None:
     """The JSON payload sent to avif-grid must include photos, tile_size, fit, quality."""
-    staged = [_staged(tmp_path, "sha256:" + "cc" * 32, orientation=6)]
+    staged = [_staged(tmp_path, "Kf3QzA2nBcR8xYvLm1P9w", orientation=6)]
     captured: list[dict] = []
 
     class _CapturingProcess:
@@ -163,7 +163,7 @@ async def test_call_image_proc_passes_correct_json(tmp_path: Path) -> None:
                     "cols": 1,
                     "rows": 1,
                     "tileSize": 256,
-                    "photoOrder": ["sha256:" + "cc" * 32],
+                    "photoOrder": ["Kf3QzA2nBcR8xYvLm1P9w"],
                 }
             ).encode(), b""
 
@@ -184,12 +184,12 @@ async def test_call_image_proc_passes_correct_json(tmp_path: Path) -> None:
     assert len(payload["photos"]) == 1
     assert payload["photos"][0]["ext"] == ".jpg"
     assert payload["photos"][0]["orientation"] == 6
-    assert payload["photos"][0]["content_hash"] == "sha256:" + "cc" * 32
+    assert payload["photos"][0]["content_hash"] == "Kf3QzA2nBcR8xYvLm1P9w"
 
 
 @pytest.mark.asyncio
 async def test_call_image_proc_raises_on_nonzero_exit(tmp_path: Path) -> None:
-    staged = [_staged(tmp_path, "sha256:" + "dd" * 32)]
+    staged = [_staged(tmp_path, "Kf3QzA2nBcR8xYvLm1P9w")]
 
     with (
         patch("asyncio.create_subprocess_exec", return_value=_FakeAvifProcessError()),
@@ -207,7 +207,7 @@ async def test_call_image_proc_raises_on_nonzero_exit(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_call_image_proc_photo_order_in_grid(tmp_path: Path) -> None:
     """photo_order in the returned grid must reflect the photoOrder from Rust output."""
-    hashes = ["sha256:" + "aa" * 32, "sha256:" + "bb" * 32]
+    hashes = ["Kf3QzA2nBcR8xYvLm1P9w", "KfAbc123A2nBcR8xYvLm1P"]
     staged = [_staged(tmp_path, h) for h in hashes]
 
     with patch(
