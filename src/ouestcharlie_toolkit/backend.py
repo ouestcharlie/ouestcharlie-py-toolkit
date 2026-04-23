@@ -147,6 +147,18 @@ class Backend(Protocol):
         """
         ...
 
+    async def delete_dir(self, path: str) -> None:
+        """Delete a directory and all its contents recursively.
+
+        Args:
+            path: Backend-relative path to the directory to remove.
+
+        Raises:
+            FileNotFoundError: If the directory does not exist.
+            ValueError: If path refers to a file, not a directory.
+        """
+        ...
+
 
 def backend_from_config(config: dict[str, str]) -> Backend:
     """Factory function to create a Backend instance from configuration.

@@ -309,3 +309,26 @@ class LocalBackend:
         full_path = self._resolve(path)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, full_path.unlink)
+
+    async def delete_dir(self, path: str) -> None:
+        """Delete a directory tree recursively (best-effort: logs and skips locked files)."""
+        import logging
+        import shutil
+
+        full_path = self._resolve(path)
+        loop = asyncio.get_event_loop()
+
+        def _rmtree() -> None:
+            if not full_path.exists():
+                raise FileNotFoundError(path)
+            if not full_path.is_dir():
+                raise ValueError(f"Not a directory: {path!r}")
+
+            def _on_error(func: object, failed_path: object, exc: BaseException) -> None:
+                logging.getLogger(__name__).warning(
+                    "Could not delete %r during rmtree: %s", failed_path, exc
+                )
+
+            shutil.rmtree(full_path, onexc=_on_error)
+
+        await loop.run_in_executor(None, _rmtree)
