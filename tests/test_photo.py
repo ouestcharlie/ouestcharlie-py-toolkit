@@ -113,6 +113,15 @@ async def test_extract_exif_no_exif_fields_are_none():
     assert sidecar.gps is None
 
 
+@pytest.mark.asyncio
+async def test_extract_exif_raises_for_empty_file():
+    """extract_exif raises ValueError for a 0-byte file (e.g. not yet downloaded from cloud)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "placeholder.jpg").write_bytes(b"")
+        with pytest.raises(ValueError, match="empty"):
+            await Photo(LocalBackend(root=tmpdir), "placeholder.jpg").extract_exif()
+
+
 # ---------------------------------------------------------------------------
 # Interaction between the two methods
 # ---------------------------------------------------------------------------
