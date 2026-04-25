@@ -147,27 +147,23 @@ class LocalBackend:
         return full_path
 
     async def read(self, path: str) -> tuple[bytes, VersionToken]:
-        """Read file contents and its mtime version token.
-
-        Uses ``fstat()`` on the open file descriptor so that the version token
-        is guaranteed to correspond to exactly the bytes that were read.  If
-        ``read_bytes`` and ``stat`` were separate calls (with an asyncio
-        ``await`` in between), a concurrent writer could replace the file
-        between the two calls, producing a content/version mismatch that breaks
-        optimistic concurrency.
-        """
+        """Read file contents and its mtime version token."""
         full_path = self._resolve(path)
 
-        def _read_with_fstat() -> tuple[bytes, int]:
-            import os
-
+        def _read_inner() -> tuple[bytes, int]:
+            """Read file bytes + mtime_ns from a single open fd.
+            If system calls were separate calls (with an asyncio
+            ``await`` in between), a concurrent writer could replace the file
+            between the two calls, producing a content/version mismatch that breaks
+            optimistic concurrency.
+            """
             with open(full_path, "rb") as fd:
                 mtime_ns = os.fstat(fd.fileno()).st_mtime_ns
                 data = fd.read()
             return data, mtime_ns
 
         loop = asyncio.get_event_loop()
-        data, mtime_ns = await loop.run_in_executor(None, _read_with_fstat)
+        data, mtime_ns = await loop.run_in_executor(None, _read_inner)
         return data, VersionToken(mtime_ns)
 
     def _get_thread_lock(self, key: str) -> threading.Lock:

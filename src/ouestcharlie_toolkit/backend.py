@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Version token and file info
@@ -173,6 +176,7 @@ def backend_from_config(config: dict[str, str]) -> Backend:
     Raises:
         ConfigurationError: If config is invalid or backend type is unsupported.
     """
+    name = config.get("name")
     backend_type = config.get("type")
 
     if backend_type == "filesystem":
@@ -181,7 +185,17 @@ def backend_from_config(config: dict[str, str]) -> Backend:
         root = config.get("root")
         if not root:
             raise ConfigurationError("filesystem backend requires 'root' field")
+        _log.debug(f"Backend '{name}', initialized as 'filesystem' with root path '{root}'")
         return LocalBackend(root)
+
+    if backend_type == "cloud_mount":
+        from .backends.cloud_mount import CloudMountedBackend
+
+        root = config.get("root")
+        if not root:
+            raise ConfigurationError("cloud_mount backend requires 'root' field")
+        _log.debug(f"Backend '{name}', initialized as 'cloud_mount' with root path '{root}'")
+        return CloudMountedBackend(root)
 
     # Future backends: s3, gcs, adls2, onedrive, kdrive
     raise ConfigurationError(f"Unsupported backend type: {backend_type}")

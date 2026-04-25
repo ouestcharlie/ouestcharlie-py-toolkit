@@ -1,4 +1,4 @@
-"""Test backend configuration and utilities."""
+"""Tests for LocalBackend."""
 
 import asyncio
 import os
@@ -9,60 +9,10 @@ import pytest
 
 from ouestcharlie_toolkit.backend import (
     ConfigurationError,
-    FileInfo,
     VersionConflictError,
-    VersionToken,
     backend_from_config,
 )
 from ouestcharlie_toolkit.backends.local import LocalBackend
-
-# ---------------------------------------------------------------------------
-# VersionToken, FileInfo, exceptions
-# ---------------------------------------------------------------------------
-
-
-def test_version_token():
-    """Test VersionToken creation and access."""
-    token = VersionToken(12345)
-    assert token.value == 12345
-
-
-def test_version_token_equality():
-    """Test VersionToken equality comparison."""
-    token1 = VersionToken(12345)
-    token2 = VersionToken(12345)
-    token3 = VersionToken(54321)
-    assert token1 == token2
-    assert token1 != token3
-
-
-def test_file_info():
-    """Test FileInfo creation."""
-    token = VersionToken("etag-abc123")
-    info = FileInfo(path="2024/photo.jpg", version=token)
-    assert info.path == "2024/photo.jpg"
-    assert info.version == token
-
-
-def test_version_conflict_error():
-    """Test VersionConflictError creation and attributes."""
-    expected = VersionToken("v1")
-    actual = VersionToken("v2")
-    error = VersionConflictError("test.jpg", expected, actual)
-
-    assert error.path == "test.jpg"
-    assert error.expected == expected
-    assert error.actual == actual
-    assert "test.jpg" in str(error)
-    assert "v1" in str(error)
-    assert "v2" in str(error)
-
-
-def test_configuration_error():
-    """Test ConfigurationError can be raised."""
-    with pytest.raises(ConfigurationError):
-        raise ConfigurationError("Invalid config")
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -82,55 +32,36 @@ def _make_backend_with_files(tmpdir: Path) -> LocalBackend:
     return LocalBackend(root=tmpdir)
 
 
-def test_backend_from_config_local():
-    """Test creating a local filesystem backend from config."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        config = {"type": "filesystem", "root": tmpdir}
-        backend = backend_from_config(config)
-
-        assert isinstance(backend, LocalBackend)
-        assert str(backend.root) == str(Path(tmpdir).resolve())
-
-
-def test_backend_from_config_missing_type():
-    """Test that missing backend type raises ConfigurationError."""
-    config = {"root": "/tmp/test"}
-
-    with pytest.raises(ConfigurationError, match="type"):
-        backend_from_config(config)
-
-
-def test_backend_from_config_unknown_type():
-    """Test that unknown backend type raises ConfigurationError."""
-    config = {"type": "unknown", "root": "/tmp/test"}
-
-    with pytest.raises(ConfigurationError, match="Unsupported backend type"):
-        backend_from_config(config)
-
-
-def test_backend_from_config_missing_root():
-    """Test that missing root path raises ConfigurationError."""
-    config = {"type": "filesystem"}
-
-    with pytest.raises(ConfigurationError, match="root"):
-        backend_from_config(config)
+# ---------------------------------------------------------------------------
+# Initialization + backend_from_config
+# ---------------------------------------------------------------------------
 
 
 def test_local_backend_initialization():
-    """Test LocalBackend initialization."""
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=tmpdir)
         assert backend.root == Path(tmpdir).resolve()
 
 
 def test_local_backend_nonexistent_root():
-    """Test that LocalBackend raises error for nonexistent root."""
     with pytest.raises(FileNotFoundError, match="Backend root does not exist"):
         LocalBackend(root="/nonexistent/path/12345")
 
 
+def test_backend_from_config_local():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = backend_from_config({"type": "filesystem", "root": tmpdir})
+        assert isinstance(backend, LocalBackend)
+        assert str(backend.root) == str(Path(tmpdir).resolve())
+
+
+def test_backend_from_config_missing_root():
+    with pytest.raises(ConfigurationError, match="root"):
+        backend_from_config({"type": "filesystem"})
+
+
 # ---------------------------------------------------------------------------
-# LocalBackend.list_dirs
+# list_dirs
 # ---------------------------------------------------------------------------
 
 
@@ -154,7 +85,7 @@ async def test_list_dirs_nonexistent_prefix() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LocalBackend.list_files
+# list_files
 # ---------------------------------------------------------------------------
 
 
@@ -210,7 +141,7 @@ async def test_list_files_nonexistent_prefix() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LocalBackend.read
+# read
 # ---------------------------------------------------------------------------
 
 
@@ -247,7 +178,7 @@ async def test_read_missing_file_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LocalBackend.write_new
+# write_new
 # ---------------------------------------------------------------------------
 
 
@@ -290,7 +221,7 @@ async def test_write_new_raises_if_exists() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LocalBackend.write_conditional
+# write_conditional
 # ---------------------------------------------------------------------------
 
 
@@ -323,10 +254,7 @@ async def test_write_conditional_raises_on_version_conflict() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=tmpdir)
         v1 = await backend.write_new("f.txt", b"original")
-        # Brief pause so the next write lands on a different mtime tick even
-        # on coarse-resolution filesystems (e.g. tmpfs in CI).
         await asyncio.sleep(0.01)
-        # Advance the file so v1 is stale
         await backend.write_conditional("f.txt", b"updated", v1)
         with pytest.raises(VersionConflictError):
             await backend.write_conditional("f.txt", b"conflict", v1)
@@ -339,84 +267,13 @@ async def test_write_conditional_read_version_is_consistent() -> None:
         backend = LocalBackend(root=tmpdir)
         await backend.write_new("f.txt", b"init")
         _, version = await backend.read("f.txt")
-        # Should succeed — version came from read, so it must be consistent
         await backend.write_conditional("f.txt", b"updated", version)
         data, _ = await backend.read("f.txt")
         assert data == b"updated"
 
 
 # ---------------------------------------------------------------------------
-# LocalBackend.exists / delete
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_exists_true_for_existing_file() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        (Path(tmpdir) / "a.txt").write_bytes(b"x")
-        backend = LocalBackend(root=tmpdir)
-        assert await backend.exists("a.txt") is True
-
-
-@pytest.mark.asyncio
-async def test_exists_false_for_missing_file() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        backend = LocalBackend(root=tmpdir)
-        assert await backend.exists("no_such.txt") is False
-
-
-@pytest.mark.asyncio
-async def test_delete_removes_file() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        (Path(tmpdir) / "bye.txt").write_bytes(b"x")
-        backend = LocalBackend(root=tmpdir)
-        await backend.delete("bye.txt")
-        assert not (Path(tmpdir) / "bye.txt").exists()
-
-
-@pytest.mark.asyncio
-async def test_delete_raises_for_missing_file() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        backend = LocalBackend(root=tmpdir)
-        with pytest.raises(FileNotFoundError):
-            await backend.delete("no_such.txt")
-
-
-# ---------------------------------------------------------------------------
-# Path traversal guard
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_rejects_path_traversal() -> None:
-    """_resolve must not allow paths that escape the backend root."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        backend = LocalBackend(root=tmpdir)
-        with pytest.raises(ValueError, match="escapes"):
-            backend._resolve("../../etc/passwd")
-
-
-# ---------------------------------------------------------------------------
-# Concurrency: write_new — only one winner under concurrent callers
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_write_new_concurrent_only_one_succeeds() -> None:
-    """When N coroutines race to write_new the same path, exactly one succeeds."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        backend = LocalBackend(root=tmpdir)
-        results = await asyncio.gather(
-            *[backend.write_new("race.txt", f"writer-{i}".encode()) for i in range(10)],
-            return_exceptions=True,
-        )
-        successes = [r for r in results if not isinstance(r, Exception)]
-        errors = [r for r in results if isinstance(r, FileExistsError)]
-        assert len(successes) == 1
-        assert len(errors) == 9
-
-
-# ---------------------------------------------------------------------------
-# LocalBackend.write_conditional — lock_dir placement
+# write_conditional — lock_dir placement
 # ---------------------------------------------------------------------------
 
 
@@ -467,51 +324,44 @@ async def test_write_conditional_lock_dir_nested() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Concurrency: write_conditional — stale writers get VersionConflictError
+# exists / delete
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_write_conditional_concurrent_serialised() -> None:
-    """Concurrent write_conditional on the same file: all succeed sequentially
-    or raise VersionConflictError — no data corruption, no silent overwrites.
+async def test_exists_true_for_existing_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "a.txt").write_bytes(b"x")
+        backend = LocalBackend(root=tmpdir)
+        assert await backend.exists("a.txt") is True
 
-    We do not assert an exact success count because on filesystems with coarse
-    mtime resolution (e.g. Windows CI) two writes can land on the same tick,
-    making both look valid.  The important invariants are:
-    - At least one writer wins.
-    - All outcomes are either a VersionToken or VersionConflictError (no other
-      exceptions, no silent corruption).
-    - The file on disk contains a coherent payload from exactly one writer.
-    """
+
+@pytest.mark.asyncio
+async def test_exists_false_for_missing_file() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         backend = LocalBackend(root=tmpdir)
-        version = await backend.write_new("shared.txt", b"init")
+        assert await backend.exists("no_such.txt") is False
 
-        async def try_write(i: int):
-            return await backend.write_conditional("shared.txt", f"writer-{i}".encode(), version)
 
-        results = await asyncio.gather(
-            *[try_write(i) for i in range(10)],
-            return_exceptions=True,
-        )
-        successes = [r for r in results if not isinstance(r, Exception)]
-        conflicts = [r for r in results if isinstance(r, VersionConflictError)]
-        unexpected = [
-            r
-            for r in results
-            if isinstance(r, Exception) and not isinstance(r, VersionConflictError)
-        ]
-        assert not unexpected, f"Unexpected exceptions from write_conditional: {unexpected}"
-        assert len(successes) >= 1
-        assert len(successes) + len(conflicts) == 10
-        # The file on disk must contain a coherent payload from one writer
-        content = (Path(tmpdir) / "shared.txt").read_bytes()
-        assert content.startswith(b"writer-")
+@pytest.mark.asyncio
+async def test_delete_removes_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "bye.txt").write_bytes(b"x")
+        backend = LocalBackend(root=tmpdir)
+        await backend.delete("bye.txt")
+        assert not (Path(tmpdir) / "bye.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_raises_for_missing_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=tmpdir)
+        with pytest.raises(FileNotFoundError):
+            await backend.delete("no_such.txt")
 
 
 # ---------------------------------------------------------------------------
-# LocalBackend.delete_dir
+# delete_dir
 # ---------------------------------------------------------------------------
 
 
@@ -574,3 +424,65 @@ async def test_delete_dir_nested_path() -> None:
         await backend.delete_dir("a/b/c")
         assert not deep.exists()
         assert (Path(tmpdir) / "a" / "b").exists()
+
+
+# ---------------------------------------------------------------------------
+# Path traversal guard
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_rejects_path_traversal() -> None:
+    """_resolve must not allow paths that escape the backend root."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=tmpdir)
+        with pytest.raises(ValueError, match="escapes"):
+            backend._resolve("../../etc/passwd")
+
+
+# ---------------------------------------------------------------------------
+# Concurrency
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_new_concurrent_only_one_succeeds() -> None:
+    """When N coroutines race to write_new the same path, exactly one succeeds."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=tmpdir)
+        results = await asyncio.gather(
+            *[backend.write_new("race.txt", f"writer-{i}".encode()) for i in range(10)],
+            return_exceptions=True,
+        )
+        successes = [r for r in results if not isinstance(r, Exception)]
+        errors = [r for r in results if isinstance(r, FileExistsError)]
+        assert len(successes) == 1
+        assert len(errors) == 9
+
+
+@pytest.mark.asyncio
+async def test_write_conditional_concurrent_serialised() -> None:
+    """Concurrent write_conditional on the same file: all succeed sequentially
+    or raise VersionConflictError — no data corruption, no silent overwrites."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=tmpdir)
+        version = await backend.write_new("shared.txt", b"init")
+
+        async def try_write(i: int):
+            return await backend.write_conditional("shared.txt", f"writer-{i}".encode(), version)
+
+        results = await asyncio.gather(
+            *[try_write(i) for i in range(10)],
+            return_exceptions=True,
+        )
+        successes = [r for r in results if not isinstance(r, Exception)]
+        conflicts = [r for r in results if isinstance(r, VersionConflictError)]
+        unexpected = [
+            r
+            for r in results
+            if isinstance(r, Exception) and not isinstance(r, VersionConflictError)
+        ]
+        assert not unexpected, f"Unexpected exceptions from write_conditional: {unexpected}"
+        assert len(successes) >= 1
+        assert len(successes) + len(conflicts) == 10
+        content = (Path(tmpdir) / "shared.txt").read_bytes()
+        assert content.startswith(b"writer-")
