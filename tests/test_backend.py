@@ -508,3 +508,69 @@ async def test_write_conditional_concurrent_serialised() -> None:
         # The file on disk must contain a coherent payload from one writer
         content = (Path(tmpdir) / "shared.txt").read_bytes()
         assert content.startswith(b"writer-")
+
+
+# ---------------------------------------------------------------------------
+# LocalBackend.delete_dir
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_dir_removes_directory_and_contents() -> None:
+    """delete_dir removes the directory and all its contents recursively."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        target = Path(tmpdir) / "meta" / "2024"
+        target.mkdir(parents=True)
+        (target / "manifest.json").write_bytes(b"{}")
+        (target / "thumbnails.avif").write_bytes(b"\x00" * 16)
+        (target / "sub").mkdir()
+        (target / "sub" / "nested.json").write_bytes(b"{}")
+        backend = LocalBackend(root=tmpdir)
+        await backend.delete_dir("meta/2024")
+        assert not target.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_dir_raises_for_missing_directory() -> None:
+    """delete_dir raises FileNotFoundError if the directory does not exist."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=tmpdir)
+        with pytest.raises(FileNotFoundError):
+            await backend.delete_dir("no_such_dir")
+
+
+@pytest.mark.asyncio
+async def test_delete_dir_raises_for_file_path() -> None:
+    """delete_dir raises ValueError if the path points to a file, not a directory."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "a_file.txt").write_bytes(b"x")
+        backend = LocalBackend(root=tmpdir)
+        with pytest.raises(ValueError, match="Not a directory"):
+            await backend.delete_dir("a_file.txt")
+
+
+@pytest.mark.asyncio
+async def test_delete_dir_sibling_directories_unaffected() -> None:
+    """delete_dir removes only the target directory, leaving siblings intact."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "keep").mkdir()
+        (Path(tmpdir) / "keep" / "data.json").write_bytes(b"{}")
+        (Path(tmpdir) / "remove").mkdir()
+        (Path(tmpdir) / "remove" / "data.json").write_bytes(b"{}")
+        backend = LocalBackend(root=tmpdir)
+        await backend.delete_dir("remove")
+        assert not (Path(tmpdir) / "remove").exists()
+        assert (Path(tmpdir) / "keep" / "data.json").read_bytes() == b"{}"
+
+
+@pytest.mark.asyncio
+async def test_delete_dir_nested_path() -> None:
+    """delete_dir works on deeply nested paths."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        deep = Path(tmpdir) / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        (deep / "file.bin").write_bytes(b"\xff")
+        backend = LocalBackend(root=tmpdir)
+        await backend.delete_dir("a/b/c")
+        assert not deep.exists()
+        assert (Path(tmpdir) / "a" / "b").exists()

@@ -231,6 +231,10 @@ class Photo:
         pyexiv2.set_log_level(4)  # mute C-level logs: they write to stdout, corrupting MCP stdio
 
         data, _ = await self.backend.read(self.path)
+        if not data:
+            raise ValueError(
+                f"Photo file is empty — may not be downloaded from cloud storage: {self.path!r}"
+            )
         photo_hash = content_hash(data)
         suffix = Path(self.path).suffix or ".jpg"
 
