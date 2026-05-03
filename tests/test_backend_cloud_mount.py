@@ -8,6 +8,7 @@ import pytest
 
 from ouestcharlie_toolkit.backend import ConfigurationError, backend_from_config
 from ouestcharlie_toolkit.backends.cloud_mount import CloudMountedBackend
+from ouestcharlie_toolkit.hashing import content_hash
 
 
 @pytest.mark.asyncio
@@ -124,3 +125,24 @@ def test_backend_from_config_cloud_mount_missing_root() -> None:
     """backend_from_config raises ConfigurationError when root is absent."""
     with pytest.raises(ConfigurationError):
         backend_from_config({"type": "cloud_mount"})
+
+
+@pytest.mark.asyncio
+async def test_cloud_mount_local_path_inherited_from_local_backend() -> None:
+    """local_path() is inherited from LocalBackend and returns the resolved mount path."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = CloudMountedBackend(root=tmpdir)
+        result = await backend.local_path("photo.jpg")
+    assert result == Path(tmpdir).resolve() / "photo.jpg"
+
+
+@pytest.mark.asyncio
+async def test_cloud_mount_content_hash_uses_retry_read() -> None:
+    """content_hash() calls self.read(), which is overridden in CloudMountedBackend."""
+
+    data = b"cloud file content"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(data)
+        backend = CloudMountedBackend(root=tmpdir)
+        result = await backend.content_hash("photo.jpg")
+    assert result == content_hash(data)

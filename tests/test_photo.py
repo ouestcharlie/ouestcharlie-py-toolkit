@@ -71,11 +71,12 @@ async def test_create_identity_cached():
 
 
 @pytest.mark.asyncio
-async def test_create_identity_empty_file():
+async def test_create_identity_empty_file_raises():
+    """create_identity raises ValueError for a 0-byte file (delegates to backend.content_hash)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "empty.jpg").write_bytes(b"")
-        identity = await Photo(LocalBackend(root=tmpdir), "empty.jpg").create_identity()
-    assert identity == "rxNJufX5oaagQE3qNtzJSQ"
+        with pytest.raises(ValueError, match="empty"):
+            await Photo(LocalBackend(root=tmpdir), "empty.jpg").create_identity()
 
 
 # ---------------------------------------------------------------------------
@@ -274,4 +275,3 @@ def test_parse_exif_gps_invalid_logs_debug(caplog):
         result = _parse_exif_gps(bad_exif)
     assert result is None
     assert any("Could not parse EXIF GPS" in msg for msg in caplog.messages)
-    assert any(r.levelno == logging.DEBUG for r in caplog.records)

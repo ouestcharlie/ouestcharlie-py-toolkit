@@ -13,6 +13,7 @@ from ouestcharlie_toolkit.backend import (
     backend_from_config,
 )
 from ouestcharlie_toolkit.backends.local import LocalBackend
+from ouestcharlie_toolkit.hashing import content_hash
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -486,3 +487,51 @@ async def test_write_conditional_concurrent_serialised() -> None:
         assert len(successes) + len(conflicts) == 10
         content = (Path(tmpdir) / "shared.txt").read_bytes()
         assert content.startswith(b"writer-")
+
+
+# ---------------------------------------------------------------------------
+# local_path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_local_path_returns_resolved_path() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "sub").mkdir()
+        (Path(tmpdir) / "sub" / "photo.jpg").write_bytes(b"x")
+        backend = LocalBackend(root=tmpdir)
+        result = await backend.local_path("sub/photo.jpg")
+    assert result == Path(tmpdir).resolve() / "sub" / "photo.jpg"
+
+
+@pytest.mark.asyncio
+async def test_local_path_rejects_traversal() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        backend = LocalBackend(root=tmpdir)
+        with pytest.raises(ValueError, match="escapes"):
+            await backend.local_path("../../etc/passwd")
+
+
+# ---------------------------------------------------------------------------
+# content_hash
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_content_hash_returns_correct_hash() -> None:
+    data = b"Hello, OuEstCharlie!"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(data)
+        backend = LocalBackend(root=tmpdir)
+        result = await backend.content_hash("photo.jpg")
+    assert result == content_hash(data)
+    assert len(result) == 22
+
+
+@pytest.mark.asyncio
+async def test_content_hash_raises_for_empty_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "empty.jpg").write_bytes(b"")
+        backend = LocalBackend(root=tmpdir)
+        with pytest.raises(ValueError, match="empty"):
+            await backend.content_hash("empty.jpg")

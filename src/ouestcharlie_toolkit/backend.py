@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 _log = logging.getLogger(__name__)
@@ -159,6 +160,32 @@ class Backend(Protocol):
         Raises:
             FileNotFoundError: If the directory does not exist.
             ValueError: If path refers to a file, not a directory.
+        """
+        ...
+
+    async def local_path(self, path: str) -> Path:
+        """Return a local filesystem path for this backend-relative path.
+
+        For local and cloud-mounted (FUSE) backends this is the resolved path to
+        the file on disk. Backends that need to fetch the file remotely may
+        download it to a temporary location and return that path instead.
+
+        """
+        ...
+
+    async def content_hash(self, path: str) -> str:
+        """Return the canonical content hash for this file.
+
+        Canonical format: BLAKE3 truncated to 128 bits, base64url-encoded without
+        padding — a 22-character URL- and filename-safe string.
+
+        Default implementation reads the file and computes the BLAKE3 hash.
+        Remote backends can override to fetch the
+        provider checksum from their REST API without downloading the file.
+
+        Raises:
+            ValueError: If the file is empty (zero bytes).
+            FileNotFoundError: If the file does not exist.
         """
         ...
 

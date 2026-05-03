@@ -38,6 +38,10 @@ class CloudMountedBackend(LocalBackend):
                 st_size = os.fstat(fd.fileno()).st_size
             return data, mtime_ns, st_size
 
+        # Read one to trigger rehydratation
+        with open(full_path, "rb") as fd:
+            data = fd.read(1)
+
         delay = _RETRY_BASE_DELAY
         for attempt in range(_MAX_RETRIES + 1):
             data, mtime_ns, st_size = await loop.run_in_executor(None, _read_inner)

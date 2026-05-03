@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from ..backend import FileInfo, VersionConflictError, VersionToken
+from ..hashing import content_hash as _hash
 
 # ---------------------------------------------------------------------------
 # Platform-specific cross-process locking
@@ -145,6 +146,24 @@ class LocalBackend:
                 f"Path '{path}' escapes backend root '{self.root}' when resolved as '{full_path}'"
             )
         return full_path
+
+    async def local_path(self, path: str) -> Path:
+        """Return the absolute local filesystem path for a backend-relative path."""
+        return self._resolve(path)
+
+    async def content_hash(self, path: str) -> str:
+        """Return the BLAKE3 content hash for this file (22-char base64url string).
+
+        Raises:
+            ValueError: If the file is empty (zero bytes).
+        """
+
+        data, _ = await self.read(path)
+        if not data:
+            raise ValueError(
+                f"Photo file is empty — may not be downloaded from cloud storage: {path!r}"
+            )
+        return _hash(data)
 
     async def read(self, path: str) -> tuple[bytes, VersionToken]:
         """Read file contents and its mtime version token."""
