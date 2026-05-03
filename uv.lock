@@ -515,12 +515,28 @@ wheels = [
 ]
 
 [[package]]
+name = "ouestcharlie-imageproc"
+version = "1.0.0"
+source = { editable = "../outestcharlie-imageproc" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.0" },
+    { name = "pre-commit", specifier = ">=4.5.1" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
+
+[[package]]
 name = "ouestcharlie-py-toolkit"
 version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "blake3" },
     { name = "mcp" },
+    { name = "ouestcharlie-imageproc" },
     { name = "pyexiv2" },
     { name = "pyjwt" },
 ]
@@ -537,6 +553,7 @@ dev = [
 requires-dist = [
     { name = "blake3", specifier = ">=1.0.8" },
     { name = "mcp", specifier = ">=1.27" },
+    { name = "ouestcharlie-imageproc", editable = "../outestcharlie-imageproc" },
     { name = "pyexiv2", specifier = ">=2.8" },
     { name = "pyjwt", specifier = ">=2.12.0" },
 ]

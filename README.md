@@ -4,31 +4,28 @@ Shared Python library for building OuEstCharlie photo management agents.
 
 ## Overview
 
-This toolkit provides three core capabilities:
+This toolkit provides four core capabilities:
 
 1. **MCP integration** — MCP server lifecycle, tool registration, progress reporting, and logging
 2. **Manifest read-edit with consistency** — hierarchical manifest traversal, atomic read-modify-write with optimistic concurrency
 3. **XMP read-edit with consistency** — sidecar read-modify-write with optimistic concurrency and field-level semantics
+4. **Image processing** — thumbnail AVIF grid assembly and on-demand JPEG preview generation, delegated to [`ouestcharlie-imageproc`](https://github.com/ouestcharlie/outestcharlie-imageproc)
 
 ## Package Structure
 
 ```
 ouestcharlie-toolkit/
 ├── pyproject.toml
-├── hatch_build.py                # Build hook: compiles image-proc and bundles it in the wheel
-├── image-proc/                   # Rust CLI: decode + resize + AVIF/JPEG assembly
-│   ├── Cargo.toml
-│   └── src/main.rs
 └── src/
     └── ouestcharlie_toolkit/
-        ├── bin/                  # Bundled image-proc binary (populated at build time)
         ├── schema.py             # Data models, exceptions, constants
         ├── backend.py            # Backend protocol
         ├── backends/
         │   └── local.py          # Local filesystem backend
         ├── manifest.py           # ManifestStore for manifest operations
         ├── xmp.py                # XmpStore for XMP sidecar operations
-        ├── thumbnail_builder.py  # Thumbnail generation (delegates to image-proc)
+        ├── thumbnail_builder.py  # Thumbnail generation (delegates to ouestcharlie-imageproc)
+        ├── preview_builder.py    # On-demand JPEG preview (delegates to ouestcharlie-imageproc)
         ├── progress.py           # ProgressReporter for MCP progress
         └── server.py             # AgentBase for MCP server lifecycle
 ```
@@ -41,110 +38,51 @@ ouestcharlie-toolkit/
 pip install ouestcharlie-toolkit
 ```
 
-The `image-proc` binary is compiled and bundled inside the wheel at publish time — no Rust toolchain required at install time.
+`ouestcharlie-imageproc` (the Rust binary) is a separate package pulled in automatically. No Rust toolchain required at install time.
 
 System prerequisites:
 - **macOS**: `brew install inih` (required by pyexiv2 at runtime)
-- **Linux/Windows**: no extra steps — pyexiv2 and image-proc wheels are self-contained
+- **Linux/Windows**: no extra steps
 
 ### From source (development)
 
-**System prerequisites:**
-
-```bash
-brew install inih nasm    # macOS — inih for pyexiv2, nasm for rav1e AVIF encoder
-sudo apt install nasm     # Linux
-choco install nasm        # Windows
-```
-
-**Create virtual environment and install dependencies:**
-
 ```bash
 uv venv --python 3.13
-uv pip install -e ".[dev]"
+uv sync
 ```
 
-The `image-proc` binary is **not** compiled automatically in editable installs. Build it once:
-
-```bash
-cd image-proc && cargo build --release
-# binary: image-proc/target/release/image-proc
-```
-
-With optional features:
-
-```bash
-cargo build --release --features raw    # RAW format support (pure Rust, no extra deps)
-cargo build --release --features heic   # HEIC support (requires brew install libheif)
-```
-
-The toolkit resolves the binary in this order:
-1. `IMAGE_PROC_BINARY` environment variable
-2. `bin/image-proc[.exe]` bundled inside the installed wheel
-3. `image-proc` on `$PATH`
-4. `image-proc/target/release/image-proc` relative to this repo (dev build)
-
-### Optional features (RAW and HEIC)
-
-To build with RAW or HEIC support, set env vars before `hatch build` or `cargo build`:
-
-```bash
-IMAGE_PROC_FEATURE_RAW=1 hatch build   # enables rawler (pure Rust RAW decoder)
-IMAGE_PROC_FEATURE_HEIC=1 hatch build  # enables libheif-rs (requires brew install libheif)
-```
+`uv sync` uses the `[tool.uv.sources]` override to install `ouestcharlie-imageproc` from the adjacent `../outestcharlie-imageproc` checkout as an editable install (which compiles the Rust binary). Make sure that repo is checked out alongside this one.
 
 ## Running Tests
 
 **Always use `.venv/bin/python -m pytest`** — do not use `.venv/bin/pytest` or a system `python`:
 
 ```bash
-# Unit tests (no binary required — all image-proc calls are mocked)
+# Unit tests
 .venv/bin/python -m pytest tests/ -v
-
-# Integration tests (spawn the real image-proc binary)
-.venv/bin/python -m pytest tests_integration/ -v
-
-# Both together
-.venv/bin/python -m pytest tests/ tests_integration/ -v
 
 # Run a specific file
 .venv/bin/python -m pytest tests/test_photo.py -v --tb=short
 ```
 
-> Why: `pytest` on PATH or `uv run pytest` may resolve to the wrong Python or fail on native dependencies.
-
-Integration tests require the `image-proc` binary to be built (`uv sync` or `cargo build --release`). They are skipped automatically when the binary is absent.
-
-To run the Rust unit tests:
-
-```bash
-cd image-proc && cargo test
-```
+Integration tests (real image-proc binary) are in `ouestcharlie-imageproc/tests_integration/`.
 
 ## Building a Wheel
 
-The `hatch_build.py` hook compiles `image-proc` and bundles the binary inside the wheel:
+The toolkit is pure Python — no Rust compilation required:
 
 ```bash
 pip install hatch
 hatch build
-# produces dist/ouestcharlie_toolkit-*.whl (platform-specific)
-```
-
-Set env vars to enable optional features:
-
-```bash
-IMAGE_PROC_FEATURE_RAW=1 hatch build
-IMAGE_PROC_FEATURE_HEIC=1 hatch build
+# produces dist/ouestcharlie_toolkit-*.whl (pure Python, any platform)
 ```
 
 ## Dependencies
 
-- `mcp>=1.0` — Official MCP Python SDK
+- `mcp>=1.27` — Official MCP Python SDK
 - `pyexiv2>=2.8` — EXIF extraction from image files (wraps Exiv2); requires `brew install inih` on macOS
 - `blake3>=1.0.8` — Fast content hashing
-
-**image-proc** (Rust binary, bundled in the wheel) handles all image decoding, resizing, AVIF assembly, and JPEG preview generation.
+- `ouestcharlie-imageproc>=1.0.0` — Rust coprocessor for image decode, resize, AVIF assembly, JPEG preview
 
 XMP parsing and serialization use stdlib only and have no native dependencies.
 
@@ -159,17 +97,14 @@ class HousekeepingAgent(AgentBase):
     def __init__(self):
         super().__init__(name="ouestcharlie-housekeeping", version="1.0.0")
 
-        # Register tools using the FastMCP instance
         @self.mcp.tool()
         async def rebuild_partition(backend: str, partition: str, mode: str = "lazy"):
             """Rebuild partition manifest and thumbnails."""
-            # Agent logic here
             photos = await self.backend.list_files(partition, suffix=".jpg")
             progress = self.progress(total=len(photos))
 
             for photo in photos:
                 await self.check_cancelled()
-                # Process photo...
                 await progress.advance(message=f"Processing {photo.path}")
 
             return {"photosProcessed": len(photos), "errors": 0}
@@ -184,11 +119,9 @@ if __name__ == "__main__":
 ```python
 from ouestcharlie_toolkit import ManifestStore, PhotoEntry
 
-# Read-modify-write pattern
 async def add_photo_to_manifest(store: ManifestStore, partition: str, photo: PhotoEntry):
     def modify(manifest):
         manifest.photos.append(photo)
-        # Recompute summary...
         return manifest
 
     await store.read_modify_write_leaf(partition, modify)
@@ -199,7 +132,6 @@ async def add_photo_to_manifest(store: ManifestStore, partition: str, photo: Pho
 ```python
 from ouestcharlie_toolkit import XmpStore
 
-# Read-modify-write pattern
 async def add_face_tags(store: XmpStore, photo_path: str, faces: list[str]):
     def modify(xmp):
         for face in faces:
@@ -213,36 +145,13 @@ async def add_face_tags(store: XmpStore, photo_path: str, faces: list[str]):
 
 ### Backend Configuration
 
-The toolkit reads backend configuration from the `WOOF_BACKEND_CONFIG` environment variable:
-
 ```bash
 export WOOF_BACKEND_CONFIG='{"type": "filesystem", "root": "/Users/alice/Photos"}'
 ```
 
-## Implementation Status
-
-### ✅ Completed
-
-- Package structure and build configuration
-- Backend protocol and local filesystem implementation
-- ManifestStore with optimistic concurrency
-- XmpStore with optimistic concurrency
-- ProgressReporter
-- AgentBase with MCP server lifecycle
-- Thumbnail generation: per-partition AVIF grid via avif-grid Rust binary
-  - Parallel decode (rayon) for JPEG, PNG, WebP, TIFF
-  - Orientation correction (TIFF values 1–8)
-  - Crop and pad fit modes
-  - Stubbed RAW (`--features raw`) and HEIC (`--features heic`) support
-
-### 📋 Future Work
-
-- Cloud backend implementations (S3, GCS, ADLS Gen2, OneDrive, Kdrive)
-- Bloom filter implementation for partition summaries
-
 ## Architecture
 
-See [ouestcharlie/agent/agent_LLD_rationale.md](../ouestcharlie/agent/agent_LLD_rationale.md) for technology selection rationale.
+See [py_toolkit_LLD.md](py_toolkit_LLD.md) for the design and [agent_LLD_rationale.md](../ouestcharlie/agent/agent_LLD_rationale.md) for technology selection rationale.
 
 Key design principles:
 
@@ -258,7 +167,6 @@ Key design principles:
 - [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25)
 - [pyexiv2](https://github.com/LeoHsiao1/pyexiv2)
 - [OuEstCharlie HLD](https://github.com/ouestcharlie/ouestcharlie/blob/master/HLD.md)
-- [Agent LLD Rationale](https://github.com/ouestcharlie/ouestcharlie/blob/master/agent/agent_LLD_rationale.md)
 
 ## License
 
