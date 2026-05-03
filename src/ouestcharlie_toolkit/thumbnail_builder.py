@@ -19,9 +19,10 @@ import os
 import tempfile
 from pathlib import Path
 
+from ouestcharlie_imageproc.image_proc import OneTimeImageProc
+
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.hashing import content_hash as _hash
-from ouestcharlie_toolkit.image_proc import OneTimeImageProc
 from ouestcharlie_toolkit.schema import (
     PhotoEntry,
     ThumbnailChunk,

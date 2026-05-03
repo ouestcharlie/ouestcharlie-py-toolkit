@@ -14,8 +14,9 @@ import os
 import tempfile
 from pathlib import Path
 
+from ouestcharlie_imageproc.image_proc import PersistentImageProc
+
 from ouestcharlie_toolkit.backend import Backend
-from ouestcharlie_toolkit.image_proc import PersistentImageProc
 from ouestcharlie_toolkit.schema import PhotoEntry, preview_jpeg_path
 
 _log = logging.getLogger(__name__)

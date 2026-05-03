@@ -9,7 +9,7 @@ The Python toolkit (`ouestcharlie-toolkit`) is a shared library that provides fo
 1. **MCP integration** — MCP server lifecycle, tool registration, progress reporting, and logging
 2. **Manifest read-edit with consistency** — hierarchical manifest traversal, atomic read-modify-write with optimistic concurrency
 3. **XMP read-edit with consistency** — sidecar read-modify-write with optimistic concurrency and field-level semantics
-4. **Image processing** — thumbnail AVIF grid assembly and on-demand JPEG preview generation, both delegated to the `image-proc` Rust CLI
+4. **Image processing** — thumbnail AVIF grid assembly and on-demand JPEG preview generation, delegated to `ouestcharlie-imageproc`
 
 Agents import the toolkit and focus on their domain logic (indexing, enrichment, search). The toolkit handles protocol, storage, and consistency concerns.
 
@@ -144,146 +144,15 @@ Errors follow the three-category model from [controller_api.json](../../controll
 
 ## Image Processing
 
-The `image-proc` Rust CLI (in `image-proc/`) handles all pixel-level operations: decoding, orientation, resize, fit, and encoding. Two commands are supported, dispatched by the shape of the input (untagged `serde` enum).
+Image processing (Rust binary + subprocess wrappers) lives in the separate [`ouestcharlie-imageproc`](https://github.com/ouestcharlie/outestcharlie-imageproc) package. See [imageproc_LLD.md](../outestcharlie-imageproc/imageproc_LLD.md) for the protocol specification and command reference.
 
-### Protocol — persistent newline-delimited JSON
-
-`image-proc` runs as a persistent subprocess: it reads one JSON request per line from stdin and writes one JSON response per line to stdout. This eliminates per-request subprocess startup cost (significant on Windows).
-
-- Requests and responses are newline-terminated JSON objects.
-- Every request includes `"protocol_version": <major>` (integer). image-proc checks that `major == CARGO_PKG_VERSION_MAJOR`; a mismatch returns `{"error": "unsupported protocol version X, expected Y"}` without exiting.
-- The Python constant `IMAGE_PROC_PROTOCOL_MAJOR_VERSION` in `image_proc.py` must equal the major component of `image-proc/Cargo.toml` `version`. Bump both together for any breaking protocol change.
-- Errors are returned in-band as `{"error": "…"}` — the process does not exit on error.
-- The process exits when stdin is closed.
-
-Two Python wrappers in `image_proc.py` implement this protocol:
-
-| Class | Strategy | Use case |
-|---|---|---|
-| `OneTimeImageProc` | Spawns a fresh process per `request()` call; uses `communicate()` | `thumbnail_builder` — chunks already run in parallel via `asyncio.gather`, no shared process needed |
-| `PersistentImageProc` | Keeps one process alive across calls; uses `asyncio.Lock` to serialize requests | Wally's `MediaMiddleware` — one process for all preview requests in the session |
-
-`PersistentImageProc` restarts the process automatically if it crashes. Both classes expose the same interface:
-
-```python
-result: dict = await proc.request(payload_dict)
-```
-
-`PersistentImageProc` additionally implements `async def close()` and the async context manager protocol.
-
-### `avif_grid` command — thumbnail AVIF grid
-
-Called by `generate_partition_thumbnails()` via `OneTimeImageProc` to produce per-partition thumbnail AVIF chunks. Only the `"thumbnail"` tier is generated at indexing time (256 px, center-crop); the preview tier is replaced by lazy per-photo JPEG generation.
-
-Photos are sorted by `content_hash`, then split into chunks of at most `GRID_MAX_PHOTOS = 64` entries each, yielding a maximum 8×8 grid per file. Chunks are encoded in parallel via `asyncio.gather`. Each AVIF file is named `thumbnails-{avif_hash}.avif`, where `avif_hash` is the 22-char BLAKE3 of the file's content — the filename is determined after encoding.
-
-**Pipeline (per chunk):**
-
-```
-Python: sort photos by content_hash → split into chunks of ≤64
-  ↓  (asyncio.gather — one coroutine per chunk, each in its own tmpdir)
-  Per chunk:
-    Python: stage chunk's photo bytes to tmpdir
-      ↓  (OneTimeImageProc.request → asyncio.create_subprocess_exec)
-    image-proc avif_grid (Rust):
-      rayon::par_iter — decode → apply orientation → resize → fit to square
-      sequential      — YUV420 conversion → AVIF grid encoding (libavif)
-      ↓
-    Python: hash bytes → name file → write to backend as thumbnails-{hash}.avif
-```
-
-**Request** (detected by presence of `"photos"` array):
-```json
-{
-  "photos": [
-    { "path": "/tmp/staged.jpg", "ext": ".jpg", "orientation": 6, "content_hash": "Kf3QzA2_nBcR8xYvLm1P9w" }
-  ],
-  "tile_size": 256,
-  "fit": "crop",
-  "quality": 55,
-  "output": "/tmp/output.avif"
-}
-```
-
-- `fit` — `"crop"` (center-crop to square, thumbnails) or `"pad"` (letterbox with black).
-- Photos must be pre-sorted by `content_hash` (Python's responsibility) for stable tile indices.
-
-**Response:**
-```json
-{ "cols": 32, "rows": 4, "tileSize": 256, "photoOrder": ["Kf3QzA2_nBcR8xYvLm1P9w", "aB1cD2eF3gH4i5jK6lM7nO", ...] }
-```
-
-### `jpeg_preview` command — on-demand preview JPEG
-
-Called by `generate_preview_jpeg()` to produce a single-photo preview JPEG. Invoked by Wally's HTTP server on cache miss via a shared `PersistentImageProc` instance.
-
-**Request** (detected by presence of `"photo"` object):
-```json
-{
-  "photo": { "path": "/tmp/staged.cr2", "ext": ".cr2", "orientation": 1, "content_hash": "Kf3QzA2_nBcR8xYvLm1P9w" },
-  "max_long_edge": 1440,
-  "quality": 85,
-  "output": "/tmp/preview.jpg"
-}
-```
-
-- `max_long_edge` — the output JPEG's long edge is capped at this value; aspect ratio is preserved.
-- `quality` — JPEG quality 1–95.
-
-**Response:**
-```json
-{ "width": 1440, "height": 960 }
-```
-
-### Format Support and Platform Matrix
-
-| Format | Cargo feature | System dependency | Linux | macOS | Windows | iOS | Android |
-|--------|--------------|-----------|:-----:|:-----:|:-------:|:---:|:-------:|
-| JPEG, PNG, WebP, TIFF | *(default)* | None (pure Rust) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| RAW (CR2, NEF, ARW, DNG, RAF, ORF, RW2, PEF) | `raw` | None (pure Rust) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| HEIC/HEIF | `heic` | `libheif ≥ 1.17` | ✅ | ✅ | ⚠️ | — | — |
-
-RAW and HEIC are compile-time features; the binary returns a clear error if a format is not compiled in.
-
-**Notes:**
-- JPEG/PNG/WebP/TIFF use the `image` crate (pure Rust, no system libraries, all targets).
-- RAW uses `rawler` (pure Rust, no system libraries, all targets). The crate is pre-1.0; the version is pinned exactly.
-- HEIC requires the system `libheif` library (`brew install libheif` / `apt install libheif-dev`). Windows support is possible but complex (`vcpkg`). iOS/Android require cross-compilation and are not supported in V1.
-- `libavif` (required for AVIF grid encoding) follows the same model as HEIC — system library, not available on iOS/Android without significant effort.
-
-### Grid Layout
-
-- `cols = ceil(sqrt(n))`, `rows = ceil(n / cols)` — square-ish, max 8×8 for 64 photos
-- Last row padded with black tiles when `n` is not a multiple of `cols`
-- AVIF quality: 55 for thumbnails (configurable via `AVIF_QUALITY`)
-- Each chunk produces one `ThumbnailChunk(avif_path, avif_hash, grid)` stored in `LeafManifest.thumbnail_chunks`
-
-### `ThumbnailChunk` schema
-
-```python
-ThumbnailChunk(
-    avif_path="2024/Jul/.ouestcharlie/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif",
-    avif_hash="Kf3QzA2_nBcR8xYvLm1P9w",
-    grid=ThumbnailGridLayout(cols=8, rows=8, tile_size=256, photo_order=[...]),
-)
-```
-
-### Python Modules
-
-Image processing is split across three modules:
-
-**`image_proc.py`** — subprocess management and binary discovery:
-- `_find_image_proc_binary()` — resolves binary path via `IMAGE_PROC_BINARY` env var, bundled wheel binary, `$PATH`, or dev build (`image-proc/target/release/image-proc`)
-- `OneTimeImageProc` — spawns a fresh process per `request()` call; used by `thumbnail_builder`
-- `PersistentImageProc` — keeps one process alive with `asyncio.Lock` serialization; used by Wally's `MediaMiddleware`
+This toolkit provides two higher-level builders that use `ouestcharlie-imageproc`:
 
 **`thumbnail_builder.py`** — AVIF grid generation:
-- `generate_partition_thumbnails(backend, partition, photo_entries, tier="thumbnail")` — top-level orchestrator; returns `list[ThumbnailChunk]`
-- `_call_image_proc(staged_photos, tile_size, fit, quality, tmpdir)` — calls image-proc via `OneTimeImageProc` for one chunk; returns `(ThumbnailGridLayout, avif_bytes)`
-- `_stage_photos(backend, partition, photo_entries, tmpdir)` — reads photos from backend and writes them to a temp directory
+- `generate_partition_thumbnails(backend, partition, photo_entries, tier="thumbnail")` — sorts photos by `content_hash`, splits into chunks of ≤64, encodes each chunk in parallel via `asyncio.gather`; returns `list[ThumbnailChunk]`
 
 **`preview_builder.py`** — on-demand JPEG preview generation:
-- `generate_preview_jpeg(backend, partition, entry, image_proc)` — generates and caches a single-photo JPEG preview.
+- `generate_preview_jpeg(image_proc, backend, partition, entry)` — generates and caches a single-photo JPEG preview; fast path if already cached
 
 ## Dependencies
 
@@ -291,7 +160,7 @@ Image processing is split across three modules:
 |---|---|---|
 | `mcp` | MCP server SDK | `>=1.0` |
 | `pyexiv2` | EXIF/XMP read-write (wraps Exiv2) | `>=2.8` |
-| **image-proc** (Rust binary) | Photo decode, resize, fit, AVIF grid assembly, JPEG preview generation | built from `image-proc/` |
+| `ouestcharlie-imageproc` | Rust coprocessor for photo decode, resize, AVIF grid and JPEG preview | `>=1.0.0` |
 
 ## References
 

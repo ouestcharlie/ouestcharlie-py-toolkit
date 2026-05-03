@@ -6,9 +6,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from ouestcharlie_imageproc.image_proc import PersistentImageProc
 
 from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.image_proc import PersistentImageProc
 from ouestcharlie_toolkit.preview_builder import generate_preview_jpeg
 from ouestcharlie_toolkit.schema import preview_jpeg_path
 
