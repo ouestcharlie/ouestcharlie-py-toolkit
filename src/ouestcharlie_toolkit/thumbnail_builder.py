@@ -60,15 +60,13 @@ async def _stage_photos(
     """
     prefix = partition.rstrip("/") + "/" if partition else ""
     photos_payload: list[dict[str, object]] = []
-    for i, entry in enumerate(photo_entries):
+    for entry in photo_entries:
         photo_path = f"{prefix}{entry.filename}"
-        photo_bytes, _ = await backend.read(photo_path)
         ext = os.path.splitext(entry.filename)[1]
-        staged_path = os.path.join(tmpdir, f"photo_{i:06d}{ext}")
-        Path(staged_path).write_bytes(photo_bytes)
+        local = await backend.local_path(photo_path)
         photos_payload.append(
             {
-                "path": staged_path,
+                "path": str(local),
                 "ext": ext,
                 "orientation": entry.searchable.get("orientation"),
                 "content_hash": entry.content_hash,

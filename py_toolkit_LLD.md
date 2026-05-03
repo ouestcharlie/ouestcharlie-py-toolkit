@@ -35,9 +35,13 @@ See [README.md](README.md) and implementation in [server.py](src/ouestcharlie/se
 
 ## Backend Abstraction
 
-The `Backend` protocol defines the storage operations: `read`, `write_conditional`, `write_new`, `list_files`, `exists`, `delete`. All paths are relative to the backend root.
+The `Backend` protocol defines the storage operations: `read`, `write_conditional`, `write_new`, `list_files`, `exists`, `delete`, `local_path`, `content_hash`. All paths are relative to the backend root.
 
 `VersionToken` is backend-specific: `mtime` for local filesystem, `ETag` for S3/GCS/Azure Data Lake Storage Gen2, `generation` for GCS. It is opaque to callers.
+
+`local_path(path)` returns the absolute local filesystem path for backends where the file lives on disk (local, cloud-mounted). Backend implementation is in charge of providing the local file copy.
+
+`content_hash(path)` returns the canonical hash, URL safe. Default implementation reads via `read()` and computes the hash. Future remote backends (kDrive, OneDrive, etc.) can override to fetch the provider checksum from their REST API without downloading the file.
 
 ### Local Filesystem Backend
 
@@ -50,12 +54,16 @@ See [backends/local.py](src/ouestcharlie/backends/local.py) for implementation.
 
 **Cross-process locking**: `write_conditional` holds two locks simultaneously for the duration of the stat-check + rename:
 
-1. A per-path `threading.Lock` (intra-process thread safety) — required on macOS/BSD where `flock` is per-process and does not serialise threads within the same process.
+1. A per-path `threading.Lock` (intra-process thread safety) — required on macOS/BSD where `flock` is per-process and does not serialize threads within the same process.
 2. A `_CrossProcessLock` on a `<filename>.lock` sidecar file (cross-process safety):
-   - macOS/Linux: `fcntl.flock(LOCK_EX)` on the open fd.
-   - Windows: `msvcrt.locking(LK_LOCK, 1)` on the open fd.
+   - macOS/Linux: `fcntl.flock(LOCK_EX)` on the open `fd`.
+   - Windows: `msvcrt.locking(LK_LOCK, 1)` on the open `fd`.
 
-Callers pass a `lock_dir` (backend-relative path) to `write_conditional` so that `.lock` files are always created inside a `METADATA_DIR` (`.ouestcharlie/`) directory, never next to original photos. The lock files persist on disk — this is normal for `flock`-based locking; the OS-level lock releases when the fd is closed.
+Callers pass a `lock_dir` (backend-relative path) to `write_conditional` so that `.lock` files are always created inside a `METADATA_DIR` (`.ouestcharlie/`) directory, never next to original photos. The lock files persist on disk — this is normal for `flock`-based locking; the OS-level lock releases when the `fd` is closed.
+
+### Cloud-Mounted Backend
+
+`CloudMountedBackend` extends `LocalBackend` for FUSE and Windows CF API mounts (kDrive, OneDrive, GDrive, Dropbox). It overrides `read()` with an exponential-backoff retry loop to handle incomplete reads — Windows CF API may return partial data for dehydrated placeholder files. `local_path()` and `content_hash()` are inherited unchanged: photo-media tools (pyexiv2, image-proc) open the file directly via the mount path, letting FUSE handle on-demand download transparently.
 
 ## Manifest Read-Edit with Consistency
 
@@ -115,8 +123,8 @@ Since agents write non-overlapping fields (HLD § Consistency Model), most retry
 ### XMP Creation at Ingestion
 
 When a new photo is indexed and no XMP sidecar exists:
-1. Extract EXIF from the photo file (using `pyexiv2`)
-2. Compute `content_hash(file_bytes)` (BLAKE3 128-bit, base64url, 22 chars) via `ouestcharlie_toolkit.hashing`
+1. Compute the content hash via `backend.content_hash(path)` — BLAKE3 truncated to 128 bits, base64url-encoded without padding, 22 characters. Raises `ValueError` for empty files. Future remote backends can override to fetch the provider checksum from their REST API without downloading the file.
+2. Extract EXIF using `pyexiv2`. When a local filesystem path is available (`backend.local_path()` returns non-`None`), the file is opened directly with no temporary copy. For remote backends, the file is staged to a temporary file first.
 3. Build an `XmpSidecar` with extracted fields, `metadataVersion=1`, `schemaVersion=1`
 4. Write using `write_new()` to avoid overwriting an existing sidecar
 
@@ -136,7 +144,7 @@ Errors follow the three-category model from [controller_api.json](../../controll
 
 ## Image Processing
 
-The `image-proc` Rust CLI (in `image-proc/`) handles all pixel-level operations: decoding, orientation, resize, fit, and encoding. Two commands are supported, dispatched by the shape of the input (untagged serde enum).
+The `image-proc` Rust CLI (in `image-proc/`) handles all pixel-level operations: decoding, orientation, resize, fit, and encoding. Two commands are supported, dispatched by the shape of the input (untagged `serde` enum).
 
 ### Protocol — persistent newline-delimited JSON
 
@@ -153,7 +161,7 @@ Two Python wrappers in `image_proc.py` implement this protocol:
 | Class | Strategy | Use case |
 |---|---|---|
 | `OneTimeImageProc` | Spawns a fresh process per `request()` call; uses `communicate()` | `thumbnail_builder` — chunks already run in parallel via `asyncio.gather`, no shared process needed |
-| `PersistentImageProc` | Keeps one process alive across calls; uses asyncio.Lock to serialise requests | Wally's `MediaMiddleware` — one process for all preview requests in the session |
+| `PersistentImageProc` | Keeps one process alive across calls; uses `asyncio.Lock` to serialize requests | Wally's `MediaMiddleware` — one process for all preview requests in the session |
 
 `PersistentImageProc` restarts the process automatically if it crashes. Both classes expose the same interface:
 
@@ -229,7 +237,7 @@ Called by `generate_preview_jpeg()` to produce a single-photo preview JPEG. Invo
 
 ### Format Support and Platform Matrix
 
-| Format | Cargo feature | System dep | Linux | macOS | Windows | iOS | Android |
+| Format | Cargo feature | System dependency | Linux | macOS | Windows | iOS | Android |
 |--------|--------------|-----------|:-----:|:-----:|:-------:|:---:|:-------:|
 | JPEG, PNG, WebP, TIFF | *(default)* | None (pure Rust) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | RAW (CR2, NEF, ARW, DNG, RAF, ORF, RW2, PEF) | `raw` | None (pure Rust) | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -240,7 +248,7 @@ RAW and HEIC are compile-time features; the binary returns a clear error if a fo
 **Notes:**
 - JPEG/PNG/WebP/TIFF use the `image` crate (pure Rust, no system libraries, all targets).
 - RAW uses `rawler` (pure Rust, no system libraries, all targets). The crate is pre-1.0; the version is pinned exactly.
-- HEIC requires the system `libheif` library (`brew install libheif` / `apt install libheif-dev`). Windows support is possible but complex (vcpkg). iOS/Android require cross-compilation and are not supported in V1.
+- HEIC requires the system `libheif` library (`brew install libheif` / `apt install libheif-dev`). Windows support is possible but complex (`vcpkg`). iOS/Android require cross-compilation and are not supported in V1.
 - `libavif` (required for AVIF grid encoding) follows the same model as HEIC — system library, not available on iOS/Android without significant effort.
 
 ### Grid Layout
@@ -267,7 +275,7 @@ Image processing is split across three modules:
 **`image_proc.py`** — subprocess management and binary discovery:
 - `_find_image_proc_binary()` — resolves binary path via `IMAGE_PROC_BINARY` env var, bundled wheel binary, `$PATH`, or dev build (`image-proc/target/release/image-proc`)
 - `OneTimeImageProc` — spawns a fresh process per `request()` call; used by `thumbnail_builder`
-- `PersistentImageProc` — keeps one process alive with `asyncio.Lock` serialisation; used by Wally's `MediaMiddleware`
+- `PersistentImageProc` — keeps one process alive with `asyncio.Lock` serialization; used by Wally's `MediaMiddleware`
 
 **`thumbnail_builder.py`** — AVIF grid generation:
 - `generate_partition_thumbnails(backend, partition, photo_entries, tier="thumbnail")` — top-level orchestrator; returns `list[ThumbnailChunk]`
@@ -292,4 +300,3 @@ Image processing is split across three modules:
 - [pyexiv2](https://github.com/LeoHsiao1/pyexiv2) — EXIF/IPTC/XMP read-write
 - [XMP Specification (ISO 16684)](https://www.iso.org/standard/75163.html)
 - [HLD § Consistency Model](../../HLD.md) — optimistic concurrency design
-- [controller_api.json](../../controller_api.json) — MCP tool definitions

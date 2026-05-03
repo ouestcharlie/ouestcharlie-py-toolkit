@@ -74,15 +74,12 @@ async def generate_preview_jpeg(
     )
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        # Stage original photo.
-        photo_bytes, _ = await backend.read(photo_path)
-        staged_path = os.path.join(tmpdir, f"photo{ext}")
-        Path(staged_path).write_bytes(photo_bytes)
+        staged_path = await backend.local_path(photo_path)
 
         tmp_output = os.path.join(tmpdir, "preview.jpg")
         payload = {
             "photo": {
-                "path": staged_path,
+                "path": str(staged_path),
                 "ext": ext,
                 "orientation": entry.searchable.get("orientation"),
                 "content_hash": entry.content_hash,

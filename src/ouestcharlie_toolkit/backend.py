@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Version token and file info
@@ -159,6 +163,32 @@ class Backend(Protocol):
         """
         ...
 
+    async def local_path(self, path: str) -> Path:
+        """Return a local filesystem path for this backend-relative path.
+
+        For local and cloud-mounted (FUSE) backends this is the resolved path to
+        the file on disk. Backends that need to fetch the file remotely may
+        download it to a temporary location and return that path instead.
+
+        """
+        ...
+
+    async def content_hash(self, path: str) -> str:
+        """Return the canonical content hash for this file.
+
+        Canonical format: BLAKE3 truncated to 128 bits, base64url-encoded without
+        padding — a 22-character URL- and filename-safe string.
+
+        Default implementation reads the file and computes the BLAKE3 hash.
+        Remote backends can override to fetch the
+        provider checksum from their REST API without downloading the file.
+
+        Raises:
+            ValueError: If the file is empty (zero bytes).
+            FileNotFoundError: If the file does not exist.
+        """
+        ...
+
 
 def backend_from_config(config: dict[str, str]) -> Backend:
     """Factory function to create a Backend instance from configuration.
@@ -173,6 +203,7 @@ def backend_from_config(config: dict[str, str]) -> Backend:
     Raises:
         ConfigurationError: If config is invalid or backend type is unsupported.
     """
+    name = config.get("name")
     backend_type = config.get("type")
 
     if backend_type == "filesystem":
@@ -181,7 +212,17 @@ def backend_from_config(config: dict[str, str]) -> Backend:
         root = config.get("root")
         if not root:
             raise ConfigurationError("filesystem backend requires 'root' field")
+        _log.debug(f"Backend '{name}', initialized as 'filesystem' with root path '{root}'")
         return LocalBackend(root)
+
+    if backend_type == "cloud_mount":
+        from .backends.cloud_mount import CloudMountedBackend
+
+        root = config.get("root")
+        if not root:
+            raise ConfigurationError("cloud_mount backend requires 'root' field")
+        _log.debug(f"Backend '{name}', initialized as 'cloud_mount' with root path '{root}'")
+        return CloudMountedBackend(root)
 
     # Future backends: s3, gcs, adls2, onedrive, kdrive
     raise ConfigurationError(f"Unsupported backend type: {backend_type}")

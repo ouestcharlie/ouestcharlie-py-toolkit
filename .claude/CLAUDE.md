@@ -1,5 +1,8 @@
 # ouestcharlie-py-toolkit — Claude Working Rules
 
+## Style preferences
+- Write all documentation, comments, and user-facing text in American English (e.g., "color" not "colour", "organize" not "organise").
+
 ## Running Tests
 
 See [README.md](../README.md#running-tests) for the full command reference. Quick summary:
@@ -18,6 +21,8 @@ cd image-proc && cargo test
 ## Key Design Patterns
 
 - **Python 3.13 ET restriction**: `ET.register_namespace()` rejects prefixes matching `ns\d+` — use `ext{counter}` as fallback.
+
+- **`Backend.local_path()` is the backend's responsibility.** Callers (photo.py, thumbnail_builder, preview_builder) call `backend.local_path(path)` and use the returned `Path` directly — they must not contain any logic about *how* the path is obtained (no tmpfile staging, no download code, no `if local is not None` branching). It is the backend's job to return a usable local path, whether that means resolving it on the local filesystem, returning a FUSE mount path, or in the future downloading to a tmp location. Keep callers ignorant of backend strategy.
 
 ## image-proc Version Bumping
 

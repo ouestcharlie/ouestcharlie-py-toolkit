@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
-import tempfile
 from datetime import datetime
-from pathlib import Path
 
 from .backend import Backend
-from .hashing import content_hash
 from .schema import XmpSidecar
 
 _log = logging.getLogger(__name__)
@@ -210,15 +206,11 @@ class Photo:
             22-character base64url string (BLAKE3 truncated to 128 bits).
         """
         if self._content_hash is None:
-            data, _ = await self.backend.read(self.path)
-            self._content_hash = content_hash(data)
+            self._content_hash = await self.backend.content_hash(self.path)
         return self._content_hash
 
     async def extract_exif(self) -> XmpSidecar:
         """Extract EXIF metadata from this photo into an XmpSidecar.
-
-        Reads the photo via the backend, writes it to a temporary file, then
-        uses pyexiv2 to parse EXIF data. The original image is never modified.
 
         Also caches the content hash so a subsequent ``create_identity()``
         call does not re-read the file.
@@ -230,24 +222,13 @@ class Photo:
 
         pyexiv2.set_log_level(4)  # mute C-level logs: they write to stdout, corrupting MCP stdio
 
-        data, _ = await self.backend.read(self.path)
-        if not data:
-            raise ValueError(
-                f"Photo file is empty — may not be downloaded from cloud storage: {self.path!r}"
-            )
-        photo_hash = content_hash(data)
-        suffix = Path(self.path).suffix or ".jpg"
+        # ValueError is raised by content_hash() for empty/dehydrated files.
+        photo_hash = await self.backend.content_hash(self.path)
 
-        fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-        try:
-            os.write(fd, data)
-            os.close(fd)
-
-            img = pyexiv2.Image(tmp_path)
-            exif_data: dict[str, str] = img.read_exif()
-            img.close()
-        finally:
-            os.unlink(tmp_path)
+        local = await self.backend.local_path(self.path)
+        img = pyexiv2.Image(str(local))  # pyexiv2 requires str, not Path
+        exif_data: dict[str, str] = img.read_exif()
+        img.close()
 
         self._content_hash = photo_hash
 
