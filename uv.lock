@@ -517,7 +517,7 @@ wheels = [
 [[package]]
 name = "ouestcharlie-imageproc"
 version = "1.0.0"
-source = { editable = "../outestcharlie-imageproc" }
+source = { editable = "../ouestcharlie-imageproc" }
 
 [package.metadata]
 
@@ -553,7 +553,7 @@ dev = [
 requires-dist = [
     { name = "blake3", specifier = ">=1.0.8" },
     { name = "mcp", specifier = ">=1.27" },
-    { name = "ouestcharlie-imageproc", editable = "../outestcharlie-imageproc" },
+    { name = "ouestcharlie-imageproc", editable = "../ouestcharlie-imageproc" },
     { name = "pyexiv2", specifier = ">=2.8" },
     { name = "pyjwt", specifier = ">=2.12.0" },
 ]
