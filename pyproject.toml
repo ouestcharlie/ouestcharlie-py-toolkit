@@ -37,9 +37,6 @@ dev = [
 Homepage = "https://github.com/ouestcharlie/ouestcharlie"
 Issues = "https://github.com/ouestcharlie/ouestcharlie/issues"
 
-[tool.uv.sources]
-ouestcharlie-imageproc = { path = "../ouestcharlie-imageproc", editable = true }
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/ouestcharlie_toolkit"]
 
