@@ -20,7 +20,7 @@ from .schema import (
     XmpSidecar,
 )
 from .server import AgentBase
-from .xmp import XmpStore, xmp_lock_dir_for, xmp_path_for
+from .xmp import XmpStore, xmp_path_for
 
 __version__ = "0.1.0"
 
@@ -50,5 +50,4 @@ __all__ = [
     "backend_from_config",
     "setup_logging",
     "xmp_path_for",
-    "xmp_lock_dir_for",
 ]

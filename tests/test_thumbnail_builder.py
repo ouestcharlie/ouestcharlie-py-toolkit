@@ -406,3 +406,31 @@ async def test_generate_partition_thumbnails_splits_into_chunks(tmp_path: Path) 
         chunks = await generate_partition_thumbnails(backend, "", photos)
 
     assert len(chunks) == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_partition_thumbnails_idempotent(tmp_path: Path) -> None:
+    """Calling generate_partition_thumbnails twice for the same photos must not raise.
+
+    AVIF files are content-addressed: the same hash means the same content is already
+    written, so a FileExistsError on the second write_new should be silently suppressed.
+    """
+    backend = LocalBackend(root=tmp_path)
+    photos = [_fake_photo_entry("a.jpg", "aa" * 32)]
+    fake_grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=[])
+
+    with (
+        patch(
+            "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "ouestcharlie_toolkit.thumbnail_builder._call_image_proc",
+            new=AsyncMock(return_value=(fake_grid, b"FAKE_AVIF_IDEMPOTENT")),
+        ),
+    ):
+        chunks1 = await generate_partition_thumbnails(backend, "", photos)
+        chunks2 = await generate_partition_thumbnails(backend, "", photos)
+
+    assert chunks1[0].avif_hash == chunks2[0].avif_hash
+    assert await backend.exists(thumbnail_avif_path("", chunks1[0].avif_hash))

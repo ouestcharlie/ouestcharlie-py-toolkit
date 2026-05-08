@@ -14,6 +14,7 @@ For individual JPEG preview generation see ``preview_builder``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import tempfile
@@ -145,12 +146,7 @@ async def generate_partition_thumbnails(
             )
         avif_hash = _hash(avif_bytes)
         avif_path = thumbnail_avif_path(partition, avif_hash, tier)
-        if await backend.exists(avif_path):
-            _, version = await backend.read(avif_path)
-            await backend.write_conditional(
-                avif_path, avif_bytes, version, avif_path.rsplit("/", 1)[0]
-            )
-        else:
+        with contextlib.suppress(FileExistsError):
             await backend.write_new(avif_path, avif_bytes)
         _log.debug(
             "AVIF chunk written: %s (%d bytes, %dx%d grid, %d photos)",
