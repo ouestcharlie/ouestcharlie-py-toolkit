@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,6 +29,17 @@ class FileInfo:
 
     path: str
     version: VersionToken
+
+
+@dataclass(frozen=True)
+class PartitionLockToken:
+    """Opaque proof that the caller holds the exclusive partition lock.
+
+    Pass to write_conditional, XmpStore.write, and ManifestStore.write_leaf
+    to skip per-file cross-process lock acquisition for files in this partition.
+    """
+
+    partition: str
 
 
 # ---------------------------------------------------------------------------
@@ -75,19 +87,16 @@ class Backend(Protocol):
         path: str,
         data: bytes,
         expected_version: VersionToken,
-        lock_dir: str | None = None,
     ) -> VersionToken:
         """Write file if its version matches expected_version (optimistic concurrency).
+
+        Does not acquire any cross-process lock — callers are responsible for
+        holding ``Backend.partition_lock()`` before calling this method.
 
         Args:
             path: Backend-relative path to the file.
             data: New file contents.
             expected_version: Version token from the last read.
-            lock_dir: Backend-relative directory where the ``.lock`` sidecar file
-                should be created.  Callers should pass the ``METADATA_DIR``
-                subdirectory for the relevant partition so that lock files are
-                kept out of the user's photo folders.  When ``None`` the lock
-                file is placed next to the target file.
 
         Returns:
             New version token after successful write.
@@ -95,6 +104,19 @@ class Backend(Protocol):
         Raises:
             VersionConflictError: If the file's version doesn't match expected_version.
             FileNotFoundError: If the file does not exist.
+        """
+        ...
+
+    def partition_lock(self, partition: str) -> AbstractAsyncContextManager[PartitionLockToken]:
+        """Acquire an exclusive cross-process lock for a partition.
+
+        Lock file: .ouestcharlie/{partition}/partition.lock
+        Root lock (for summary.json): pass partition="" → .ouestcharlie/partition.lock
+
+        Callers must hold this lock before calling write_conditional,
+        XmpStore.write(), or ManifestStore.write_leaf().  Store methods
+        that accept a PartitionLockToken skip acquiring the lock themselves;
+        without a token they acquire it internally.
         """
         ...
 

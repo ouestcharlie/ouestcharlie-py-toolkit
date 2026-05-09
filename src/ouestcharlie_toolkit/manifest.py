@@ -8,7 +8,6 @@ from collections.abc import Callable
 
 from .backend import Backend, VersionConflictError, VersionToken
 from .schema import (
-    METADATA_DIR,
     SCHEMA_VERSION,
     LeafManifest,
     ManifestSummary,
@@ -57,9 +56,14 @@ class ManifestStore:
         return manifest, version
 
     async def write_leaf(
-        self, manifest: LeafManifest, expected_version: VersionToken
+        self,
+        manifest: LeafManifest,
+        expected_version: VersionToken,
     ) -> VersionToken:
         """Write a leaf manifest with optimistic concurrency check.
+
+        Callers must hold ``Backend.partition_lock()`` for this manifest's
+        partition before calling this method.
 
         Args:
             manifest: LeafManifest to write.
@@ -73,9 +77,7 @@ class ManifestStore:
         """
         path = manifest_path(manifest.partition)
         data = json.dumps(serialize_leaf(manifest), ensure_ascii=False, indent=2).encode("utf-8")
-        return await self.backend.write_conditional(
-            path, data, expected_version, path.rsplit("/", 1)[0]
-        )
+        return await self.backend.write_conditional(path, data, expected_version)
 
     async def create_leaf(self, manifest: LeafManifest) -> VersionToken:
         """Create a new leaf manifest (fails if it already exists).
@@ -100,6 +102,9 @@ class ManifestStore:
         max_retries: int = 3,
     ) -> LeafManifest:
         """Read, modify, and write a leaf manifest with retry on version conflict.
+
+        Callers must hold ``Backend.partition_lock()`` for this partition
+        before calling this method.
 
         Args:
             partition: Partition path.
@@ -155,12 +160,15 @@ class ManifestStore:
     ) -> VersionToken:
         """Write the root summary with optimistic concurrency check.
 
+        Callers must hold ``Backend.partition_lock("")`` before calling
+        this method.
+
         Raises:
             VersionConflictError: If the file was modified since read.
         """
         path = summary_path()
         data = json.dumps(serialize_summary(summary), ensure_ascii=False, indent=2).encode("utf-8")
-        return await self.backend.write_conditional(path, data, expected_version, METADATA_DIR)
+        return await self.backend.write_conditional(path, data, expected_version)
 
     async def create_summary(self, summary: RootSummary) -> VersionToken:
         """Create the root summary (fails if it already exists).
@@ -202,7 +210,8 @@ class ManifestStore:
                     partitions=partitions,
                     _extra=existing._extra,
                 )
-                await self.write_summary(updated, version)
+                async with self.backend.partition_lock(""):
+                    await self.write_summary(updated, version)
                 return updated
             except FileNotFoundError:
                 fresh = RootSummary(

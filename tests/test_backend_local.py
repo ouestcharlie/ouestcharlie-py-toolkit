@@ -274,57 +274,6 @@ async def test_write_conditional_read_version_is_consistent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# write_conditional — lock_dir placement
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_write_conditional_lock_file_default_placement() -> None:
-    """Without lock_dir the .lock file is created next to the target file."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        backend = LocalBackend(root=tmpdir)
-        version = await backend.write_new("f.txt", b"v1")
-        await backend.write_conditional("f.txt", b"v2", version)
-        assert (Path(tmpdir) / "f.txt.lock").exists()
-
-
-@pytest.mark.asyncio
-async def test_write_conditional_lock_file_in_lock_dir() -> None:
-    """With lock_dir the .lock file is created inside the given directory."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        (Path(tmpdir) / ".ouestcharlie").mkdir()
-        backend = LocalBackend(root=tmpdir)
-        version = await backend.write_new("f.txt", b"v1")
-        await backend.write_conditional("f.txt", b"v2", version, ".ouestcharlie")
-        assert (Path(tmpdir) / ".ouestcharlie" / "f.txt.lock").exists()
-        assert not (Path(tmpdir) / "f.txt.lock").exists()
-
-
-@pytest.mark.asyncio
-async def test_write_conditional_lock_dir_created_if_missing() -> None:
-    """lock_dir is created automatically if it does not yet exist."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        backend = LocalBackend(root=tmpdir)
-        version = await backend.write_new("f.txt", b"v1")
-        await backend.write_conditional("f.txt", b"v2", version, ".ouestcharlie")
-        assert (Path(tmpdir) / ".ouestcharlie" / "f.txt.lock").exists()
-
-
-@pytest.mark.asyncio
-async def test_write_conditional_lock_dir_nested() -> None:
-    """lock_dir works with nested paths (e.g. .ouestcharlie/partition)."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        (Path(tmpdir) / "2024" / "July").mkdir(parents=True)
-        backend = LocalBackend(root=tmpdir)
-        version = await backend.write_new("2024/July/photo.xmp", b"<xmp/>")
-        await backend.write_conditional(
-            "2024/July/photo.xmp", b"<xmp2/>", version, ".ouestcharlie/2024/July"
-        )
-        assert (Path(tmpdir) / ".ouestcharlie" / "2024" / "July" / "photo.xmp.lock").exists()
-        assert not (Path(tmpdir) / "2024" / "July" / "photo.xmp.lock").exists()
-
-
-# ---------------------------------------------------------------------------
 # exists / delete
 # ---------------------------------------------------------------------------
 
@@ -487,6 +436,75 @@ async def test_write_conditional_concurrent_serialised() -> None:
         assert len(successes) + len(conflicts) == 10
         content = (Path(tmpdir) / "shared.txt").read_bytes()
         assert content.startswith(b"writer-")
+
+
+@pytest.mark.asyncio
+async def test_partition_lock_no_per_file_lock_files() -> None:
+    """Under a partition lock, write_conditional creates no .lock sidecars at all."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "2024" / "2024-07").mkdir(parents=True)
+        (root / "2024" / "2024-07" / "img.xmp").write_bytes(b"v1")
+        backend = LocalBackend(root=tmpdir)
+        _, version = await backend.read("2024/2024-07/img.xmp")
+
+        async with backend.partition_lock("2024/2024-07"):
+            await backend.write_conditional("2024/2024-07/img.xmp", b"v2", version)
+
+        lock_dir = root / ".ouestcharlie" / "2024" / "2024-07"
+        lock_files = list(lock_dir.glob("*.lock"))
+        # Only partition.lock; write_conditional creates no per-file sidecars.
+        assert lock_files == [lock_dir / "partition.lock"]
+
+
+@pytest.mark.asyncio
+async def test_partition_lock_version_conflict_still_raised() -> None:
+    """Optimistic concurrency check still fires when a partition lock is held."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "2024" / "2024-07").mkdir(parents=True)
+        (root / "2024" / "2024-07" / "img.xmp").write_bytes(b"v1")
+        backend = LocalBackend(root=tmpdir)
+        _, stale_version = await backend.read("2024/2024-07/img.xmp")
+        # Advance the file externally so stale_version is no longer current.
+        # Force a distinct mtime in case the filesystem clock is coarse (e.g. CI on tmpfs).
+        xmp_path = root / "2024" / "2024-07" / "img.xmp"
+        xmp_path.write_bytes(b"v2-external")
+        new_mtime_ns = stale_version.value + 1_000_000_000  # 1 second ahead
+        os.utime(xmp_path, ns=(new_mtime_ns, new_mtime_ns))
+
+        async with backend.partition_lock("2024/2024-07"):
+            with pytest.raises(VersionConflictError):
+                await backend.write_conditional("2024/2024-07/img.xmp", b"v3", stale_version)
+
+
+@pytest.mark.asyncio
+async def test_partition_lock_independent_partitions_concurrent() -> None:
+    """Two different partitions can be locked concurrently without blocking each other."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        for part in ("2024/2024-06", "2024/2024-07"):
+            (root / part).mkdir(parents=True)
+            (root / part / "img.xmp").write_bytes(b"v1")
+        backend = LocalBackend(root=tmpdir)
+
+        order: list[str] = []
+
+        async def lock_and_record(partition: str) -> None:
+            async with backend.partition_lock(partition):
+                order.append(f"enter:{partition}")
+                await asyncio.sleep(0)
+                order.append(f"exit:{partition}")
+
+        await asyncio.gather(
+            lock_and_record("2024/2024-06"),
+            lock_and_record("2024/2024-07"),
+        )
+        # Both partitions entered before either exited — truly concurrent.
+        assert order.index("enter:2024/2024-06") < order.index("exit:2024/2024-06")
+        assert order.index("enter:2024/2024-07") < order.index("exit:2024/2024-07")
+        enters = [e for e in order if e.startswith("enter:")]
+        assert len(enters) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -9,10 +9,13 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from ..backend import FileInfo, VersionConflictError, VersionToken
+from ..backend import FileInfo, PartitionLockToken, VersionConflictError, VersionToken
 from ..hashing import content_hash as _hash
+from ..schema import METADATA_DIR
 
 # ---------------------------------------------------------------------------
 # Platform-specific cross-process locking
@@ -196,31 +199,27 @@ class LocalBackend:
         path: str,
         data: bytes,
         expected_version: VersionToken,
-        lock_dir: str | None = None,
     ) -> VersionToken:
         """Write file using atomic rename, checking mtime version first.
 
-        Holds both a per-path ``threading.Lock`` (intra-process thread safety)
-        and an exclusive ``_CrossProcessLock`` on a ``<path>.lock`` sidecar
-        (cross-process safety) for the duration of stat-check + write.
+        Holds a per-path ``threading.Lock`` for the duration of stat-check +
+        write to serialise concurrent ``run_in_executor`` dispatches that
+        target the same file within the same process.  Cross-process exclusion
+        is the caller's responsibility — callers must hold
+        ``Backend.partition_lock()`` before invoking this method.
 
         On macOS/BSD, ``flock`` is per-process and does not serialise threads
         within the same process — the threading lock fills that gap.
         On Windows, ``msvcrt.locking`` is similarly per-process.
         """
         full_path = self._resolve(path)
-        if lock_dir is not None:
-            lock_path = self._resolve(lock_dir) / (full_path.name + ".lock")
-        else:
-            lock_path = full_path.with_suffix(full_path.suffix + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
         thread_lock = self._get_thread_lock(path)
 
         def _locked_check_and_write() -> int:
             # Unique tmp path per call avoids Windows name-pending-deletion
             # races when multiple threads share the same base tmp path.
             tmp_path = full_path.with_suffix(f".{threading.get_ident()}.tmp")
-            with thread_lock, _CrossProcessLock(lock_path):
+            with thread_lock:
                 current_mtime = full_path.stat().st_mtime_ns
                 if current_mtime != expected_version.value:
                     raise VersionConflictError(path, expected_version, VersionToken(current_mtime))
@@ -231,6 +230,30 @@ class LocalBackend:
         loop = asyncio.get_event_loop()
         new_mtime = await loop.run_in_executor(None, _locked_check_and_write)
         return VersionToken(new_mtime)
+
+    @asynccontextmanager
+    async def partition_lock(self, partition: str) -> AsyncIterator[PartitionLockToken]:
+        """Acquire an exclusive cross-process lock for a partition.
+
+        Lock file: .ouestcharlie/{partition}/partition.lock
+        Root lock (partition=""): .ouestcharlie/partition.lock
+
+        Holds ``_CrossProcessLock`` on that file for the lifetime of the
+        context.  Pass the yielded ``PartitionLockToken`` to
+        ``XmpStore.write()`` and ``ManifestStore.write_leaf()`` to prevent
+        them from acquiring the lock a second time.
+        """
+        lock_path = self._resolve(str(Path(METADATA_DIR) / partition / "partition.lock"))
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, lambda: lock_path.parent.mkdir(parents=True, exist_ok=True)
+        )
+        xlock = _CrossProcessLock(lock_path)
+        await loop.run_in_executor(None, xlock.__enter__)
+        try:
+            yield PartitionLockToken(partition=partition)
+        finally:
+            await loop.run_in_executor(None, lambda: xlock.__exit__(None, None, None))
 
     async def write_new(self, path: str, data: bytes) -> VersionToken:
         """Write a new file atomically, failing if it already exists.
