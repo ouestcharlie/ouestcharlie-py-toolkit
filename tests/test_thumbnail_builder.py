@@ -19,6 +19,7 @@ from ouestcharlie_toolkit.schema import (
 from ouestcharlie_toolkit.thumbnail_builder import (
     GRID_MAX_PHOTOS,
     _call_image_proc,
+    delete_partition_thumbnails,
     generate_partition_thumbnails,
 )
 
@@ -45,9 +46,8 @@ _FAKE_HASH = "A" * 22
 class _FakeAvifProcess:
     """Fake asyncio subprocess that writes a placeholder AVIF and returns grid JSON."""
 
-    def __init__(self, cols: int = 2, rows: int = 1, tile_size: int = 256) -> None:
+    def __init__(self, rows: int = 1, tile_size: int = 256) -> None:
         self.returncode = 0
-        self._cols = cols
         self._rows = rows
         self._tile_size = tile_size
 
@@ -59,7 +59,6 @@ class _FakeAvifProcess:
             photo_order = [p["content_hash"] for p in data.get("photos", [])]
         stdout = json.dumps(
             {
-                "cols": self._cols,
                 "rows": self._rows,
                 "tileSize": self._tile_size,
                 "photoOrder": photo_order,
@@ -128,7 +127,7 @@ async def test_call_image_proc_returns_bytes(tmp_path: Path) -> None:
 
     with patch(
         "asyncio.create_subprocess_exec",
-        return_value=_FakeAvifProcess(cols=1, rows=1, tile_size=256),
+        return_value=_FakeAvifProcess(rows=1, tile_size=256),
     ):
         grid, avif_bytes = await _call_image_proc(
             staged_photos=staged,
@@ -139,7 +138,6 @@ async def test_call_image_proc_returns_bytes(tmp_path: Path) -> None:
         )
 
     assert avif_bytes == b"FAKE_AVIF_CONTENT"
-    assert grid.cols == 1
     assert grid.rows == 1
     assert grid.tile_size == 256
 
@@ -160,7 +158,6 @@ async def test_call_image_proc_passes_correct_json(tmp_path: Path) -> None:
                 Path(data["output"]).write_bytes(b"X")
             return json.dumps(
                 {
-                    "cols": 1,
                     "rows": 1,
                     "tileSize": 256,
                     "photoOrder": ["Kf3QzA2nBcR8xYvLm1P9w"],
@@ -212,7 +209,7 @@ async def test_call_image_proc_photo_order_in_grid(tmp_path: Path) -> None:
 
     with patch(
         "asyncio.create_subprocess_exec",
-        return_value=_FakeAvifProcess(cols=2, rows=1, tile_size=256),
+        return_value=_FakeAvifProcess(rows=1, tile_size=256),
     ):
         grid, _ = await _call_image_proc(
             staged_photos=staged,
@@ -238,7 +235,7 @@ async def test_generate_partition_thumbnails_returns_chunks(tmp_path: Path) -> N
         _fake_photo_entry("a.jpg", "aa" * 32),
     ]
 
-    fake_grid = ThumbnailGridLayout(cols=2, rows=1, tile_size=256, photo_order=[])
+    fake_grid = ThumbnailGridLayout(rows=1, tile_size=256, photo_order=[])
 
     with (
         patch(
@@ -265,7 +262,7 @@ async def test_generate_partition_thumbnails_writes_avif_to_backend(
 ) -> None:
     backend = LocalBackend(root=tmp_path)
     photos = [_fake_photo_entry("a.jpg", "aa" * 32)]
-    fake_grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=[])
+    fake_grid = ThumbnailGridLayout(rows=1, tile_size=256, photo_order=[])
 
     with (
         patch(
@@ -300,7 +297,7 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(
         captured_entries.append(list(photo_entries))
         return []
 
-    fake_grid = ThumbnailGridLayout(cols=2, rows=2, tile_size=256, photo_order=[])
+    fake_grid = ThumbnailGridLayout(rows=2, tile_size=256, photo_order=[])
 
     with (
         patch(
@@ -329,7 +326,7 @@ async def test_generate_partition_thumbnails_uses_tier_size(tmp_path: Path) -> N
 
     async def capture_call(**kw):
         sizes_seen.append(kw["tile_size"])
-        grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=kw["tile_size"], photo_order=[])
+        grid = ThumbnailGridLayout(rows=1, tile_size=kw["tile_size"], photo_order=[])
         return grid, b"FAKE"
 
     with (
@@ -361,7 +358,7 @@ async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path)
 
     async def fake_call(**kw):
         order = [p["content_hash"] for p in kw["staged_photos"]]
-        grid = ThumbnailGridLayout(cols=2, rows=2, tile_size=256, photo_order=order)
+        grid = ThumbnailGridLayout(rows=2, tile_size=256, photo_order=order)
         return grid, b"FAKE"
 
     with (
@@ -390,7 +387,7 @@ async def test_generate_partition_thumbnails_splits_into_chunks(tmp_path: Path) 
     async def fake_call(**kw):
         nonlocal call_count
         call_count += 1
-        grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=[])
+        grid = ThumbnailGridLayout(rows=1, tile_size=256, photo_order=[])
         return grid, f"FAKE{call_count}".encode()
 
     with (
@@ -417,7 +414,7 @@ async def test_generate_partition_thumbnails_idempotent(tmp_path: Path) -> None:
     """
     backend = LocalBackend(root=tmp_path)
     photos = [_fake_photo_entry("a.jpg", "aa" * 32)]
-    fake_grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=[])
+    fake_grid = ThumbnailGridLayout(rows=1, tile_size=256, photo_order=[])
 
     with (
         patch(
@@ -434,3 +431,60 @@ async def test_generate_partition_thumbnails_idempotent(tmp_path: Path) -> None:
 
     assert chunks1[0].avif_hash == chunks2[0].avif_hash
     assert await backend.exists(thumbnail_avif_path("", chunks1[0].avif_hash))
+
+
+# ---------------------------------------------------------------------------
+# delete_partition_thumbnails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_partition_thumbnails_removes_thumbnail_avifs(tmp_path: Path) -> None:
+    """delete_partition_thumbnails removes thumbnails-*.avif files from the metadata dir."""
+    backend = LocalBackend(root=tmp_path)
+    meta_dir = tmp_path / METADATA_DIR
+    meta_dir.mkdir()
+    thumb = meta_dir / "thumbnails-AAAAAAAAAAAAAAAAAAAAAA.avif"
+    thumb.write_bytes(b"STALE")
+
+    await delete_partition_thumbnails(backend, "")
+
+    assert not thumb.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_partition_thumbnails_leaves_other_files(tmp_path: Path) -> None:
+    """delete_partition_thumbnails does not touch previews or manifest files."""
+    backend = LocalBackend(root=tmp_path)
+    meta_dir = tmp_path / METADATA_DIR
+    meta_dir.mkdir()
+    preview = meta_dir / "previews-AAAAAAAAAAAAAAAAAAAAAA.avif"
+    manifest = meta_dir / "manifest.json"
+    preview.write_bytes(b"PREVIEW")
+    manifest.write_bytes(b"{}")
+
+    await delete_partition_thumbnails(backend, "")
+
+    assert preview.exists()
+    assert manifest.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_partition_thumbnails_missing_dir_is_noop(tmp_path: Path) -> None:
+    """delete_partition_thumbnails does not raise when the metadata dir does not exist."""
+    backend = LocalBackend(root=tmp_path)
+    await delete_partition_thumbnails(backend, "")  # no exception
+
+
+@pytest.mark.asyncio
+async def test_delete_partition_thumbnails_subdirectory_partition(tmp_path: Path) -> None:
+    """delete_partition_thumbnails targets the correct subdirectory for nested partitions."""
+    backend = LocalBackend(root=tmp_path)
+    meta_dir = tmp_path / METADATA_DIR / "2024" / "July"
+    meta_dir.mkdir(parents=True)
+    thumb = meta_dir / "thumbnails-AAAAAAAAAAAAAAAAAAAAAA.avif"
+    thumb.write_bytes(b"STALE")
+
+    await delete_partition_thumbnails(backend, "2024/July")
+
+    assert not thumb.exists()

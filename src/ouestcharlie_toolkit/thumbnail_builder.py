@@ -25,6 +25,7 @@ from ouestcharlie_imageproc.image_proc import OneTimeImageProc
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.hashing import content_hash as _hash
 from ouestcharlie_toolkit.schema import (
+    METADATA_DIR,
     PhotoEntry,
     ThumbnailChunk,
     ThumbnailGridLayout,
@@ -101,7 +102,6 @@ async def _call_image_proc(
     )
     avif_bytes = Path(tmp_output).read_bytes()
     grid = ThumbnailGridLayout(
-        cols=grid_info["cols"],
         rows=grid_info["rows"],
         tile_size=grid_info["tileSize"],
         photo_order=grid_info["photoOrder"],
@@ -149,13 +149,37 @@ async def generate_partition_thumbnails(
         with contextlib.suppress(FileExistsError):
             await backend.write_new(avif_path, avif_bytes)
         _log.debug(
-            "AVIF chunk written: %s (%d bytes, %dx%d grid, %d photos)",
+            "AVIF chunk written: %s (%d bytes, %d rows (8 column grid), %d photos)",
             avif_path,
             len(avif_bytes),
-            grid.cols,
             grid.rows,
             len(chunk_entries),
         )
         return ThumbnailChunk(avif_hash=avif_hash, grid=grid)
 
     return list(await asyncio.gather(*[_generate_chunk(c) for c in chunks]))
+
+
+async def delete_partition_thumbnails(backend: Backend, partition: str) -> None:
+    """Delete all ``thumbnails-*.avif`` files in a partition's metadata directory.
+
+    Missing directory or individual files are silently ignored; other errors
+    are logged as warnings and do not propagate.
+    """
+    prefix = partition.rstrip("/") + "/" if partition else ""
+    meta_dir = f"{METADATA_DIR}/{prefix}".rstrip("/")
+    try:
+        avif_files = await backend.list_files(meta_dir, frozenset({".avif"}))
+    except Exception as exc:
+        _log.warning("delete_partition_thumbnails — could not list %s: %s", meta_dir, exc)
+        return
+    for f in avif_files:
+        if not Path(f.path).name.startswith("thumbnails-"):
+            continue
+        try:
+            await backend.delete(f.path)
+            _log.debug("delete_partition_thumbnails — deleted: %s", f.path)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            _log.warning("delete_partition_thumbnails — could not delete %s: %s", f.path, exc)

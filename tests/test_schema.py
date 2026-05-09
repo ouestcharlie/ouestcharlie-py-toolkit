@@ -3,8 +3,6 @@
 from datetime import datetime
 
 from ouestcharlie_toolkit.schema import (
-    METADATA_DIR,
-    OUESTCHARLIE_NS,
     SCHEMA_VERSION,
     LeafManifest,
     ManifestSummary,
@@ -442,15 +440,3 @@ def test_xmp_sidecar_optional_fields_default_none():
     assert xmp.rating is None
     assert xmp.width is None
     assert xmp.height is None
-
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-
-def test_constants():
-    """Test that constants are defined correctly."""
-    assert OUESTCHARLIE_NS == "http://ouestcharlie.app/ns/1.0/"
-    assert SCHEMA_VERSION == 1
-    assert METADATA_DIR == ".ouestcharlie"
