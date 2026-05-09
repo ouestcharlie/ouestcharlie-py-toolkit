@@ -206,7 +206,9 @@ class ManifestStore:
                 ]
                 partitions.append(new_partition_summary)
                 updated = RootSummary(
-                    schema_version=existing.schema_version,
+                    schema_version=max(
+                        existing.schema_version, SCHEMA_VERSION
+                    ),  # Updating a partition is always to the current SCHEMA_VERSION
                     partitions=partitions,
                     _extra=existing._extra,
                 )

@@ -13,7 +13,7 @@ from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 # ---------------------------------------------------------------------------
 
 OUESTCHARLIE_NS = "http://ouestcharlie.app/ns/1.0/"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MANIFEST_FILENAME = "manifest.json"
 SUMMARY_FILENAME = "summary.json"
 METADATA_DIR = ".ouestcharlie"
@@ -225,9 +225,10 @@ class ThumbnailGridLayout:
 
     Tiles are ordered by photo content_hash (ascending) for stability:
     a photo's tile index only changes if its content changes, not on renames.
+
+    Column count is always min(8, len(photo_order)) — not stored, always computable.
     """
 
-    cols: int  # number of columns in the AVIF grid
     rows: int  # number of rows in the AVIF grid
     tile_size: int  # short edge in pixels (e.g. 256 or 1440)
     photo_order: list[str]  # content_hashes in row-major tile order
@@ -247,7 +248,7 @@ class ThumbnailChunk:
     """
 
     avif_hash: str  # 22-char BLAKE3 of the AVIF content
-    grid: ThumbnailGridLayout  # cols, rows, tile_size, photo_order
+    grid: ThumbnailGridLayout  # rows, tile_size, photo_order
 
 
 def thumbnail_avif_path(partition: str, avif_hash: str, tier: str = "thumbnail") -> str:
@@ -462,7 +463,6 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
 
 def _grid_layout_to_dict(g: ThumbnailGridLayout) -> dict[str, Any]:
     return {
-        "cols": g.cols,
         "rows": g.rows,
         "tileSize": g.tile_size,
         "photoOrder": g.photo_order,
@@ -471,7 +471,6 @@ def _grid_layout_to_dict(g: ThumbnailGridLayout) -> dict[str, Any]:
 
 def _grid_layout_from_dict(d: dict[str, Any]) -> ThumbnailGridLayout:
     return ThumbnailGridLayout(
-        cols=d["cols"],
         rows=d["rows"],
         tile_size=d["tileSize"],
         photo_order=d.get("photoOrder", []),
