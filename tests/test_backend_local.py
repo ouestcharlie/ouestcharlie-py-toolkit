@@ -467,7 +467,11 @@ async def test_partition_lock_version_conflict_still_raised() -> None:
         backend = LocalBackend(root=tmpdir)
         _, stale_version = await backend.read("2024/2024-07/img.xmp")
         # Advance the file externally so stale_version is no longer current.
-        (root / "2024" / "2024-07" / "img.xmp").write_bytes(b"v2-external")
+        # Force a distinct mtime in case the filesystem clock is coarse (e.g. CI on tmpfs).
+        xmp_path = root / "2024" / "2024-07" / "img.xmp"
+        xmp_path.write_bytes(b"v2-external")
+        new_mtime_ns = stale_version.value + 1_000_000_000  # 1 second ahead
+        os.utime(xmp_path, ns=(new_mtime_ns, new_mtime_ns))
 
         async with backend.partition_lock("2024/2024-07"):
             with pytest.raises(VersionConflictError):
