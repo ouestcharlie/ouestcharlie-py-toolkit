@@ -610,7 +610,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/da/74/39fffccdd53eae6d6
 
 [[package]]
 name = "ouestcharlie-py-toolkit"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "blake3" },
