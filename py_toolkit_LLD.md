@@ -7,8 +7,8 @@ This document details the shared Python toolkit used by all OuEstCharlie agents.
 The Python toolkit (`ouestcharlie-toolkit`) is a shared library that provides five core capabilities to all agents:
 
 1. **MCP integration** — MCP server lifecycle, tool registration, progress reporting, and logging
-2. **LanceDB columnar index** — schema-validated per-photo store at `.ouestcharlie/index.lance/`, SQL query support, upsert/delete operations, thumbnail location columns
-3. **Manifest read-edit with consistency** — `summary.json` traversal and atomic read-modify-write with optimistic concurrency
+2. **LanceDB columnar index** — schema-validated per-photo store at `.ouestcharlie/index.lance/`, upsert/delete operations, thumbnail location columns; partition-level stats computed by DuckDB aggregate queries over the index
+3. **Manifest read-edit with consistency** — `summary.json` atomic read-modify-write with optimistic concurrency
 4. **XMP read-edit with consistency** — sidecar read-modify-write with optimistic concurrency and field-level semantics
 5. **Image processing** — thumbnail AVIF grid assembly and on-demand JPEG preview generation, delegated to `ouestcharlie-imageproc`
 
@@ -95,13 +95,9 @@ The PyArrow schema (`PHOTO_SCHEMA`) defines the table structure:
 
 GPS and thumbnail location use **flat nullable columns** rather than structs. LanceDB returns null struct fields as default-valued dicts, not `None`, which would require extra handling at read sites.
 
-### `LanceIndex` API
+### Partition Summary (`partition_summary.py`)
 
-`LanceIndex.open_or_create()` / `LanceIndex.open()` — connect to the index; `open` raises `FileNotFoundError` if absent.
-
-### Conversion helpers
-
-`photo_entry_to_row(entry, partition, thumbnail)` and `row_to_photo_entry(row)` convert between `PhotoEntry` and LanceDB row dicts. `_esc(s)` doubles single quotes for safe embedding in SQL string literals.
+`compute_partition_summary(lance_index, partition)` runs a single DuckDB aggregate query over the LanceDB index to compute the `ManifestSummary` for a partition — photo count, date range, GPS bounding box, rating range. This replaces in-memory computation from the photo list: the index is the source of truth, so stats are derived from it directly after upsert.
 
 ## Manifest Read-Edit with Consistency
 
@@ -110,8 +106,6 @@ GPS and thumbnail location use **flat nullable columns** rather than structs. La
 ### Data Model
 
 The toolkit defines typed models: `PhotoEntry`, `ManifestSummary`, `RootSummary`.
-
-`ManifestSummary.from_photos(partition, entries)` computes partition-level stats (date range, rating range, GPS bounding box, photo count) from a list of `PhotoEntry` objects in memory — no manifest file reads needed.
 
 `schema.py` carries the canonical `SCHEMA_VERSION` constant (currently `3`) and `LANCE_INDEX_SUBDIR` (`"index.lance"`).
 
@@ -177,8 +171,7 @@ Image processing (Rust binary + subprocess wrappers) lives in the separate [`oue
 
 This toolkit provides two higher-level builders that use `ouestcharlie-imageproc`:
 
-**`thumbnail_builder.py`** — AVIF grid generation:
-- `generate_partition_thumbnails(backend, partition, photo_entries, tier="thumbnail")` — sorts photos by `content_hash`, splits into chunks of ≤64, encodes each chunk in parallel via `asyncio.gather`; returns `list[ThumbnailChunk]`
+**`thumbnail_builder.py`** — AVIF grid generation: photos are sorted by `content_hash`, split into chunks of ≤64 (8-column grid, up to 8 rows per AVIF file), and encoded in parallel; returns `list[ThumbnailChunk]`.
 
 **`preview_builder.py`** — on-demand JPEG preview generation:
 - `generate_preview_jpeg(image_proc, backend, partition, entry)` — generates and caches a single-photo JPEG preview; fast path if already cached
