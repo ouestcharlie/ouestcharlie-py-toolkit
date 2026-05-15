@@ -14,7 +14,6 @@ from .manifest import ManifestStore
 from .photo import Photo
 from .progress import report_progress
 from .schema import (
-    LeafManifest,
     ManifestSummary,
     PhotoEntry,
     XmpSidecar,
@@ -35,7 +34,6 @@ __all__ = [
     # Data models
     "PhotoEntry",
     "ManifestSummary",
-    "LeafManifest",
     "XmpSidecar",
     "VersionToken",
     "FileInfo",

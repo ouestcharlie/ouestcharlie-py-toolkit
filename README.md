@@ -41,13 +41,15 @@ pip install ouestcharlie-toolkit
 `ouestcharlie-imageproc` (the Rust binary) is a separate package pulled in automatically. No Rust toolchain required at install time.
 
 System prerequisites:
-- **macOS**: `brew install inih` (required by pyexiv2 at runtime)
+- **macOS**: `brew install inih brotli gettext` (required by pyexiv2 at runtime)
 - **Linux/Windows**: no extra steps
 
 ### From source (development)
 
 ```bash
-uv venv --python 3.13
+# For macOs on arm64 architecture, the full Python version is required e.g.: cpython-3.14.5-macos-aarch64-none
+#  the version string is listed by `uv python list`
+uv venv --python 3.13 
 uv sync
 ```
 
@@ -79,10 +81,10 @@ hatch build
 
 ## Dependencies
 
-- `mcp>=1.27` — Official MCP Python SDK
-- `pyexiv2>=2.8` — EXIF extraction from image files (wraps Exiv2); requires `brew install inih` on macOS
-- `blake3>=1.0.8` — Fast content hashing
-- `ouestcharlie-imageproc>=1.0.0` — Rust coprocessor for image decode, resize, AVIF assembly, JPEG preview
+- `mcp` — Official MCP Python SDK
+- `pyexiv2` — EXIF extraction from image files (wraps Exiv2); requires `brew install inih` on macOS
+- `blake3` — Fast content hashing
+- `ouestcharlie-imageproc` — Rust coprocessor for image decode, resize, AVIF assembly, JPEG preview
 
 XMP parsing and serialization use stdlib only and have no native dependencies.
 
@@ -114,18 +116,6 @@ if __name__ == "__main__":
     agent.run()  # Runs on stdio transport
 ```
 
-### Working with Manifests
-
-```python
-from ouestcharlie_toolkit import ManifestStore, PhotoEntry
-
-async def add_photo_to_manifest(store: ManifestStore, partition: str, photo: PhotoEntry):
-    def modify(manifest):
-        manifest.photos.append(photo)
-        return manifest
-
-    await store.read_modify_write_leaf(partition, modify)
-```
 
 ### Working with XMP Sidecars
 

@@ -13,29 +13,22 @@ from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 # ---------------------------------------------------------------------------
 
 OUESTCHARLIE_NS = "http://ouestcharlie.app/ns/1.0/"
-SCHEMA_VERSION = 2
-MANIFEST_FILENAME = "manifest.json"
+SCHEMA_VERSION = 3
 SUMMARY_FILENAME = "summary.json"
 METADATA_DIR = ".ouestcharlie"
 PREVIEW_JPEG_SUBDIR = "previews"
-
-
-def manifest_path(partition: str) -> str:
-    """Well-known manifest path for a partition.
-
-    All metadata lives under a single ``.ouestcharlie/`` tree at the backend
-    root, mirroring the partition directory structure.
-
-    Example: ``'2024/2024-07/'`` → ``'.ouestcharlie/2024/2024-07/manifest.json'``.
-    Root partition (``''``) → ``'.ouestcharlie/manifest.json'``.
-    """
-    suffix = partition.rstrip("/") + "/" if partition else ""
-    return f"{METADATA_DIR}/{suffix}{MANIFEST_FILENAME}"
+LANCE_INDEX_SUBDIR = "index.lance"
 
 
 def summary_path() -> str:
     """Well-known path for the root summary file: '.ouestcharlie/summary.json'."""
     return f"{METADATA_DIR}/{SUMMARY_FILENAME}"
+
+
+def lance_index_path() -> str:
+    """Well-known backend-relative path
+    for the LanceDB index directory: '.ouestcharlie/index.lance'."""
+    return f"{METADATA_DIR}/{LANCE_INDEX_SUBDIR}"
 
 
 def preview_jpeg_path(partition: str, content_hash: str) -> str:
@@ -49,7 +42,7 @@ def preview_jpeg_path(partition: str, content_hash: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Photo entry (leaf manifest)
+# Photo entry
 # ---------------------------------------------------------------------------
 
 
@@ -102,15 +95,6 @@ class PhotoEntry:
 # ---------------------------------------------------------------------------
 
 
-def _naive(dt: datetime) -> datetime:
-    """Return a timezone-naive datetime for ordering.
-
-    Strips tzinfo so that min()/max() can compare a mix of aware and naive
-    datetimes without raising TypeError.
-    """
-    return dt.replace(tzinfo=None)
-
-
 class ManifestSummary:
     """Summary statistics for a partition, stored inline in manifest.json and
     as an entry in the root summary.json.
@@ -140,58 +124,6 @@ class ManifestSummary:
         self.photo_count = photo_count
         self._stats: dict[str, dict[str, Any]] = dict(_stats) if _stats else {}
         self._extra: dict[str, Any] = dict(_extra) if _extra is not None else {}
-
-    @classmethod
-    def from_photos(
-        cls,
-        partition: str,
-        entries: list[PhotoEntry],
-        field_config: list[FieldDef] | None = None,
-    ) -> ManifestSummary:
-        """Compute partition-level summary statistics from photo entries."""
-        if field_config is None:
-            field_config = PHOTO_FIELDS
-        stats: dict[str, Any] = {}
-        for fdef in field_config:
-            if fdef.summary_range:
-                values = [
-                    v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None
-                ]
-                if not values:
-                    continue
-                missing = len(entries) - len(values)
-                if fdef.type == FieldType.DATE_RANGE:
-                    stat: dict[str, Any] = {
-                        "type": "date_range",
-                        "min": min(values, key=_naive),
-                        "max": max(values, key=_naive),
-                    }
-                elif fdef.type == FieldType.INT_RANGE:
-                    stat = {
-                        "type": "int_range",
-                        "min": min(values),
-                        "max": max(values),
-                    }
-                else:
-                    continue
-                if missing:
-                    stat["missing"] = missing
-                stats[fdef.name] = stat
-            elif fdef.summary_gps_bbox and fdef.type is FieldType.GPS_BOX:
-                all_gps = [e.searchable.get(fdef.entry_attr) for e in entries]
-                lats = [v[0] for v in all_gps if v is not None and v[0] is not None]
-                lons = [v[1] for v in all_gps if v is not None and v[1] is not None]
-                if lats or lons:
-                    missing_lat = len(entries) - len(lats)
-                    missing_lon = len(entries) - len(lons)
-                    lat_stat: dict[str, Any] = {"min": min(lats), "max": max(lats)} if lats else {}
-                    lon_stat: dict[str, Any] = {"min": min(lons), "max": max(lons)} if lons else {}
-                    if missing_lat:
-                        lat_stat["missing"] = missing_lat
-                    if missing_lon:
-                        lon_stat["missing"] = missing_lon
-                    stats[fdef.name] = {"type": "gps_bbox", "lat": lat_stat, "lon": lon_stat}
-        return cls(path=partition, photo_count=len(entries), _stats=stats)
 
     def __getattr__(self, name: str) -> Any:
         """Return the typed stat dict for a field,
@@ -264,17 +196,6 @@ def thumbnail_avif_path(partition: str, avif_hash: str, tier: str = "thumbnail")
 
 
 @dataclass
-class LeafManifest:
-    """Leaf-level manifest containing full per-photo metadata inline."""
-
-    schema_version: int
-    partition: str
-    photos: list[PhotoEntry] = field(default_factory=list)
-    thumbnail_chunks: list[ThumbnailChunk] = field(default_factory=list)
-    _extra: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
 class RootSummary:
     """Flat index of all partition summaries for a backend.
 
@@ -323,55 +244,6 @@ class XmpSidecar:
 
 # These convert between dataclass instances and JSON-compatible dicts.
 # Unknown fields are preserved via the _extra attribute.
-
-
-def _photo_entry_to_dict(entry: PhotoEntry) -> dict[str, Any]:
-    d: dict[str, Any] = {
-        "filename": entry.filename,
-        "contentHash": entry.content_hash,
-        "metadataVersion": entry.metadata_version,
-        "xmpVersionToken": entry.xmp_version_token,
-    }
-    for fdef in PHOTO_FIELDS:
-        value = entry.searchable.get(fdef.entry_attr)
-        if value is None:
-            continue
-        if fdef.type is FieldType.DATE_RANGE:
-            d[fdef.name] = value.isoformat()
-        elif fdef.type is FieldType.GPS_BOX:
-            d[fdef.name] = list(value)
-        elif fdef.type is FieldType.STRING_COLLECTION:
-            if value:
-                d[fdef.name] = value
-        else:
-            d[fdef.name] = value
-    d.update(entry._extra)
-    return d
-
-
-def _photo_entry_from_dict(d: dict[str, Any]) -> PhotoEntry:
-    known_keys = {"filename", "contentHash", "metadataVersion", "xmpVersionToken"}
-    searchable: dict[str, Any] = {}
-    for fdef in PHOTO_FIELDS:
-        known_keys.add(fdef.name)
-        raw = d.get(fdef.name)
-        if raw is None:
-            continue
-        if fdef.type is FieldType.DATE_RANGE:
-            searchable[fdef.entry_attr] = datetime.fromisoformat(raw)
-        elif fdef.type is FieldType.GPS_BOX:
-            searchable[fdef.entry_attr] = tuple(raw)
-        else:
-            searchable[fdef.entry_attr] = raw
-    extra = {k: v for k, v in d.items() if k not in known_keys}
-    return PhotoEntry(
-        filename=d["filename"],
-        content_hash=d["contentHash"],
-        metadata_version=d.get("metadataVersion", 1),
-        xmp_version_token=d.get("xmpVersionToken", ""),
-        searchable=searchable,
-        _extra=extra,
-    )
 
 
 def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
@@ -457,62 +329,6 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
         path=d["path"],
         photo_count=d.get("photoCount", 0),
         _stats=stats,
-        _extra=extra,
-    )
-
-
-def _grid_layout_to_dict(g: ThumbnailGridLayout) -> dict[str, Any]:
-    return {
-        "rows": g.rows,
-        "tileSize": g.tile_size,
-        "photoOrder": g.photo_order,
-    }
-
-
-def _grid_layout_from_dict(d: dict[str, Any]) -> ThumbnailGridLayout:
-    return ThumbnailGridLayout(
-        rows=d["rows"],
-        tile_size=d["tileSize"],
-        photo_order=d.get("photoOrder", []),
-    )
-
-
-def _thumbnail_chunk_to_dict(c: ThumbnailChunk) -> dict[str, Any]:
-    return {
-        "avifHash": c.avif_hash,
-        "grid": _grid_layout_to_dict(c.grid),
-    }
-
-
-def _thumbnail_chunk_from_dict(d: dict[str, Any]) -> ThumbnailChunk:
-    return ThumbnailChunk(
-        avif_hash=d["avifHash"],
-        grid=_grid_layout_from_dict(d["grid"]),
-    )
-
-
-def serialize_leaf(manifest: LeafManifest) -> dict[str, Any]:
-    """Serialize a LeafManifest to a JSON-compatible dict."""
-    d: dict[str, Any] = {
-        "schemaVersion": manifest.schema_version,
-        "partition": manifest.partition,
-        "photos": [_photo_entry_to_dict(p) for p in manifest.photos],
-    }
-    if manifest.thumbnail_chunks:
-        d["thumbnailChunks"] = [_thumbnail_chunk_to_dict(c) for c in manifest.thumbnail_chunks]
-    d.update(manifest._extra)
-    return d
-
-
-def deserialize_leaf(d: dict[str, Any]) -> LeafManifest:
-    """Deserialize a JSON dict into a LeafManifest, preserving unknown fields."""
-    known_keys = {"schemaVersion", "partition", "photos", "summary", "thumbnailChunks"}
-    extra = {k: v for k, v in d.items() if k not in known_keys}
-    return LeafManifest(
-        schema_version=d.get("schemaVersion", SCHEMA_VERSION),
-        partition=d["partition"],
-        photos=[_photo_entry_from_dict(p) for p in d.get("photos", [])],
-        thumbnail_chunks=[_thumbnail_chunk_from_dict(c) for c in d.get("thumbnailChunks", [])],
         _extra=extra,
     )
 
