@@ -81,10 +81,10 @@ hatch build
 
 ## Dependencies
 
-- `mcp>=1.27` — Official MCP Python SDK
-- `pyexiv2>=2.8` — EXIF extraction from image files (wraps Exiv2); requires `brew install inih` on macOS
-- `blake3>=1.0.8` — Fast content hashing
-- `ouestcharlie-imageproc>=1.0.0` — Rust coprocessor for image decode, resize, AVIF assembly, JPEG preview
+- `mcp` — Official MCP Python SDK
+- `pyexiv2` — EXIF extraction from image files (wraps Exiv2); requires `brew install inih` on macOS
+- `blake3` — Fast content hashing
+- `ouestcharlie-imageproc` — Rust coprocessor for image decode, resize, AVIF assembly, JPEG preview
 
 XMP parsing and serialization use stdlib only and have no native dependencies.
 
@@ -116,18 +116,6 @@ if __name__ == "__main__":
     agent.run()  # Runs on stdio transport
 ```
 
-### Working with Manifests
-
-```python
-from ouestcharlie_toolkit import ManifestStore, PhotoEntry
-
-async def add_photo_to_manifest(store: ManifestStore, partition: str, photo: PhotoEntry):
-    def modify(manifest):
-        manifest.photos.append(photo)
-        return manifest
-
-    await store.read_modify_write_leaf(partition, modify)
-```
 
 ### Working with XMP Sidecars
 
