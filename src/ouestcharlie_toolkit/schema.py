@@ -95,15 +95,6 @@ class PhotoEntry:
 # ---------------------------------------------------------------------------
 
 
-def _naive(dt: datetime) -> datetime:
-    """Return a timezone-naive datetime for ordering.
-
-    Strips tzinfo so that min()/max() can compare a mix of aware and naive
-    datetimes without raising TypeError.
-    """
-    return dt.replace(tzinfo=None)
-
-
 class ManifestSummary:
     """Summary statistics for a partition, stored inline in manifest.json and
     as an entry in the root summary.json.
@@ -133,58 +124,6 @@ class ManifestSummary:
         self.photo_count = photo_count
         self._stats: dict[str, dict[str, Any]] = dict(_stats) if _stats else {}
         self._extra: dict[str, Any] = dict(_extra) if _extra is not None else {}
-
-    @classmethod
-    def from_photos(
-        cls,
-        partition: str,
-        entries: list[PhotoEntry],
-        field_config: list[FieldDef] | None = None,
-    ) -> ManifestSummary:
-        """Compute partition-level summary statistics from photo entries."""
-        if field_config is None:
-            field_config = PHOTO_FIELDS
-        stats: dict[str, Any] = {}
-        for fdef in field_config:
-            if fdef.summary_range:
-                values = [
-                    v for e in entries if (v := e.searchable.get(fdef.entry_attr)) is not None
-                ]
-                if not values:
-                    continue
-                missing = len(entries) - len(values)
-                if fdef.type == FieldType.DATE_RANGE:
-                    stat: dict[str, Any] = {
-                        "type": "date_range",
-                        "min": min(values, key=_naive),
-                        "max": max(values, key=_naive),
-                    }
-                elif fdef.type == FieldType.INT_RANGE:
-                    stat = {
-                        "type": "int_range",
-                        "min": min(values),
-                        "max": max(values),
-                    }
-                else:
-                    continue
-                if missing:
-                    stat["missing"] = missing
-                stats[fdef.name] = stat
-            elif fdef.summary_gps_bbox and fdef.type is FieldType.GPS_BOX:
-                all_gps = [e.searchable.get(fdef.entry_attr) for e in entries]
-                lats = [v[0] for v in all_gps if v is not None and v[0] is not None]
-                lons = [v[1] for v in all_gps if v is not None and v[1] is not None]
-                if lats or lons:
-                    missing_lat = len(entries) - len(lats)
-                    missing_lon = len(entries) - len(lons)
-                    lat_stat: dict[str, Any] = {"min": min(lats), "max": max(lats)} if lats else {}
-                    lon_stat: dict[str, Any] = {"min": min(lons), "max": max(lons)} if lons else {}
-                    if missing_lat:
-                        lat_stat["missing"] = missing_lat
-                    if missing_lon:
-                        lon_stat["missing"] = missing_lon
-                    stats[fdef.name] = {"type": "gps_bbox", "lat": lat_stat, "lon": lon_stat}
-        return cls(path=partition, photo_count=len(entries), _stats=stats)
 
     def __getattr__(self, name: str) -> Any:
         """Return the typed stat dict for a field,

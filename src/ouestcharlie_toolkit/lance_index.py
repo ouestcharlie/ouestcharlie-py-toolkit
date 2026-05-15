@@ -93,6 +93,26 @@ def photo_entry_to_row(
     }
 
 
+# Columns required by row_to_photo_entry — pass to get_partition_rows(columns=…)
+# to avoid fetching thumbnail, partition, and bookkeeping columns.
+PHOTO_ENTRY_COLUMNS: list[str] = [
+    "filename",
+    "content_hash",
+    "date_taken",
+    "rating",
+    "width",
+    "height",
+    "orientation",
+    "make",
+    "model",
+    "tags",
+    "gps_lat",
+    "gps_lon",
+    "metadata_version",
+    "xmp_version_token",
+]
+
+
 def row_to_photo_entry(row: dict[str, Any]) -> PhotoEntry:
     """Reconstruct a PhotoEntry from a LanceDB row dict."""
     searchable: dict[str, Any] = {}
@@ -211,12 +231,13 @@ class LanceIndex:
 
         await asyncio.to_thread(_lance_worker)
 
-    async def delete_photos(self, content_hashes: list[str]) -> None:
+    async def delete(self, partition: str, content_hashes: list[str]) -> None:
         """Delete specific photos by content hash."""
         if not content_hashes:
             return
         hash_list = ", ".join(f"'{_esc(h)}'" for h in content_hashes)
-        await asyncio.to_thread(self._table.delete, f"content_hash IN ({hash_list})")
+        query = f"partition = '{_esc(partition)}' AND content_hash IN ({hash_list})"
+        await asyncio.to_thread(self._table.delete, query)
 
     async def delete_partition(self, partition: str) -> None:
         """Delete all rows for a partition."""
@@ -227,18 +248,28 @@ class LanceIndex:
     # -----------------------------------------------------------------------
 
     async def get_partition_rows(
-        self, partition: str, limit: int = DEFAULT_LIMIT
+        self,
+        partition: str,
+        columns: list[str] | None = None,
+        limit: int = DEFAULT_LIMIT,
     ) -> list[dict[str, Any]]:
-        """Return all rows for a partition"""
+        """Return rows for a partition.
+
+        columns: restrict to these column names (pass PHOTO_ENTRY_COLUMNS to
+            skip thumbnail, partition, and bookkeeping columns).
+            None returns all columns.
+        """
         try:
 
             def _lance_worker():
-                return (
+                query = (
                     self._table.search()
                     .where(f"partition = '{_esc(partition)}'", prefilter=True)
                     .limit(limit)
-                    .to_list()
                 )
+                if columns is not None:
+                    query = query.select(columns)
+                return query.to_list()
 
             return await asyncio.to_thread(_lance_worker)
         except Exception:

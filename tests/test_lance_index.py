@@ -250,7 +250,7 @@ async def test_upsert_thumbnail_lookup_overrides_existing(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# delete_photos / delete_partition
+# delete/ delete_partition
 # ---------------------------------------------------------------------------
 
 
@@ -258,7 +258,7 @@ async def test_upsert_thumbnail_lookup_overrides_existing(tmp_path: Path):
 async def test_delete_photos_removes_matching(tmp_path: Path):
     idx = await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
     await idx.upsert_partition("p", [_entry("a.jpg", "hash_a"), _entry("b.jpg", "hash_b")], None)
-    await idx.delete_photos(["hash_a"])
+    await idx.delete("p", ["hash_a"])
     rows = await idx.get_partition_rows("p")
     assert len(rows) == 1
     assert rows[0]["content_hash"] == "hash_b"
@@ -268,7 +268,7 @@ async def test_delete_photos_removes_matching(tmp_path: Path):
 async def test_delete_photos_empty_list_is_no_op(tmp_path: Path):
     idx = await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
     await idx.upsert_partition("p", [_entry("a.jpg", "hash_a")], None)
-    await idx.delete_photos([])
+    await idx.delete("p", [])
     assert len(await idx.get_partition_rows("p")) == 1
 
 
