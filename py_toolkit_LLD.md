@@ -4,12 +4,13 @@ This document details the shared Python toolkit used by all OuEstCharlie agents.
 
 ## Overview
 
-The Python toolkit (`ouestcharlie-toolkit`) is a shared library that provides four core capabilities to all agents:
+The Python toolkit (`ouestcharlie-toolkit`) is a shared library that provides five core capabilities to all agents:
 
 1. **MCP integration** — MCP server lifecycle, tool registration, progress reporting, and logging
-2. **Manifest read-edit with consistency** — hierarchical manifest traversal, atomic read-modify-write with optimistic concurrency
-3. **XMP read-edit with consistency** — sidecar read-modify-write with optimistic concurrency and field-level semantics
-4. **Image processing** — thumbnail AVIF grid assembly and on-demand JPEG preview generation, delegated to `ouestcharlie-imageproc`
+2. **LanceDB columnar index** — schema-validated per-photo store at `.ouestcharlie/index.lance/`, SQL query support, upsert/delete operations, thumbnail location columns
+3. **Manifest read-edit with consistency** — `summary.json` traversal and atomic read-modify-write with optimistic concurrency
+4. **XMP read-edit with consistency** — sidecar read-modify-write with optimistic concurrency and field-level semantics
+5. **Image processing** — thumbnail AVIF grid assembly and on-demand JPEG preview generation, delegated to `ouestcharlie-imageproc`
 
 Agents import the toolkit and focus on their domain logic (indexing, enrichment, search). The toolkit handles protocol, storage, and consistency concerns.
 
@@ -65,34 +66,62 @@ Callers pass a `lock_dir` (backend-relative path) to `write_conditional` so that
 
 `CloudMountedBackend` extends `LocalBackend` for FUSE and Windows CF API mounts (kDrive, OneDrive, GDrive, Dropbox). It overrides `read()` with an exponential-backoff retry loop to handle incomplete reads — Windows CF API may return partial data for dehydrated placeholder files. `local_path()` and `content_hash()` are inherited unchanged: photo-media tools (pyexiv2, image-proc) open the file directly via the mount path, letting FUSE handle on-demand download transparently.
 
+## LanceDB Columnar Index (`lance_index.py`)
+
+The LanceDB index replaces per-partition `manifest.json` files as the primary per-photo metadata store (schema version 3+). It is a single columnar table stored at `.ouestcharlie/index.lance/` within the backend root, containing one row per photo across all partitions.
+
+### Schema
+
+The PyArrow schema (`PHOTO_SCHEMA`) defines the table structure:
+
+| Column | Type | Notes |
+|---|---|---|
+| `content_hash` | `string` | Primary key for upserts |
+| `filename` | `string` | |
+| `partition` | `string` | Relative path from backend root |
+| `date_taken` | `timestamp(us)` | Nullable; stored timezone-naive |
+| `utc_offset_minutes` | `int16` | Nullable; reserved for future use |
+| `rating` | `int32` | Nullable |
+| `width`, `height` | `int32` | Nullable |
+| `orientation` | `int32` | Nullable |
+| `make`, `model` | `string` | Nullable |
+| `tags` | `list<string>` | Empty list when absent |
+| `gps_lat`, `gps_lon` | `float64` | Nullable flat columns (not a struct) |
+| `metadata_version` | `int64` | |
+| `xmp_version_token` | `string` | Used for change detection |
+| `thumbnail_avif_hash` | `string` | Nullable; identifies the AVIF chunk file |
+| `thumbnail_tile_index` | `int16` | Nullable; row-major position in the grid |
+| `_last_update` | `timestamp(us)` | Set to `datetime.now(utc)` on each write |
+
+GPS and thumbnail location use **flat nullable columns** rather than structs. LanceDB returns null struct fields as default-valued dicts, not `None`, which would require extra handling at read sites.
+
+### `LanceIndex` API
+
+`LanceIndex.open_or_create()` / `LanceIndex.open()` — connect to the index; `open` raises `FileNotFoundError` if absent.
+
+### Conversion helpers
+
+`photo_entry_to_row(entry, partition, thumbnail)` and `row_to_photo_entry(row)` convert between `PhotoEntry` and LanceDB row dicts. `_esc(s)` doubles single quotes for safe embedding in SQL string literals.
+
 ## Manifest Read-Edit with Consistency
+
+`ManifestStore` manages `summary.json` — the backend-wide flat index of all partitions. Per-photo metadata is stored in the LanceDB index; `summary.json` holds partition-level statistics and the schema version.
 
 ### Data Model
 
-Manifests are JSON files at well-known paths. The toolkit defines typed models: `PhotoEntry`, `ManifestSummary`, `RootSummary`, `LeafManifest`.
+The toolkit defines typed models: `PhotoEntry`, `ManifestSummary`, `RootSummary`.
 
-See [schema.py](src/ouestcharlie/schema.py) for data class definitions and serialization helpers.
+`ManifestSummary.from_photos(partition, entries)` computes partition-level stats (date range, rating range, GPS bounding box, photo count) from a list of `PhotoEntry` objects in memory — no manifest file reads needed.
 
-### Unknown Fields Preservation
-
-Per the HLD schema evolution rules, unknown fields must be preserved:
-- Manifest JSON is deserialized into typed data classes for known fields
-- Unknown top-level and per-entry fields are captured in an `_extra: dict` attribute
-- On serialization, known fields and `_extra` are merged back
+`schema.py` carries the canonical `SCHEMA_VERSION` constant (currently `3`) and `LANCE_INDEX_SUBDIR` (`"index.lance"`).
 
 ### Read-Modify-Write with Optimistic Concurrency
 
-`ManifestStore` provides `read_modify_write_leaf(partition, modify_fn)` that encapsulates the retry loop. Agents pass a `modify` function that transforms the manifest — the retry logic is invisible to them.
+`ManifestStore.upsert_partition_in_summary(summary)` encapsulates the read-modify-write retry loop for `summary.json`. Agents pass a `ManifestSummary` — the retry logic is invisible to them.
 
-See [manifest.py](src/ouestcharlie/manifest.py) for implementation and [README.md](README.md) for usage examples.
+### Unknown Fields Preservation
 
-### Parent Manifest Rebuilding
-
-Parent manifests consolidate summaries from their children:
-1. List all child manifest paths
-2. Read each child manifest's summary (not full photo entries)
-3. Merge summaries: union bloom filters, compute min/max dates, sum photo counts
-4. Write the parent manifest with optimistic concurrency
+Unknown fields in `summary.json` are captured in `_extra: dict` and merged back on serialization, following HLD schema evolution rules.
 
 ## XMP Read-Edit with Consistency
 
@@ -159,6 +188,8 @@ This toolkit provides two higher-level builders that use `ouestcharlie-imageproc
 | Dependency | Purpose | Version constraint |
 |---|---|---|
 | `mcp` | MCP server SDK | `>=1.0` |
+| `lancedb` | Columnar photo index (schema v3+) | `>=0.20` |
+| `pyarrow` | LanceDB schema definition and data conversion | `>=18` |
 | `pyexiv2` | EXIF/XMP read-write (wraps Exiv2) | `>=2.8` |
 | `ouestcharlie-imageproc` | Rust coprocessor for photo decode, resize, AVIF grid and JPEG preview | `>=1.0.0` |
 

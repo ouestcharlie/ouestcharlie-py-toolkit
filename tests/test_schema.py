@@ -4,13 +4,9 @@ from datetime import datetime
 
 from ouestcharlie_toolkit.schema import (
     SCHEMA_VERSION,
-    LeafManifest,
     ManifestSummary,
     PhotoEntry,
     XmpSidecar,
-    deserialize_leaf,
-    manifest_path,
-    serialize_leaf,
 )
 
 # ---------------------------------------------------------------------------
@@ -174,108 +170,6 @@ def test_partition_summary_rating_defaults_none():
     """rating stat is absent (None) when not provided."""
     summary = ManifestSummary(path="2024/", photo_count=10)
     assert summary.rating is None
-
-
-# ---------------------------------------------------------------------------
-# Manifests
-# ---------------------------------------------------------------------------
-
-
-def test_manifest_path_helper():
-    """Test manifest path generation."""
-    path = manifest_path("2024/2024-07/")
-    assert path == ".ouestcharlie/2024/2024-07/manifest.json"
-
-
-def test_manifest_path_empty():
-    """Test manifest path for root partition."""
-    path = manifest_path("")
-    assert path == ".ouestcharlie/manifest.json"
-
-
-def test_leaf_manifest_creation():
-    """Test LeafManifest creation."""
-    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbc123A2nBcR8xYvLm1P")
-    manifest = LeafManifest(
-        schema_version=SCHEMA_VERSION,
-        partition="2024/2024-07/",
-        photos=[photo],
-    )
-
-    assert manifest.schema_version == SCHEMA_VERSION
-    assert manifest.partition == "2024/2024-07/"
-    assert len(manifest.photos) == 1
-    assert manifest.photos[0] == photo
-
-
-def test_leaf_manifest_serialization():
-    """Test LeafManifest serialization."""
-    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbc123A2nBcR8xYvLm1P")
-    manifest = LeafManifest(
-        schema_version=SCHEMA_VERSION,
-        partition="2024/2024-07/",
-        photos=[photo],
-    )
-
-    serialized = serialize_leaf(manifest)
-    assert serialized["partition"] == "2024/2024-07/"
-    assert serialized["schemaVersion"] == SCHEMA_VERSION
-    assert len(serialized["photos"]) == 1
-    assert serialized["photos"][0]["filename"] == "test.jpg"
-
-
-def test_leaf_manifest_deserialization():
-    """Test LeafManifest deserialization round-trip."""
-    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbc123A2nBcR8xYvLm1P")
-    manifest = LeafManifest(
-        schema_version=SCHEMA_VERSION,
-        partition="2024/2024-07/",
-        photos=[photo],
-    )
-
-    serialized = serialize_leaf(manifest)
-    deserialized = deserialize_leaf(serialized)
-
-    assert deserialized.partition == "2024/2024-07/"
-    assert deserialized.schema_version == SCHEMA_VERSION
-    assert len(deserialized.photos) == 1
-    assert deserialized.photos[0].filename == "test.jpg"
-    assert deserialized.photos[0].content_hash == "KfAbc123A2nBcR8xYvLm1P"
-
-
-def test_photo_entry_v1_fields_round_trip():
-    """All queryable fields survive serialize → deserialize."""
-    photo = PhotoEntry(
-        filename="IMG_001.jpg",
-        content_hash="KfAbcZzA2nBcR8xYvLm1Pw",
-        searchable={
-            "make": "Sony",
-            "model": "A7 IV",
-            "rating": 5,
-            "width": 7008,
-            "height": 4672,
-            "tags": ["sunset"],
-            "orientation": 1,
-        },
-    )
-    manifest = LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo])
-    restored = deserialize_leaf(serialize_leaf(manifest)).photos[0]
-
-    assert restored.searchable["make"] == "Sony"
-    assert restored.searchable["model"] == "A7 IV"
-    assert restored.searchable["rating"] == 5
-    assert restored.searchable["width"] == 7008
-    assert restored.searchable["height"] == 4672
-
-
-def test_photo_entry_rejected_rating_round_trip():
-    """rating=-1 (rejected) survives serialize → deserialize."""
-    photo = PhotoEntry(
-        filename="x.jpg", content_hash="KfAbcZzA2nBcR8xYvLm1Pw", searchable={"rating": -1}
-    )
-    manifest = LeafManifest(schema_version=SCHEMA_VERSION, partition="p", photos=[photo])
-    restored = deserialize_leaf(serialize_leaf(manifest)).photos[0]
-    assert restored.searchable["rating"] == -1
 
 
 def test_partition_summary_rating_round_trip():

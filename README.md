@@ -41,13 +41,15 @@ pip install ouestcharlie-toolkit
 `ouestcharlie-imageproc` (the Rust binary) is a separate package pulled in automatically. No Rust toolchain required at install time.
 
 System prerequisites:
-- **macOS**: `brew install inih` (required by pyexiv2 at runtime)
+- **macOS**: `brew install inih brotli gettext` (required by pyexiv2 at runtime)
 - **Linux/Windows**: no extra steps
 
 ### From source (development)
 
 ```bash
-uv venv --python 3.13
+# For macOs on arm64 architecture, the full Python version is required e.g.: cpython-3.14.5-macos-aarch64-none
+#  the version string is listed by `uv python list`
+uv venv --python 3.13 
 uv sync
 ```
 
