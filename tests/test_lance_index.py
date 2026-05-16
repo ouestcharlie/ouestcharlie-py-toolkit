@@ -249,6 +249,28 @@ async def test_upsert_thumbnail_lookup_overrides_existing(tmp_path: Path):
     assert int(rows[0]["thumbnail_tile_index"]) == 7
 
 
+@pytest.mark.asyncio
+async def test_upsert_same_hash_different_partitions_creates_two_rows(tmp_path: Path):
+    """The same content_hash in two partitions must produce two independent rows."""
+    idx = await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
+    await idx.upsert_partition("p1", [_entry("a.jpg", "hash_x")], None)
+    await idx.upsert_partition("p2", [_entry("b.jpg", "hash_x")], None)
+    assert len(await idx.get_partition_rows("p1")) == 1
+    assert len(await idx.get_partition_rows("p2")) == 1
+    assert len(await idx.search_where(None)) == 2
+
+
+@pytest.mark.asyncio
+async def test_upsert_duplicate_hash_in_batch_keeps_first(tmp_path: Path):
+    """Two entries with the same hash in one batch must produce exactly one row."""
+    idx = await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
+    entries = [_entry("first.jpg", "hash_dup"), _entry("second.jpg", "hash_dup")]
+    await idx.upsert_partition("p", entries, None)
+    rows = await idx.get_partition_rows("p")
+    assert len(rows) == 1
+    assert rows[0]["filename"] == "first.jpg"
+
+
 # ---------------------------------------------------------------------------
 # delete/ delete_partition
 # ---------------------------------------------------------------------------
