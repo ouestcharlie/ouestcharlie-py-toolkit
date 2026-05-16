@@ -213,17 +213,30 @@ class LanceIndex:
             except Exception as exc:
                 _log.debug("Could not fetch existing thumbnails for %r: %s", partition, exc)
 
+            seen_hashes: set[str] = set()
             rows_to_write = []
             for entry in entries:
+                if entry.content_hash in seen_hashes:
+                    _log.warning(
+                        "Duplicate content_hash %r in partition %r — skipping %r",
+                        entry.content_hash,
+                        partition,
+                        entry.filename,
+                    )
+                    continue
+                seen_hashes.add(entry.content_hash)
                 if thumbnail_lookup and entry.content_hash in thumbnail_lookup:
                     thumb: tuple[str, int] | None = thumbnail_lookup[entry.content_hash]
                 else:
                     thumb = existing_thumbs.get(entry.content_hash)
                 rows_to_write.append(photo_entry_to_row(entry, partition, thumb))
 
+            if not rows_to_write:
+                return
+
             table_data = pa.Table.from_pylist(rows_to_write, schema=PHOTO_SCHEMA)
             (
-                self._table.merge_insert("content_hash")
+                self._table.merge_insert(["partition", "content_hash"])
                 .when_matched_update_all()
                 .when_not_matched_insert_all()
                 .execute(table_data)
