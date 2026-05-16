@@ -82,6 +82,8 @@ class ManifestStore:
         VersionConflictError. Handles the case where summary.json does not yet
         exist (first index of the backend).
 
+        Empty (photo_count == 0) summaries are deleted
+
         Args:
             new_partition_summary: The summary to insert or replace.
             max_retries: Maximum retry count on concurrent write conflicts.
@@ -95,7 +97,9 @@ class ManifestStore:
                 partitions = [
                     p for p in existing.partitions if p.path != new_partition_summary.path
                 ]
-                partitions.append(new_partition_summary)
+                # Do not happened if photo_count == 0
+                if new_partition_summary.photo_count > 0:
+                    partitions.append(new_partition_summary)
                 updated = RootSummary(
                     schema_version=max(
                         existing.schema_version, SCHEMA_VERSION
