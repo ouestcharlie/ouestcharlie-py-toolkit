@@ -158,7 +158,7 @@ class ThumbnailGridLayout:
     Tiles are ordered by photo content_hash (ascending) for stability:
     a photo's tile index only changes if its content changes, not on renames.
 
-    Column count is always min(8, len(photo_order)) — not stored, always computable.
+    Column count is always 8 — not stored.
     """
 
     rows: int  # number of rows in the AVIF grid
