@@ -106,9 +106,9 @@ def test_row_tags_populated():
     assert row["tags"] == ["a", "b"]
 
 
-def test_row_last_update_is_naive():
+def test_row_last_update_is_not_naive():
     row = photo_entry_to_row(_entry(), "p", None)
-    assert row["_last_update"].tzinfo is None
+    assert row["_last_update"].tzinfo is UTC
 
 
 # ---------------------------------------------------------------------------
