@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import lancedb
@@ -89,7 +89,7 @@ def photo_entry_to_row(
         "xmp_version_token": entry.xmp_version_token,
         "thumbnail_avif_hash": thumbnail[0] if thumbnail is not None else None,
         "thumbnail_tile_index": thumbnail[1] if thumbnail is not None else None,
-        "_last_update": datetime.now(UTC).replace(tzinfo=None),
+        "_last_update": datetime.now(UTC),
     }
 
 
@@ -255,6 +255,15 @@ class LanceIndex:
     async def delete_partition(self, partition: str) -> None:
         """Delete all rows for a partition."""
         await asyncio.to_thread(self._table.delete, f"partition = '{_esc(partition)}'")
+
+    async def maintain(self) -> None:
+        """Compact fragment files and prune version history older than 1 hour."""
+
+        def _lance_worker():
+            self._table.optimize(cleanup_older_than=timedelta(hours=1), delete_unverified=True)
+            _log.info("Lance optimize: compaction and version pruning done")
+
+        await asyncio.to_thread(_lance_worker)
 
     # -----------------------------------------------------------------------
     # Read operations
