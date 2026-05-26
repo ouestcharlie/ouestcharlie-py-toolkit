@@ -6,8 +6,8 @@ Columnar store at .ouestcharlie/index.lance/ inside each backend root.
 
 from __future__ import annotations
 
-import asyncio
 import logging
+from collections.abc import AsyncIterable, AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -51,6 +51,7 @@ PHOTO_SCHEMA = pa.schema(
 
 PHOTO_TABLE_NAME = "photos"
 DEFAULT_LIMIT = 10_000
+PAGE_SIZE = 500
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +90,7 @@ def photo_entry_to_row(
         "xmp_version_token": entry.xmp_version_token,
         "thumbnail_avif_hash": thumbnail[0] if thumbnail is not None else None,
         "thumbnail_tile_index": thumbnail[1] if thumbnail is not None else None,
-        "_last_update": datetime.now(UTC),
+        "_last_update": datetime.now(UTC).replace(tzinfo=None),
     }
 
 
@@ -147,34 +148,27 @@ def _esc(s: str) -> str:
 
 
 class LanceIndex:
-    """Thin wrapper around a LanceDB table storing all photos for one backend."""
+    """Thin wrapper around a LanceDB async table storing all photos for one backend."""
 
-    def __init__(self, table: lancedb.table.Table) -> None:
+    def __init__(self, table: lancedb.table.AsyncTable) -> None:
         self._table = table
 
     @classmethod
     async def open_or_create(cls, backend: Backend, table_name: str) -> LanceIndex:
         """Open an existing LanceDB index, or create one if absent."""
         uri = str(await backend.local_path(lance_index_path()))
-
-        def _lance_worker() -> lancedb.table.Table:
-            db = lancedb.connect(uri)
-            return db.create_table(table_name, schema=PHOTO_SCHEMA, exist_ok=True)
-
-        return cls(await asyncio.to_thread(_lance_worker))
+        db = await lancedb.connect_async(uri)
+        table = await db.create_table(table_name, schema=PHOTO_SCHEMA, exist_ok=True)
+        return cls(table)
 
     @classmethod
     async def open(cls, backend: Backend, table_name: str) -> LanceIndex:
         """Open an existing LanceDB index (raises FileNotFoundError if absent)."""
         uri = str(await backend.local_path(lance_index_path()))
-
-        def _lance_worker() -> lancedb.table.Table:
-            db = lancedb.connect(uri)
-            if table_name not in db.list_tables().tables:
-                raise FileNotFoundError(f"LanceDB index not found at {uri!r}")
-            return db.open_table(table_name)
-
-        return cls(await asyncio.to_thread(_lance_worker))
+        db = await lancedb.connect_async(uri)
+        if table_name not in (await db.list_tables()).tables:
+            raise FileNotFoundError(f"LanceDB index not found at {uri!r}")
+        return cls(await db.open_table(table_name))
 
     # -----------------------------------------------------------------------
     # Write operations
@@ -195,54 +189,55 @@ class LanceIndex:
         if not entries:
             return
 
-        # Retrieve existing thumbnail data so incremental upserts don't wipe it.
-        def _lance_worker():
-            existing_thumbs: dict[str, tuple[str, int] | None] = {}
-            try:
-                rows = (
-                    self._table.search()
-                    .where(f"partition = '{_esc(partition)}'", prefilter=True)
-                    .select(["content_hash", "thumbnail_avif_hash", "thumbnail_tile_index"])
-                    .limit(len(entries) + 1000)
-                    .to_list()
-                )
-                for r in rows:
-                    avif = r.get("thumbnail_avif_hash")
-                    idx = r.get("thumbnail_tile_index")
-                    existing_thumbs[r["content_hash"]] = (avif, idx) if avif is not None else None
-            except Exception as exc:
-                _log.debug("Could not fetch existing thumbnails for %r: %s", partition, exc)
-
-            seen_hashes: set[str] = set()
-            rows_to_write = []
-            for entry in entries:
-                if entry.content_hash in seen_hashes:
-                    _log.warning(
-                        "Duplicate content_hash %r in partition %r — skipping %r",
-                        entry.content_hash,
-                        partition,
-                        entry.filename,
-                    )
-                    continue
-                seen_hashes.add(entry.content_hash)
-                if thumbnail_lookup and entry.content_hash in thumbnail_lookup:
-                    thumb: tuple[str, int] | None = thumbnail_lookup[entry.content_hash]
-                else:
-                    thumb = existing_thumbs.get(entry.content_hash)
-                rows_to_write.append(photo_entry_to_row(entry, partition, thumb))
-
-            if not rows_to_write:
-                return
-
-            table_data = pa.Table.from_pylist(rows_to_write, schema=PHOTO_SCHEMA)
-            (
-                self._table.merge_insert(["partition", "content_hash"])
-                .when_matched_update_all()
-                .when_not_matched_insert_all()
-                .execute(table_data)
+        # Step 1: Retrieve existing thumbnail data so incremental upserts don't wipe it.
+        existing_thumbs: dict[str, tuple[str, int] | None] = {}
+        try:
+            rows = await (
+                self._table.query()
+                .where(f"partition = '{_esc(partition)}'")
+                .select(["content_hash", "thumbnail_avif_hash", "thumbnail_tile_index"])
+                .limit(len(entries) + 1000)
+                .to_list()
             )
+            for r in rows:
+                avif = r.get("thumbnail_avif_hash")
+                idx = r.get("thumbnail_tile_index")
+                existing_thumbs[r["content_hash"]] = (
+                    (str(avif), int(idx)) if avif is not None and idx is not None else None
+                )
+        except Exception as exc:
+            _log.debug("Could not fetch existing thumbnails for %r: %s", partition, exc)
 
-        await asyncio.to_thread(_lance_worker)
+        # Step 2: Build rows, deduplicating within the batch.
+        seen_hashes: set[str] = set()
+        rows_to_write = []
+        for entry in entries:
+            if entry.content_hash in seen_hashes:
+                _log.warning(
+                    "Duplicate content_hash %r in partition %r — skipping %r",
+                    entry.content_hash,
+                    partition,
+                    entry.filename,
+                )
+                continue
+            seen_hashes.add(entry.content_hash)
+            if thumbnail_lookup and entry.content_hash in thumbnail_lookup:
+                thumb: tuple[str, int] | None = thumbnail_lookup[entry.content_hash]
+            else:
+                thumb = existing_thumbs.get(entry.content_hash)
+            rows_to_write.append(photo_entry_to_row(entry, partition, thumb))
+
+        if not rows_to_write:
+            return
+
+        # Step 3: merge_insert.execute() returns AsyncTable._do_merge coroutine — await it.
+        table_data = pa.Table.from_pylist(rows_to_write, schema=PHOTO_SCHEMA)
+        await (
+            self._table.merge_insert(["partition", "content_hash"])
+            .when_matched_update_all()
+            .when_not_matched_insert_all()
+            .execute(table_data)
+        )
 
     async def delete(self, partition: str, content_hashes: list[str]) -> None:
         """Delete specific photos by content hash."""
@@ -250,20 +245,16 @@ class LanceIndex:
             return
         hash_list = ", ".join(f"'{_esc(h)}'" for h in content_hashes)
         query = f"partition = '{_esc(partition)}' AND content_hash IN ({hash_list})"
-        await asyncio.to_thread(self._table.delete, query)
+        await self._table.delete(query)
 
     async def delete_partition(self, partition: str) -> None:
         """Delete all rows for a partition."""
-        await asyncio.to_thread(self._table.delete, f"partition = '{_esc(partition)}'")
+        await self._table.delete(f"partition = '{_esc(partition)}'")
 
     async def maintain(self) -> None:
         """Compact fragment files and prune version history older than 1 hour."""
-
-        def _lance_worker():
-            self._table.optimize(cleanup_older_than=timedelta(hours=1), delete_unverified=True)
-            _log.info("Lance optimize: compaction and version pruning done")
-
-        await asyncio.to_thread(_lance_worker)
+        await self._table.optimize(cleanup_older_than=timedelta(hours=1))
+        _log.info("Lance optimize: compaction and version pruning done")
 
     # -----------------------------------------------------------------------
     # Read operations
@@ -274,42 +265,55 @@ class LanceIndex:
         partition: str,
         columns: list[str] | None = None,
         limit: int = DEFAULT_LIMIT,
-    ) -> list[dict[str, Any]]:
-        """Return rows for a partition.
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield rows for a partition, streaming via LanceDB RecordBatch chunks.
 
         columns: restrict to these column names (pass PHOTO_ENTRY_COLUMNS to
             skip thumbnail, partition, and bookkeeping columns).
             None returns all columns.
+
+        Usage::
+
+            async for row in lance_index.get_partition_rows(partition, columns=[…]):
+                …
         """
         try:
-
-            def _lance_worker():
-                query = (
-                    self._table.search()
-                    .where(f"partition = '{_esc(partition)}'", prefilter=True)
-                    .limit(limit)
-                )
-                if columns is not None:
-                    query = query.select(columns)
-                return query.to_list()
-
-            return await asyncio.to_thread(_lance_worker)
-        except Exception:
-            return []
+            query = self._table.query().where(f"partition = '{_esc(partition)}'").limit(limit)
+            if columns is not None:
+                query = query.select(columns)
+            reader = await query.to_batches()
+            async for batch in reader:
+                for row in batch.to_pylist():
+                    yield row
+        except Exception as exc:
+            _log.debug("get_partition_rows(%r) failed: %s", partition, exc)
 
     async def search_where(
         self,
         where_clause: str | None,
         root: str = "",
-        limit: int = DEFAULT_LIMIT,
-    ) -> list[dict[str, Any]]:
-        """Execute a filtered search and return matching rows.
+        order_by: str = "date_taken",
+        order_desc: bool = True,
+        page: int = 0,
+        page_size: int = PAGE_SIZE,
+    ) -> tuple[AsyncIterable[dict[str, Any]], int]:
+        """Execute a filtered, sorted, paginated search and return matching rows.
 
         Args:
             where_clause: SQL WHERE expression (without the WHERE keyword).
                 None means no filter (all photos).
             root: Restrict to this partition prefix (empty = all partitions).
-            limit: Maximum number of results to return.
+            order_by: Column to sort by (default "date_taken").
+            order_desc: Sort descending when True (default).
+            page: 0-indexed page number.
+            page_size: Number of rows per page (default PAGE_SIZE = 500).
+
+        Returns:
+            Tuple of (async_row_iterator, total_matching_count).
+            All matching rows are fetched via ``to_arrow()``, sorted in memory
+            with ``pa.Table.sort_by()``, then sliced to the requested page.
+            ``AsyncQuery.order_by()`` is not available in lancedb 0.30.2;
+            this approach will be replaced with DB-level sort when it ships.
         """
         clauses: list[str] = []
         if root:
@@ -320,10 +324,22 @@ class LanceIndex:
 
         combined = " AND ".join(clauses) if clauses else None
 
-        def _lance_worker():
-            query = self._table.search().limit(limit)
-            if combined:
-                query = query.where(combined, prefilter=True)
-            return query.to_list()
+        query = self._table.query()
+        if combined:
+            query = query.where(combined)
+        arrow_table: pa.Table = await query.to_arrow()
 
-        return await asyncio.to_thread(_lance_worker)
+        sort_order_str = "descending" if order_desc else "ascending"
+        try:
+            arrow_table = arrow_table.sort_by([(order_by, sort_order_str)])
+        except Exception as exc:
+            _log.warning("sort_by(%r) failed, returning unsorted: %s", order_by, exc)
+
+        total_count = len(arrow_table)
+        page_table = arrow_table.slice(page * page_size, page_size)
+
+        async def _rows() -> AsyncIterator[dict[str, Any]]:
+            for row in page_table.to_pylist():
+                yield row
+
+        return _rows(), total_count

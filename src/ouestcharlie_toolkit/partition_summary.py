@@ -34,19 +34,22 @@ async def compute_partition_summary(lance_index: LanceIndex, partition: str) -> 
     """
     part_esc = partition.replace("'", "''")
 
-    def _worker() -> tuple[Any, ...] | None:
-        arrow_tbl = (
-            lance_index._table.search()
-            .where(f"partition = '{part_esc}'", prefilter=True)
-            .select(_AGG_COLUMNS)
-            .limit(DEFAULT_LIMIT)
-            .to_arrow()
-        )
+    # Fetch partition columns with the native async API (AsyncTable — no prefilter kwarg).
+    arrow_tbl = await (
+        lance_index._table.query()
+        .where(f"partition = '{part_esc}'")
+        .select(_AGG_COLUMNS)
+        .limit(DEFAULT_LIMIT)
+        .to_arrow()
+    )
+
+    # DuckDB aggregation is CPU-bound sync — run in a thread pool.
+    def _agg() -> tuple[Any, ...] | None:
         conn = duckdb.connect()
         conn.register("photos", arrow_tbl)
         return conn.execute(_AGG_SQL).fetchone()
 
-    row = await asyncio.to_thread(_worker)
+    row = await asyncio.to_thread(_agg)
     if not row:
         return ManifestSummary(path=partition)
 
