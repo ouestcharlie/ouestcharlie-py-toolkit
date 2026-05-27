@@ -70,6 +70,15 @@ Callers pass a `lock_dir` (backend-relative path) to `write_conditional` so that
 
 The LanceDB index replaces per-partition `manifest.json` files as the primary per-photo metadata store (schema version 3+). It is a single columnar table stored at `.ouestcharlie/index.lance/` within the backend root, containing one row per photo across all partitions.
 
+All operations use the **`AsyncTable`** API (`lancedb.connect_async()` → `AsyncTable`) — no `asyncio.to_thread` wrappers. `merge_insert().execute()` on an `AsyncTable` returns an awaitable coroutine (`AsyncTable._do_merge`) and is awaited directly, not run in a thread.
+
+### Constants
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `DEFAULT_LIMIT` | 10 000 | Upper bound for `get_partition_rows` scans |
+| `PAGE_SIZE` | 500 | Default page size for `search_where` |
+
 ### Schema
 
 The PyArrow schema (`PHOTO_SCHEMA`) defines the table structure:
@@ -95,9 +104,21 @@ The PyArrow schema (`PHOTO_SCHEMA`) defines the table structure:
 
 GPS and thumbnail location use **flat nullable columns** rather than structs. LanceDB returns null struct fields as default-valued dicts, not `None`, which would require extra handling at read sites.
 
+### Key Operations
+
+**`get_partition_rows(partition, columns, limit)`** — async generator; yields `dict` rows one by one via `to_batches()` / `AsyncRecordBatchReader`. Callers use `async for row in lance_index.get_partition_rows(...)`. Pass `PHOTO_ENTRY_COLUMNS` to skip thumbnail and bookkeeping columns.
+
+**`search_where(where_clause, root, order_by, order_desc, page, page_size)`** — fetches all matching rows with `to_arrow()` (single round-trip), sorts the resulting `pa.Table` in memory with `sort_by([(col, "descending"|"ascending")])`, slices the requested page with `slice(offset, page_size)` (zero-copy), and returns an `AsyncIterator[dict]` over the page together with the total count.
+
+Sort is done in Python because `AsyncQuery.order_by()` is not available in lancedb 0.30.2. When it ships in a future release, the in-memory sort can be replaced with a DB-level `ORDER BY … LIMIT … OFFSET`. An unknown `order_by` column name logs a warning and returns results unsorted.
+
+`total_count = len(arrow_table)` is computed after filtering but before slicing — no separate `count_rows()` round-trip is needed.
+
+**`maintain()`** — calls `await table.optimize(cleanup_older_than=timedelta(hours=1))` to compact LanceDB fragment files and prune version history older than 1 hour in a single call. Called by Whitebeard at the end of `index_library`.
+
 ### Partition Summary (`partition_summary.py`)
 
-`compute_partition_summary(lance_index, partition)` runs a single DuckDB aggregate query over the LanceDB index to compute the `ManifestSummary` for a partition — photo count, date range, GPS bounding box, rating range. This replaces in-memory computation from the photo list: the index is the source of truth, so stats are derived from it directly after upsert.
+`compute_partition_summary(lance_index, partition)` runs in two steps: (1) fetch the partition's aggregate columns via `await lance_index._table.query().where(…).select(…).to_arrow()` (native async, no `to_thread`); (2) run a single DuckDB aggregate query over the resulting `pa.Table` in `asyncio.to_thread` (CPU-bound sync). Returns the `ManifestSummary` (photo count, date range, GPS bounding box, rating range). The index is the source of truth; stats are derived from it directly after upsert.
 
 ## Manifest Read-Edit with Consistency
 
