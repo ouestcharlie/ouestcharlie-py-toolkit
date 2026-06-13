@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,6 +21,24 @@ from .fields import PHOTO_FIELDS, FieldType
 from .schema import PhotoEntry, lance_index_path
 
 _log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Full Text Filter
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FtsFilter:
+    """Full-text search filter for TEXT-typed fields.
+
+    query:   Single search string applied across all listed columns.
+    columns: Lance column names that carry FTS indexes (e.g. ``["description"]``).
+    """
+
+    query: str
+    columns: list[str]
+
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -354,6 +373,7 @@ class LanceIndex:
         self,
         where_clause: str | None,
         partitions: list[str] | None = None,
+        fts_filter: FtsFilter | None = None,
         order_by: str = "date_taken",
         order_desc: bool = True,
         page: int = 0,
@@ -362,15 +382,20 @@ class LanceIndex:
         """Execute a filtered, sorted, paginated search and return matching rows.
 
         Uses two queries:
-        1. A lightweight scan (tags + partition only) for total count and tag facets.
-        2. A native ORDER BY / OFFSET / LIMIT query for the requested page rows.
+        1. A lightweight scan (tags only) for total count and tag facets.
+        2. A page query: FTS via ``nearest_to_text`` when fts_filter is set
+           (results ranked by relevance, rows carry ``_score``), otherwise a
+           native ORDER BY / OFFSET / LIMIT query.
 
         Args:
             where_clause: SQL WHERE expression (without the WHERE keyword).
                 None means no filter (all photos).
             partitions: Explicit set of partition paths to include.
                 None or empty list means all partitions.
-            order_by: Column to sort by (default "date_taken").
+            fts_filter: Full-text search filter. When set, the page query uses
+                ``nearest_to_text`` ranked by relevance; ``order_by`` is ignored.
+            order_by: Column to sort by (default "date_taken"). Ignored when
+                fts_filter is set.
             order_desc: Sort descending when True (default).
             page: 0-indexed page number.
             page_size: Number of rows per page (default PAGE_SIZE = 500).
@@ -407,30 +432,38 @@ class LanceIndex:
                     tag_counter[t] = tag_counter.get(t, 0) + 1
         tag_facets = dict(sorted(tag_counter.items(), key=lambda kv: -kv[1]))
 
-        # Query 2: native sort + offset + limit for the page rows.
-        # filename is appended as a stable tiebreaker so pagination is deterministic
-        # (content_hash would be similar for duplicates sharing the same date).
-        ordering = [
-            ColumnOrdering(column_name=order_by, ascending=not order_desc),
-            ColumnOrdering(column_name="filename", ascending=True),
-        ]
-        try:
+        # Query 2: FTS or native sort + offset + limit for the page rows.
+        if fts_filter:
             page_rows = (
                 await _base_query()
-                .order_by(ordering)
+                .nearest_to_text(fts_filter.query, columns=fts_filter.columns)
                 .offset(page * page_size)
                 .limit(page_size)
                 .to_list()
             )
-        except Exception as exc:
-            _log.warning("order_by(%r) failed, returning page unsorted: %s", order_by, exc)
-            page_rows = (
-                await _base_query()
-                .order_by([ColumnOrdering(column_name="filename", ascending=True)])
-                .offset(page * page_size)
-                .limit(page_size)
-                .to_list()
-            )
+        else:
+            # filename is a stable tiebreaker for deterministic pagination.
+            ordering = [
+                ColumnOrdering(column_name=order_by, ascending=not order_desc),
+                ColumnOrdering(column_name="filename", ascending=True),
+            ]
+            try:
+                page_rows = (
+                    await _base_query()
+                    .order_by(ordering)
+                    .offset(page * page_size)
+                    .limit(page_size)
+                    .to_list()
+                )
+            except Exception as exc:
+                _log.warning("order_by(%r) failed, returning page unsorted: %s", order_by, exc)
+                page_rows = (
+                    await _base_query()
+                    .order_by([ColumnOrdering(column_name="filename", ascending=True)])
+                    .offset(page * page_size)
+                    .limit(page_size)
+                    .to_list()
+                )
 
         async def _rows() -> AsyncIterator[dict[str, Any]]:
             for row in page_rows:

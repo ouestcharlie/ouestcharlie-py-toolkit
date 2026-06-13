@@ -22,6 +22,7 @@ class FieldType(Enum):
     FLOAT_RANGE = auto()  # float min/max bounds; no summary pruning
     STRING_COLLECTION = auto()  # list[str] with AND exact match (e.g. tags)
     STRING_MATCH = auto()  # str with case-insensitive substring match
+    TEXT = auto()  # str; full-text search via FTS index, returns relevance score
     GPS_BOX = auto()  # (lat, lon) point
     DESCRIPTIVE = auto()  # placeholder: future similarity/embedding match
 
@@ -124,7 +125,7 @@ PHOTO_FIELDS: list[FieldDef] = [
     # Full-text search on dc:description caption
     FieldDef(
         name="description",
-        type=FieldType.STRING_MATCH,
+        type=FieldType.TEXT,
         entry_attr="description",
         sidecar_attr="description",
         label="Description",
