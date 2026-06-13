@@ -104,7 +104,6 @@ class ManifestSummary:
 
     - date range:  ``{"type": "date_range", "min": datetime, "max": datetime}``
     - int range:   ``{"type": "int_range",  "min": int,      "max": int}``
-    - bloom:       ``{"type": "bloom",      "value": bytes}``
 
     Field stats are accessed via normal attribute syntax (``__getattr__``),
     e.g. ``summary.date["min"]``, ``summary.rating["max"]``.
@@ -231,6 +230,14 @@ class XmpSidecar:
     width: int | None = None  # pixel width (exif:PixelXDimension / tiff:ImageWidth)
     height: int | None = None  # pixel height (exif:PixelYDimension / tiff:ImageLength)
     tags: list[str] = field(default_factory=list)
+    description: str | None = None  # dc:description (human-readable caption, any language)
+    # Camera shoot settings
+    iso_speed: int | None = None  # exif:ISOSpeedRatings
+    aperture: float | None = None  # exif:FNumber (e.g. 2.8)
+    exposure_time: float | None = None  # exif:ExposureTime in seconds (e.g. 0.004 = 1/250)
+    focal_length: float | None = None  # exif:FocalLength in mm
+    focal_length_35mm: int | None = None  # exif:FocalLengthIn35mmFilm
+    lens_model: str | None = None  # aux:Lens / exifEX:LensModel / Exif.Photo.LensModel
     # Unknown XMP attributes and child elements from third-party apps (Lightroom, darktable, …).
     # Keys use Clark notation: "{ns_uri}localname".
     # Values are either plain strings (for simple attributes) or XML-serialized strings (for
@@ -265,15 +272,6 @@ def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
             d[name] = out
         elif t == "int_range":
             d[name] = stat
-        elif t == "bloom":
-            val = stat.get("value")
-            if val:
-                d[name] = {
-                    "type": "bloom",
-                    "value": val.hex() if isinstance(val, bytes) else val,
-                }
-        elif t == "gps_bbox":
-            d[name] = stat  # all values are plain floats; pass through as-is
     d.update(s._extra)
     return d
 
@@ -304,20 +302,6 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
             if stat.get("missing"):
                 parsed["missing"] = stat["missing"]
             stats[fd.name] = parsed
-        elif fd.summary_bloom_attr:
-            hex_val = stat.get("value", "")
-            if hex_val:
-                stats[fd.name] = {"type": "bloom", "value": bytes.fromhex(hex_val)}
-        elif fd.summary_gps_bbox and fd.type is FieldType.GPS_BOX:
-            raw_lat = stat.get("lat", {})
-            raw_lon = stat.get("lon", {})
-            parsed_lat: dict[str, Any] = {"min": raw_lat.get("min"), "max": raw_lat.get("max")}
-            if raw_lat.get("missing"):
-                parsed_lat["missing"] = raw_lat["missing"]
-            parsed_lon: dict[str, Any] = {"min": raw_lon.get("min"), "max": raw_lon.get("max")}
-            if raw_lon.get("missing"):
-                parsed_lon["missing"] = raw_lon["missing"]
-            stats[fd.name] = {"type": "gps_bbox", "lat": parsed_lat, "lon": parsed_lon}
     hashes_stat = d.get("hashes")
     if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
         stats["hashes"] = {

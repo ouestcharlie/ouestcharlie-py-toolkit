@@ -4,6 +4,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from ouestcharlie_toolkit.schema import XmpSidecar
 from ouestcharlie_toolkit.xmp import (
     _decimal_to_xmp_coord,
@@ -478,49 +480,64 @@ def _ref_xmp() -> XmpSidecar:
 
 
 def test_ref_xmp_extra_simple_attrs():
-    """Simple EXIF/TIFF/XMP attributes from Exiv2 land in _extra with correct values."""
-    extra = _ref_xmp()._extra
+    """Simple EXIF/TIFF/XMP attributes from Exiv2 land in _extra with correct values
+    (or in typed sidecar fields for shoot-settings attributes)."""
+    sidecar = _ref_xmp()
+    extra = sidecar._extra
+    # Non-shoot-settings attributes still land in _extra
     assert extra[f"{{{_TIFF}}}Software"] == "A566BXXS8BZA7"
     assert extra[f"{{{_TIFF}}}ImageWidth"] == "6112"
     assert extra[f"{{{_TIFF}}}ImageLength"] == "6112"
-    assert extra[f"{{{_EXIF}}}ExposureTime"] == "20/10000"
-    assert extra[f"{{{_EXIF}}}FNumber"] == "18000/10000"
-    assert extra[f"{{{_EXIF}}}FocalLength"] == "554/100"
-    assert extra[f"{{{_EXIF}}}FocalLengthIn35mmFilm"] == "23"
     assert extra[f"{{{_XAP}}}CreateDate"] == "2026-02-21T13:03:10.140"
     assert extra[f"{{{_PS}}}DateCreated"] == "2026-02-21T13:03:10.140"
+    # Shoot-settings are now typed attributes, not in _extra
+    assert sidecar.exposure_time == pytest.approx(20 / 10000)
+    assert sidecar.aperture == pytest.approx(18000 / 10000)
+    assert sidecar.focal_length == pytest.approx(554 / 100)
+    assert sidecar.focal_length_35mm == 23
+    # Verify these keys are NOT in _extra
+    assert f"{{{_EXIF}}}ExposureTime" not in extra
+    assert f"{{{_EXIF}}}FNumber" not in extra
+    assert f"{{{_EXIF}}}FocalLength" not in extra
+    assert f"{{{_EXIF}}}FocalLengthIn35mmFilm" not in extra
 
 
 def test_ref_xmp_extra_structured_elements():
-    """Structured child elements (rdf:Seq, struct) are stored as XML strings in _extra."""
-    extra = _ref_xmp()._extra
-    iso_key = f"{{{_EXIF}}}ISOSpeedRatings"
+    """Structured child elements (rdf:Seq, struct) are stored as XML strings in _extra,
+    except for typed child elements like ISOSpeedRatings."""
+    sidecar = _ref_xmp()
+    extra = sidecar._extra
     flash_key = f"{{{_EXIF}}}Flash"
 
-    assert iso_key in extra
-    assert extra[iso_key].startswith("<")
-    assert "50" in extra[iso_key]  # ISO 50
+    # ISOSpeedRatings is now a typed field
+    assert sidecar.iso_speed == 50
+    assert f"{{{_EXIF}}}ISOSpeedRatings" not in extra
 
+    # Flash struct is still in _extra (not typed)
     assert flash_key in extra
     assert extra[flash_key].startswith("<")
     assert "False" in extra[flash_key]  # Flash did not fire
 
 
 def test_ref_xmp_extra_roundtrip():
-    """parse → serialize → parse preserves all _extra keys and values from the ref XMP."""
+    """parse → serialize → parse preserves all _extra keys and typed fields."""
     original = _ref_xmp()
     restored = parse_xmp(serialize_xmp(original))
 
     assert set(restored._extra.keys()) == set(original._extra.keys())
-    # Spot-check a few values that survive the ET round-trip unchanged
+    # Spot-check non-shoot-settings _extra values
     for key in [
         f"{{{_TIFF}}}Software",
-        f"{{{_EXIF}}}FNumber",
         f"{{{_XAP}}}CreateDate",
     ]:
         assert restored._extra[key] == original._extra[key]
+    # Typed shoot-settings survive round-trip
+    assert restored.aperture == pytest.approx(original.aperture)
+    assert restored.exposure_time == pytest.approx(original.exposure_time)
+    assert restored.focal_length == pytest.approx(original.focal_length)
+    assert restored.focal_length_35mm == original.focal_length_35mm
+    assert restored.iso_speed == original.iso_speed
     # Complex elements: content preserved (ET normalises whitespace)
-    assert "50" in restored._extra[f"{{{_EXIF}}}ISOSpeedRatings"]
     assert "False" in restored._extra[f"{{{_EXIF}}}Flash"]
 
 

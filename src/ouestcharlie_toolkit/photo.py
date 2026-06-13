@@ -122,6 +122,13 @@ _EXIF_EXTRA_SKIP: frozenset[str] = frozenset(
         # Binary blobs
         "Exif.Photo.MakerNote",
         "Exif.Photo.UserComment",
+        # Typed shoot-settings fields extracted below
+        "Exif.Photo.ISOSpeedRatings",
+        "Exif.Photo.FNumber",
+        "Exif.Photo.ExposureTime",
+        "Exif.Photo.FocalLength",
+        "Exif.Photo.FocalLengthIn35mmFilm",
+        "Exif.Photo.LensModel",
     }
 )
 
@@ -256,6 +263,30 @@ class Photo:
         width = _int_or_none(width_s)
         height = _int_or_none(height_s)
 
+        def _rational_or_none(v: str | None) -> float | None:
+            if not v:
+                return None
+            try:
+                if "/" in v:
+                    n, d = v.split("/", 1)
+                    dv = int(d)
+                    return int(n) / dv if dv else None
+                return float(v)
+            except (ValueError, TypeError, ZeroDivisionError):
+                return None
+
+        # ISO — pyexiv2 returns a single value or space-separated list; take first token
+        iso_raw = exif_data.get("Exif.Photo.ISOSpeedRatings")
+        iso_speed = _int_or_none(iso_raw.split()[0] if iso_raw else None)
+
+        aperture = _rational_or_none(exif_data.get("Exif.Photo.FNumber"))
+        exposure_time = _rational_or_none(exif_data.get("Exif.Photo.ExposureTime"))
+        focal_length = _rational_or_none(exif_data.get("Exif.Photo.FocalLength"))
+        focal_length_35mm_s = exif_data.get("Exif.Photo.FocalLengthIn35mmFilm")
+        focal_length_35mm = _int_or_none(focal_length_35mm_s)
+        lens_raw = exif_data.get("Exif.Photo.LensModel") or ""
+        lens_model = lens_raw.strip() or None
+
         return XmpSidecar(
             content_hash=photo_hash,
             date_taken=date_taken,
@@ -265,5 +296,11 @@ class Photo:
             gps=gps,
             width=width,
             height=height,
+            iso_speed=iso_speed,
+            aperture=aperture,
+            exposure_time=exposure_time,
+            focal_length=focal_length,
+            focal_length_35mm=focal_length_35mm,
+            lens_model=lens_model,
             _extra=_map_exif_extra(exif_data),
         )

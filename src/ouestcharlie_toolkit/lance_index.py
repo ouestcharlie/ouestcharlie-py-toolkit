@@ -13,6 +13,7 @@ from typing import Any
 
 import lancedb
 import pyarrow as pa
+from lancedb.index import FTS
 
 from .backend import Backend
 from .fields import PHOTO_FIELDS, FieldType
@@ -40,6 +41,15 @@ PHOTO_SCHEMA = pa.schema(
         pa.field("tags", pa.list_(pa.string())),
         pa.field("gps_lat", pa.float64(), nullable=True),
         pa.field("gps_lon", pa.float64(), nullable=True),
+        # Caption (dc:description) — FTS-indexed
+        pa.field("description", pa.string(), nullable=True),
+        # Shoot settings
+        pa.field("iso_speed", pa.int32(), nullable=True),
+        pa.field("aperture", pa.float32(), nullable=True),
+        pa.field("exposure_time", pa.float32(), nullable=True),
+        pa.field("focal_length", pa.float32(), nullable=True),
+        pa.field("focal_length_35mm", pa.int32(), nullable=True),
+        pa.field("lens_model", pa.string(), nullable=True),
         pa.field("metadata_version", pa.int64()),
         pa.field("xmp_version_token", pa.string()),
         # Thumbnail tile location — flat nullable columns to avoid null-struct ambiguity.
@@ -86,6 +96,13 @@ def photo_entry_to_row(
         "tags": list(s.get("tags") or []),
         "gps_lat": gps[0] if gps is not None else None,
         "gps_lon": gps[1] if gps is not None else None,
+        "description": s.get("description"),
+        "iso_speed": s.get("iso_speed"),
+        "aperture": s.get("aperture"),
+        "exposure_time": s.get("exposure_time"),
+        "focal_length": s.get("focal_length"),
+        "focal_length_35mm": s.get("focal_length_35mm"),
+        "lens_model": s.get("lens_model"),
         "metadata_version": entry.metadata_version,
         "xmp_version_token": entry.xmp_version_token,
         "thumbnail_avif_hash": thumbnail[0] if thumbnail is not None else None,
@@ -109,6 +126,13 @@ PHOTO_ENTRY_COLUMNS: list[str] = [
     "tags",
     "gps_lat",
     "gps_lon",
+    "description",
+    "iso_speed",
+    "aperture",
+    "exposure_time",
+    "focal_length",
+    "focal_length_35mm",
+    "lens_model",
     "metadata_version",
     "xmp_version_token",
 ]
@@ -147,6 +171,23 @@ def _esc(s: str) -> str:
     return s.replace("'", "''")
 
 
+async def _migrate_table(table: lancedb.table.AsyncTable) -> None:
+    """Add any columns present in PHOTO_SCHEMA that are missing from the on-disk table."""
+    try:
+        disk_schema = await table.schema()
+        existing = set(disk_schema.names)
+    except Exception as exc:
+        _log.debug("Lance migration: could not read schema: %s", exc)
+        return
+    for field in PHOTO_SCHEMA:
+        if field.name not in existing:
+            try:
+                await table.add_columns(pa.schema([field]))
+                _log.info("Lance migration: added column %r", field.name)
+            except Exception as exc:
+                _log.warning("Lance migration: could not add column %r: %s", field.name, exc)
+
+
 class LanceIndex:
     """Thin wrapper around a LanceDB async table storing all photos for one backend."""
 
@@ -155,10 +196,31 @@ class LanceIndex:
 
     @classmethod
     async def open_or_create(cls, backend: Backend, table_name: str) -> LanceIndex:
-        """Open an existing LanceDB index, or create one if absent."""
+        """Open an existing LanceDB index, or create one if absent.
+
+        Existing tables are opened without passing a schema to avoid any
+        version-dependent schema validation before migration runs.
+        New tables are created with the full PHOTO_SCHEMA (no migration needed).
+        """
         uri = str(await backend.local_path(lance_index_path()))
         db = await lancedb.connect_async(uri)
-        table = await db.create_table(table_name, schema=PHOTO_SCHEMA, exist_ok=True)
+        if table_name in (await db.list_tables()).tables:
+            table = await db.open_table(table_name)
+            await _migrate_table(table)
+        else:
+            table = await db.create_table(table_name, schema=PHOTO_SCHEMA)
+        # Create FTS index on description — only when the column has a real string type.
+        # A Null-typed column (legacy migration artifact) can't be FTS-indexed; it will
+        # be fixed automatically on the next full re-index when real data is upserted.
+        try:
+            schema = await table.schema()
+            desc_type = schema.field("description").type if "description" in schema.names else None
+            if desc_type is not None and desc_type != pa.null():
+                await table.create_index("description", config=FTS(), replace=True)
+            else:
+                _log.debug("FTS index skipped: description column type is %s", desc_type)
+        except Exception as exc:
+            _log.debug("FTS index creation skipped: %s", exc)
         return cls(table)
 
     @classmethod
@@ -291,55 +353,87 @@ class LanceIndex:
     async def search_where(
         self,
         where_clause: str | None,
-        root: str = "",
+        partitions: list[str] | None = None,
         order_by: str = "date_taken",
         order_desc: bool = True,
         page: int = 0,
         page_size: int = PAGE_SIZE,
-    ) -> tuple[AsyncIterable[dict[str, Any]], int]:
+    ) -> tuple[AsyncIterable[dict[str, Any]], int, dict[str, int]]:
         """Execute a filtered, sorted, paginated search and return matching rows.
+
+        Uses two queries:
+        1. A lightweight scan (tags + partition only) for total count and tag facets.
+        2. A native ORDER BY / OFFSET / LIMIT query for the requested page rows.
 
         Args:
             where_clause: SQL WHERE expression (without the WHERE keyword).
                 None means no filter (all photos).
-            root: Restrict to this partition prefix (empty = all partitions).
+            partitions: Explicit set of partition paths to include.
+                None or empty list means all partitions.
             order_by: Column to sort by (default "date_taken").
             order_desc: Sort descending when True (default).
             page: 0-indexed page number.
             page_size: Number of rows per page (default PAGE_SIZE = 500).
 
         Returns:
-            Tuple of (async_row_iterator, total_matching_count).
-            All matching rows are fetched via ``to_arrow()``, sorted in memory
-            with ``pa.Table.sort_by()``, then sliced to the requested page.
-            ``AsyncQuery.order_by()`` is not available in lancedb 0.30.2;
-            this approach will be replaced with DB-level sort when it ships.
+            Tuple of (async_row_iterator, total_matching_count, tag_facets).
+            tag_facets is a ``{tag: count}`` dict computed over the full result set
+            (before pagination).
         """
+        from lancedb.query import ColumnOrdering
+
         clauses: list[str] = []
-        if root:
-            root_esc = _esc(root.rstrip("/"))
-            clauses.append(f"(partition = '{root_esc}' OR starts_with(partition, '{root_esc}/'))")
+        if partitions:
+            quoted = ", ".join(f"'{_esc(p)}'" for p in partitions)
+            clauses.append(f"partition IN ({quoted})")
         if where_clause:
             clauses.append(where_clause)
 
         combined = " AND ".join(clauses) if clauses else None
 
-        query = self._table.query()
-        if combined:
-            query = query.where(combined)
-        arrow_table: pa.Table = await query.to_arrow()
+        def _base_query():
+            q = self._table.query()
+            if combined:
+                q = q.where(combined)
+            return q
 
-        sort_order_str = "descending" if order_desc else "ascending"
+        # Query 1: lightweight scan for count and tag facets (tags column only).
+        facet_table: pa.Table = await _base_query().select(["tags"]).to_arrow()
+        total_count = len(facet_table)
+        tag_counter: dict[str, int] = {}
+        for row_tags in facet_table.column("tags").to_pylist():
+            if row_tags:
+                for t in row_tags:
+                    tag_counter[t] = tag_counter.get(t, 0) + 1
+        tag_facets = dict(sorted(tag_counter.items(), key=lambda kv: -kv[1]))
+
+        # Query 2: native sort + offset + limit for the page rows.
+        # filename is appended as a stable tiebreaker so pagination is deterministic
+        # (content_hash would be similar for duplicates sharing the same date).
+        ordering = [
+            ColumnOrdering(column_name=order_by, ascending=not order_desc),
+            ColumnOrdering(column_name="filename", ascending=True),
+        ]
         try:
-            arrow_table = arrow_table.sort_by([(order_by, sort_order_str)])
+            page_rows = (
+                await _base_query()
+                .order_by(ordering)
+                .offset(page * page_size)
+                .limit(page_size)
+                .to_list()
+            )
         except Exception as exc:
-            _log.warning("sort_by(%r) failed, returning unsorted: %s", order_by, exc)
-
-        total_count = len(arrow_table)
-        page_table = arrow_table.slice(page * page_size, page_size)
+            _log.warning("order_by(%r) failed, returning page unsorted: %s", order_by, exc)
+            page_rows = (
+                await _base_query()
+                .order_by([ColumnOrdering(column_name="filename", ascending=True)])
+                .offset(page * page_size)
+                .limit(page_size)
+                .to_list()
+            )
 
         async def _rows() -> AsyncIterator[dict[str, Any]]:
-            for row in page_table.to_pylist():
+            for row in page_rows:
                 yield row
 
-        return _rows(), total_count
+        return _rows(), total_count, tag_facets
