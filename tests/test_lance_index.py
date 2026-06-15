@@ -14,6 +14,7 @@ from ouestcharlie_toolkit.lance_index import (
     PAGE_SIZE,
     PHOTO_SCHEMA,
     PHOTO_TABLE_NAME,
+    FtsFilter,
     LanceIndex,
     _esc,
     photo_entry_to_row,
@@ -631,3 +632,76 @@ async def test_search_where_invalid_order_by_does_not_raise(tmp_path: Path):
     # Must not raise; must still return all rows.
     assert total == 2
     assert len(rows) == 2
+
+
+# ---------------------------------------------------------------------------
+# search_where — FTS (full-text search)
+# ---------------------------------------------------------------------------
+
+
+async def _fts_index(tmp_path: Path, descriptions: dict[str, str]) -> LanceIndex:
+    """Create an index with one photo per description, keyed by filename stem."""
+    idx = await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
+    entries = [
+        _entry(f"{stem}.jpg", f"hash_{stem}", {"description": desc})
+        for stem, desc in descriptions.items()
+    ]
+    await idx.upsert_partition("p", entries, None)
+    return idx
+
+
+async def _collect_fts(
+    idx: LanceIndex,
+    fts_filter: FtsFilter,
+    where: str | None = None,
+) -> tuple[list[dict], int]:
+    rows_iter, total, _facets = await idx.search_where(where, fts_filter=fts_filter)
+    return [r async for r in rows_iter], total
+
+
+@pytest.mark.asyncio
+async def test_fts_returns_matching_row(tmp_path: Path):
+    """A basic FTS query must return the photo whose description contains the term."""
+    idx = await _fts_index(tmp_path, {"canyon": "Red Canyon at sunset", "beach": "Sandy beach"})
+    rows, _ = await _collect_fts(idx, FtsFilter(query="Canyon", columns=["description"]))
+    assert any(r["filename"] == "canyon.jpg" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_fts_does_not_return_unrelated_row(tmp_path: Path):
+    """FTS must not return a photo whose description has no overlap with the query."""
+    idx = await _fts_index(tmp_path, {"canyon": "Red Canyon", "beach": "Sandy beach waves"})
+    rows, _ = await _collect_fts(idx, FtsFilter(query="Canyon", columns=["description"]))
+    assert all(r["filename"] != "beach.jpg" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_fts_rows_carry_score(tmp_path: Path):
+    """Each row returned by an FTS query must include a numeric _score field."""
+    idx = await _fts_index(tmp_path, {"canyon": "Red Canyon at sunset"})
+    rows, _ = await _collect_fts(idx, FtsFilter(query="Canyon", columns=["description"]))
+    assert rows, "Expected at least one FTS match"
+    assert all("_score" in r for r in rows), "All FTS rows must carry _score"
+    assert all(isinstance(r["_score"], float) for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_fts_combined_with_sql_filter(tmp_path: Path):
+    """FTS and a SQL WHERE clause must both apply: only rows matching both are returned."""
+    idx = await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
+    await idx.upsert_partition(
+        "p",
+        [
+            _entry("match.jpg", "h_match", {"description": "Canyon sunset", "rating": 5}),
+            _entry("fts_only.jpg", "h_fts", {"description": "Canyon sunrise", "rating": 1}),
+            _entry("sql_only.jpg", "h_sql", {"description": "Beach waves", "rating": 5}),
+        ],
+        None,
+    )
+    rows, _ = await _collect_fts(
+        idx,
+        FtsFilter(query="Canyon", columns=["description"]),
+        where="rating >= 4",
+    )
+    assert len(rows) == 1
+    assert rows[0]["filename"] == "match.jpg"
