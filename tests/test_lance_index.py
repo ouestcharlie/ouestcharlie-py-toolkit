@@ -42,8 +42,8 @@ async def _collect_search(
     **kwargs,
 ) -> tuple[list[dict], int]:
     """Collect all rows from search_where into a plain list."""
-    rows_iter, total, _facets = await idx.search_where(where, partitions, **kwargs)
-    return [r async for r in rows_iter], total
+    matches, total, _facets = await idx.search_where(where, partitions, **kwargs)
+    return matches, total
 
 
 async def _collect_partition(
@@ -655,8 +655,8 @@ async def _collect_fts(
     fts_filter: FtsFilter,
     where: str | None = None,
 ) -> tuple[list[dict], int]:
-    rows_iter, total, _facets = await idx.search_where(where, fts_filter=fts_filter)
-    return [r async for r in rows_iter], total
+    matches, total, _facets = await idx.search_where(where, fts_filter=fts_filter)
+    return matches, total
 
 
 @pytest.mark.asyncio

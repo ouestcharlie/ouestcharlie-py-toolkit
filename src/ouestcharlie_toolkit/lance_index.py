@@ -7,7 +7,7 @@ Columnar store at .ouestcharlie/index.lance/ inside each backend root.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -378,7 +378,7 @@ class LanceIndex:
         order_desc: bool = True,
         page: int = 0,
         page_size: int = PAGE_SIZE,
-    ) -> tuple[AsyncIterable[dict[str, Any]], int, dict[str, int]]:
+    ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
         """Execute a filtered, sorted, paginated search and return matching rows.
 
         Uses two queries:
@@ -461,8 +461,4 @@ class LanceIndex:
                     .to_list()
                 )
 
-        async def _rows() -> AsyncIterator[dict[str, Any]]:
-            for row in page_rows:
-                yield row
-
-        return _rows(), total_count, tag_facets
+        return page_rows, total_count, tag_facets
