@@ -420,6 +420,8 @@ class LanceIndex:
             q = self._table.query()
             if combined:
                 q = q.where(combined)
+            if fts_filter:
+                q = q.nearest_to_text(fts_filter.query, columns=fts_filter.columns)
             return q
 
         # Query 1: lightweight scan for count and tag facets (tags column only).
@@ -432,15 +434,9 @@ class LanceIndex:
                     tag_counter[t] = tag_counter.get(t, 0) + 1
         tag_facets = dict(sorted(tag_counter.items(), key=lambda kv: -kv[1]))
 
-        # Query 2: FTS or native sort + offset + limit for the page rows.
+        # Query 2: FTS (no sort) or native sort + offset + limit for the page rows.
         if fts_filter:
-            page_rows = (
-                await _base_query()
-                .nearest_to_text(fts_filter.query, columns=fts_filter.columns)
-                .offset(page * page_size)
-                .limit(page_size)
-                .to_list()
-            )
+            page_rows = await _base_query().offset(page * page_size).limit(page_size).to_list()
         else:
             # filename is a stable tiebreaker for deterministic pagination.
             ordering = [
