@@ -15,13 +15,15 @@ from enum import Enum, auto
 
 
 class FieldType(Enum):
-    """Taxonomy of searchable field types, each with distinct match and pruning semantics."""
+    """Taxonomy of searchable field types, each with distinct match semantics."""
 
-    DATE_RANGE = auto()  # datetime min/max bounds; pruneable
-    INT_RANGE = auto()  # int min/max bounds; pruneable
-    STRING_COLLECTION = auto()  # list[str] with AND exact match (e.g. tags); bloom-filter pruning
-    STRING_MATCH = auto()  # str with case-insensitive substring match; no summary pruning
-    GPS_BOX = auto()  # (lat, lon) point; partition summary bbox
+    DATE_RANGE = auto()  # datetime min/max bounds; partition summary pruning via min/max
+    INT_RANGE = auto()  # int min/max bounds; partition summary pruning via min/max
+    FLOAT_RANGE = auto()  # float min/max bounds; no summary pruning
+    STRING_COLLECTION = auto()  # list[str] with AND exact match (e.g. tags)
+    STRING_MATCH = auto()  # str with case-insensitive substring match
+    TEXT = auto()  # str; full-text search via FTS index, returns relevance score
+    GPS_BOX = auto()  # (lat, lon) point
     DESCRIPTIVE = auto()  # placeholder: future similarity/embedding match
 
 
@@ -34,34 +36,26 @@ class FieldDef:
                             and as the key in SearchPredicate.filters.
         type:               Match and pruning semantics for this field.
         entry_attr:         Attribute name on PhotoEntry that holds this field's value.
-        summary_range:      True if the field contributes min/max range stats to the
-                            partition summary, stored as ``{name}_min`` / ``{name}_max``.
-                            Applies to DATE_RANGE and INT_RANGE fields.
-        summary_bloom_attr: Attribute name on PartitionSummary for the bloom filter.
-                            Set for STRING_COLLECTION fields that support bloom pruning.
-        summary_gps_bbox:   True if the field contributes a GPS bounding box to the partition
-                            summary (minLat/maxLat/minLon/maxLon). Applies to GPS_BOX fields.
-        sidecar_attr:       Attribute name on XmpSidecar to read when building a PhotoEntry.
-                            None means the field has no direct XmpSidecar source (e.g. it is
-                            derived or supplied externally, like filename or content_hash).
+        summary_range:  True if the field contributes min/max range stats to the
+                        partition summary. Applies to DATE_RANGE and INT_RANGE fields.
+        sidecar_attr:   Attribute name on XmpSidecar to read when building a PhotoEntry.
+                        None means the field has no direct XmpSidecar source (e.g. it is
+                        derived or supplied externally, like filename or content_hash).
+        label:          Human-readable label for UI / list_search_fields.
     """
 
     name: str
     type: FieldType
     entry_attr: str
     summary_range: bool = False
-    summary_bloom_attr: str | None = None
-    summary_gps_bbox: bool = False
     sidecar_attr: str | None = None
+    label: str | None = None
 
 
 # Searchable field configuration for OuEstCharlie photos.
 #
-# Fields with summary_range=True support partition-level range pruning (min/max).
-# Fields with summary_bloom_attr support partition-level bloom-filter pruning.
-# Fields with summary_gps_bbox=True support partition-level GPS
-#   bbox pruning (minLat/maxLat/minLon/maxLon).
-# Fields without any summary attribute are searchable at leaf-scan level only.
+# Fields with summary_range=True contribute min/max stats to the partition summary
+# and support partition-level range pruning (DATE_RANGE and INT_RANGE only).
 # Fields without sidecar_attr are populated by the caller (e.g. filename, content_hash).
 PHOTO_FIELDS: list[FieldDef] = [
     # Date/time range — partition summary pruning via min/max
@@ -100,15 +94,14 @@ PHOTO_FIELDS: list[FieldDef] = [
         entry_attr="orientation",
         sidecar_attr="orientation",
     ),
-    # String collection — bloom-filter pruning
+    # String collection — AND exact match on list elements
     FieldDef(
         name="tags",
         type=FieldType.STRING_COLLECTION,
         entry_attr="tags",
-        summary_bloom_attr="tags_bloom",
         sidecar_attr="tags",
     ),
-    # String match — case-insensitive substring; no summary pruning
+    # String match — case-insensitive substring
     # Note: XmpSidecar uses camera_make/camera_model; PhotoEntry uses make/model
     FieldDef(
         name="make",
@@ -122,12 +115,62 @@ PHOTO_FIELDS: list[FieldDef] = [
         entry_attr="model",
         sidecar_attr="camera_model",
     ),
-    # GPS bounding box — partition summary bbox + Wally bbox filter/pruning
+    # GPS bounding box
     FieldDef(
         name="gps",
         type=FieldType.GPS_BOX,
         entry_attr="gps",
-        summary_gps_bbox=True,
         sidecar_attr="gps",
+    ),
+    # Full-text search on dc:description caption
+    FieldDef(
+        name="description",
+        type=FieldType.TEXT,
+        entry_attr="description",
+        sidecar_attr="description",
+        label="Description",
+    ),
+    # Camera shoot settings — float/int range filters
+    FieldDef(
+        name="isoSpeed",
+        type=FieldType.INT_RANGE,
+        entry_attr="iso_speed",
+        sidecar_attr="iso_speed",
+        label="ISO speed",
+    ),
+    FieldDef(
+        name="aperture",
+        type=FieldType.FLOAT_RANGE,
+        entry_attr="aperture",
+        sidecar_attr="aperture",
+        label="Aperture (f-number)",
+    ),
+    FieldDef(
+        name="exposureTime",
+        type=FieldType.FLOAT_RANGE,
+        entry_attr="exposure_time",
+        sidecar_attr="exposure_time",
+        label="Exposure time (s)",
+    ),
+    FieldDef(
+        name="focalLength",
+        type=FieldType.FLOAT_RANGE,
+        entry_attr="focal_length",
+        sidecar_attr="focal_length",
+        label="Focal length (mm)",
+    ),
+    FieldDef(
+        name="focalLength35mm",
+        type=FieldType.INT_RANGE,
+        entry_attr="focal_length_35mm",
+        sidecar_attr="focal_length_35mm",
+        label="Focal length 35mm equiv.",
+    ),
+    FieldDef(
+        name="lensModel",
+        type=FieldType.STRING_MATCH,
+        entry_attr="lens_model",
+        sidecar_attr="lens_model",
+        label="Lens",
     ),
 ]

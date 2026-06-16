@@ -10,11 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .backend import Backend, VersionConflictError, VersionToken
-from .schema import (
-    OUESTCHARLIE_NS,
-    SCHEMA_VERSION,
-    XmpSidecar,
-)
+from .schema import OUESTCHARLIE_NS, SCHEMA_VERSION, XmpSidecar
 
 _log = logging.getLogger(__name__)
 
@@ -29,6 +25,9 @@ _NS_EXIF = "http://ns.adobe.com/exif/1.0/"
 _NS_TIFF = "http://ns.adobe.com/tiff/1.0/"
 _NS_XMP = "http://ns.adobe.com/xmp/1.0/"
 _NS_DC = "http://purl.org/dc/elements/1.1/"
+_NS_AUX = "http://ns.adobe.com/exif/1.0/aux/"  # Adobe aux:Lens
+_NS_EXIFEX = "http://cipa.jp/exif/1.0/"  # CIPA exifEX:LensModel
+_NS_XML = "http://www.w3.org/XML/1998/namespace"  # xml:lang on rdf:li
 
 _XPACKET_HEADER = "<?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
 _XPACKET_FOOTER = "\n<?xpacket end='w'?>"
@@ -53,6 +52,8 @@ _WELL_KNOWN_NS: dict[str, str] = {
     "http://darktable.sf.net/": "darktable",
     "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/": "Iptc4xmpCore",
     "http://ns.microsoft.com/photo/1.0/": "MicrosoftPhoto",
+    "http://ns.adobe.com/exif/1.0/aux/": "aux",
+    "http://cipa.jp/exif/1.0/": "exifEX",
 }
 
 # Known rdf:Description attributes — not preserved in _extra.
@@ -71,6 +72,13 @@ _KNOWN_ATTRS: frozenset[str] = frozenset(
         f"{{{_NS_XMP}}}Rating",
         f"{{{_NS_EXIF}}}PixelXDimension",
         f"{{{_NS_EXIF}}}PixelYDimension",
+        # Shoot settings (simple attributes)
+        f"{{{_NS_EXIF}}}FNumber",
+        f"{{{_NS_EXIF}}}ExposureTime",
+        f"{{{_NS_EXIF}}}FocalLength",
+        f"{{{_NS_EXIF}}}FocalLengthIn35mmFilm",
+        f"{{{_NS_AUX}}}Lens",
+        f"{{{_NS_EXIFEX}}}LensModel",
     }
 )
 
@@ -80,6 +88,8 @@ _KNOWN_CHILDREN: frozenset[str] = frozenset(
         f"{{{_NS_EXIF}}}GPSLatitude",
         f"{{{_NS_EXIF}}}GPSLongitude",
         f"{{{_NS_DC}}}subject",
+        f"{{{_NS_DC}}}description",  # LangAlt caption
+        f"{{{_NS_EXIF}}}ISOSpeedRatings",  # rdf:Seq of ints
     }
 )
 
@@ -92,6 +102,8 @@ def _register_et_namespaces() -> None:
     ET.register_namespace("tiff", _NS_TIFF)
     ET.register_namespace("xmp", _NS_XMP)
     ET.register_namespace("dc", _NS_DC)
+    ET.register_namespace("aux", _NS_AUX)
+    ET.register_namespace("exifEX", _NS_EXIFEX)
     for ns_uri, prefix in _WELL_KNOWN_NS.items():
         ET.register_namespace(prefix, ns_uri)
 
@@ -426,6 +438,8 @@ def parse_xmp(xml: str) -> XmpSidecar:
     xmp_ns = f"{{{_NS_XMP}}}"
     dc = f"{{{_NS_DC}}}"
     rdf = f"{{{_NS_RDF}}}"
+    aux = f"{{{_NS_AUX}}}"
+    exifex = f"{{{_NS_EXIFEX}}}"
 
     content_hash = desc.get(f"{oc}contentHash")
     schema_ver_s = desc.get(f"{oc}schemaVersion")
@@ -452,11 +466,50 @@ def parse_xmp(xml: str) -> XmpSidecar:
         if bag is not None:
             tags = [li.text or "" for li in bag.findall(f"{rdf}li")]
 
+    # dc:description — LangAlt caption
+    description: str | None = None
+    desc_elem = desc.find(f"{dc}description")
+    if desc_elem is not None:
+        alt = desc_elem.find(f"{rdf}Alt")
+        if alt is not None:
+            li = alt.find(f"{rdf}li")
+            description = li.text if li is not None else None
+        else:
+            description = desc_elem.text  # plain-string fallback
+
+    # Shoot settings — simple rational/integer attributes
+    def _rational_or_none(s: str | None) -> float | None:
+        if not s:
+            return None
+        try:
+            if "/" in s:
+                n, d = s.split("/", 1)
+                dv = int(d)
+                return int(n) / dv if dv else None
+            return float(s)
+        except (ValueError, TypeError, ZeroDivisionError):
+            return None
+
     def _int_or_none(s: str | None) -> int | None:
         try:
             return int(s) if s is not None else None
         except (ValueError, TypeError):
             return None
+
+    aperture = _rational_or_none(desc.get(f"{exif}FNumber"))
+    exposure_time = _rational_or_none(desc.get(f"{exif}ExposureTime"))
+    focal_length = _rational_or_none(desc.get(f"{exif}FocalLength"))
+    focal_length_35mm = _int_or_none(desc.get(f"{exif}FocalLengthIn35mmFilm"))
+    lens_model = desc.get(f"{exifex}LensModel") or desc.get(f"{aux}Lens") or None
+
+    # exif:ISOSpeedRatings — rdf:Seq of integers; take first value
+    iso_speed: int | None = None
+    iso_elem = desc.find(f"{exif}ISOSpeedRatings")
+    if iso_elem is not None:
+        seq = iso_elem.find(f"{rdf}Seq")
+        li_elem = seq.find(f"{rdf}li") if seq is not None else iso_elem.find(f"{rdf}li")
+        if li_elem is not None and li_elem.text:
+            iso_speed = _int_or_none(li_elem.text.strip())
 
     # Collect unknown attributes and child elements into _extra.
     extra: dict[str, str] = {}
@@ -480,6 +533,13 @@ def parse_xmp(xml: str) -> XmpSidecar:
         width=_int_or_none(width_s),
         height=_int_or_none(height_s),
         tags=tags,
+        description=description,
+        iso_speed=iso_speed,
+        aperture=aperture,
+        exposure_time=exposure_time,
+        focal_length=focal_length,
+        focal_length_35mm=focal_length_35mm,
+        lens_model=lens_model,
         _extra=extra,
     )
 
@@ -517,6 +577,7 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
     xmp_ns = f"{{{_NS_XMP}}}"
     dc_ns = f"{{{_NS_DC}}}"
     rdf_ns = f"{{{_NS_RDF}}}"
+    aux_ns = f"{{{_NS_AUX}}}"
 
     # ouestcharlie:* control fields
     if sidecar.content_hash is not None:
@@ -576,22 +637,65 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
             li = ET.SubElement(bag, f"{rdf_ns}li")
             li.text = tag
 
+    # Caption as dc:description > rdf:Alt > rdf:li xml:lang="x-default"
+    if sidecar.description:
+        desc_el = ET.SubElement(desc, f"{dc_ns}description")
+        alt_el = ET.SubElement(desc_el, f"{rdf_ns}Alt")
+        li_el = ET.SubElement(alt_el, f"{rdf_ns}li")
+        li_el.set(f"{{{_NS_XML}}}lang", "x-default")
+        li_el.text = sidecar.description
+
+    # ISO as exif:ISOSpeedRatings > rdf:Seq > rdf:li
+    if sidecar.iso_speed is not None:
+        iso_el = ET.SubElement(desc, f"{exif_ns}ISOSpeedRatings")
+        seq_el = ET.SubElement(iso_el, f"{rdf_ns}Seq")
+        li_el = ET.SubElement(seq_el, f"{rdf_ns}li")
+        li_el.text = str(sidecar.iso_speed)
+
+    # Shoot settings as rational attributes
+    def _float_to_rational(v: float) -> str:
+        """Serialize a float as a rational string (best-effort, preserving common fractions)."""
+        # Store with up to 6 decimal places of numerator precision.
+        from fractions import Fraction
+
+        frac = Fraction(v).limit_denominator(1_000_000)
+        return f"{frac.numerator}/{frac.denominator}"
+
+    if sidecar.aperture is not None:
+        desc.set(f"{exif_ns}FNumber", _float_to_rational(sidecar.aperture))
+    if sidecar.exposure_time is not None:
+        desc.set(f"{exif_ns}ExposureTime", _float_to_rational(sidecar.exposure_time))
+    if sidecar.focal_length is not None:
+        desc.set(f"{exif_ns}FocalLength", _float_to_rational(sidecar.focal_length))
+    if sidecar.focal_length_35mm is not None:
+        desc.set(f"{exif_ns}FocalLengthIn35mmFilm", str(sidecar.focal_length_35mm))
+    if sidecar.lens_model is not None:
+        desc.set(f"{aux_ns}Lens", sidecar.lens_model)
+
     # Restore unknown fields from _extra.
     # Values that start with "<" are serialized XML child elements; others are attributes.
     for key, val in sidecar._extra.items():
-        if val.startswith("<"):
-            try:
-                child = ET.fromstring(val)
-                desc.append(child)
-            except ET.ParseError:
-                _log.warning(
-                    "Skipping malformed _extra element for key %r: %r",
-                    key,
-                    val,
-                    exc_info=True,
-                )
+        if isinstance(val, list):
+            # Serialize list values as rdf:Bag child elements.
+            elem = ET.SubElement(desc, key)
+            bag = ET.SubElement(elem, f"{rdf_ns}Bag")
+            for item in val:
+                li = ET.SubElement(bag, f"{rdf_ns}li")
+                li.text = str(item)
         else:
-            desc.set(key, val)
+            if val.startswith("<"):
+                try:
+                    child = ET.fromstring(val)
+                    desc.append(child)
+                except ET.ParseError:
+                    _log.warning(
+                        "Skipping malformed _extra element for key %r: %r",
+                        key,
+                        val,
+                        exc_info=True,
+                    )
+            else:
+                desc.set(key, val)
 
     body = ET.tostring(root, encoding="unicode")
     return f"{_XPACKET_HEADER}{body}{_XPACKET_FOOTER}"

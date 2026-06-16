@@ -45,7 +45,6 @@ class CloudMountedBackend(LocalBackend):
         delay = _RETRY_BASE_DELAY
         for attempt in range(_MAX_RETRIES + 1):
             data, mtime_ns, st_size = await loop.run_in_executor(None, _read_inner)
-            _log.debug("Cloud-mounted file %r: read %d bytes, st_size=%d", path, len(data), st_size)
 
             if len(data) < st_size:
                 if attempt < _MAX_RETRIES:

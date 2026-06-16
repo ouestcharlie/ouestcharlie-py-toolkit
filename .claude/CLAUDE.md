@@ -9,10 +9,10 @@ See [README.md](../README.md#running-tests) for the full command reference. Quic
 
 ```bash
 # Unit tests
-.venv/bin/python -m pytest tests/ -v
+.venv/bin/pytest tests/ -v
 
 # Integration tests (require image-proc binary)
-.venv/bin/python -m pytest tests_integration/ -v
+.venv/bin/pytest tests_integration/ -v
 
 # Rust tests
 cd image-proc && cargo test
