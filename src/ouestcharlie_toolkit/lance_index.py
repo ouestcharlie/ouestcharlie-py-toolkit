@@ -372,7 +372,6 @@ class LanceIndex:
     async def search_where(
         self,
         where_clause: str | None,
-        partitions: list[str] | None = None,
         fts_filter: FtsFilter | None = None,
         order_by: str = "date_taken",
         order_desc: bool = True,
@@ -387,11 +386,12 @@ class LanceIndex:
            (results ranked by relevance, rows carry ``_score``), otherwise a
            native ORDER BY / OFFSET / LIMIT query.
 
+        Partition/directory scoping is expressed as part of ``where_clause``
+        (generated from the ``directory`` field in the search predicate).
+
         Args:
             where_clause: SQL WHERE expression (without the WHERE keyword).
                 None means no filter (all photos).
-            partitions: Explicit set of partition paths to include.
-                None or empty list means all partitions.
             fts_filter: Full-text search filter. When set, the page query uses
                 ``nearest_to_text`` ranked by relevance; ``order_by`` is ignored.
             order_by: Column to sort by (default "date_taken"). Ignored when
@@ -407,19 +407,10 @@ class LanceIndex:
         """
         from lancedb.query import ColumnOrdering
 
-        clauses: list[str] = []
-        if partitions:
-            quoted = ", ".join(f"'{_esc(p)}'" for p in partitions)
-            clauses.append(f"partition IN ({quoted})")
-        if where_clause:
-            clauses.append(where_clause)
-
-        combined = " AND ".join(clauses) if clauses else None
-
         def _base_query():
             q = self._table.query()
-            if combined:
-                q = q.where(combined)
+            if where_clause:
+                q = q.where(where_clause)
             if fts_filter:
                 q = q.nearest_to_text(fts_filter.query, columns=fts_filter.columns)
             return q

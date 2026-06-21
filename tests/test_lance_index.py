@@ -38,11 +38,10 @@ def _entry(
 async def _collect_search(
     idx: LanceIndex,
     where: str | None = None,
-    partitions: list[str] | None = None,
     **kwargs,
 ) -> tuple[list[dict], int]:
     """Collect all rows from search_where into a plain list."""
-    matches, total, _facets = await idx.search_where(where, partitions, **kwargs)
+    matches, total, _facets = await idx.search_where(where, **kwargs)
     return matches, total
 
 
@@ -440,23 +439,23 @@ async def test_search_where_no_filter_returns_all(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_search_where_root_limits_to_prefix(tmp_path: Path):
+async def test_search_where_directory_startswith_limits_to_prefix(tmp_path: Path):
     idx = await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
     await idx.upsert_partition("2024/july", [_entry("a.jpg", "h_a")], None)
     await idx.upsert_partition("2023/march", [_entry("b.jpg", "h_b")], None)
-    rows, total = await _collect_search(idx, None, partitions=["2024/july"])
+    rows, total = await _collect_search(idx, "lower(partition) LIKE '2024%'")
     assert len(rows) == 1
     assert total == 1
     assert rows[0]["filename"] == "a.jpg"
 
 
 @pytest.mark.asyncio
-async def test_search_where_root_includes_exact_match(tmp_path: Path):
-    """Explicit partitions list supports exact multi-partition selection."""
+async def test_search_where_directory_exact_match_via_in(tmp_path: Path):
+    """Exact partition filtering via SQL IN clause."""
     idx = await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
     await idx.upsert_partition("2024", [_entry("a.jpg", "h_a")], None)
     await idx.upsert_partition("2024/july", [_entry("b.jpg", "h_b")], None)
-    rows, total = await _collect_search(idx, None, partitions=["2024", "2024/july"])
+    rows, total = await _collect_search(idx, "partition IN ('2024', '2024/july')")
     assert len(rows) == 2
     assert total == 2
 
@@ -484,7 +483,7 @@ async def test_search_where_combined_root_and_clause(tmp_path: Path):
     await idx.upsert_partition("2024/july", [_entry("a.jpg", "h_a", {"rating": 5})], None)
     await idx.upsert_partition("2024/july", [_entry("b.jpg", "h_b", {"rating": 2})], None)
     await idx.upsert_partition("2023/jan", [_entry("c.jpg", "h_c", {"rating": 5})], None)
-    rows, total = await _collect_search(idx, "rating >= 4", partitions=["2024/july"])
+    rows, total = await _collect_search(idx, "lower(partition) LIKE '2024/july%' AND rating >= 4")
     assert len(rows) == 1
     assert total == 1
     assert rows[0]["filename"] == "a.jpg"
