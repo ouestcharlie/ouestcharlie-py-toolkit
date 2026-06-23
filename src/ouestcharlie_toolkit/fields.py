@@ -173,4 +173,11 @@ PHOTO_FIELDS: list[FieldDef] = [
         sidecar_attr="lens_model",
         label="Lens",
     ),
+    # Directory / partition path — no sidecar_attr, assigned by the indexer
+    FieldDef(
+        name="directory",
+        type=FieldType.STRING_MATCH,
+        entry_attr="partition",
+        label="Directory",
+    ),
 ]
