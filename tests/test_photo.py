@@ -239,6 +239,12 @@ async def test_extract_exif_matches_ref(image_path, ref_xmp_path):
 _PHOTO_LOGGER = "ouestcharlie_toolkit.photo"
 
 
+def test_parse_exif_datetime_zero_sentinel_returns_none():
+    """'0000:00:00 00:00:00' is written by cameras with no RTC; must return None silently."""
+    result = _parse_exif_datetime({"Exif.Photo.DateTimeOriginal": "0000:00:00 00:00:00"})
+    assert result is None
+
+
 def test_parse_exif_datetime_invalid_logs_debug(caplog):
     """_parse_exif_datetime with an unparseable string emits a DEBUG message."""
     bad_exif = {"Exif.Photo.DateTimeOriginal": "not a date"}

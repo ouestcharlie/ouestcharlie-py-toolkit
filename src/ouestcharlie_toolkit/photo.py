@@ -30,6 +30,9 @@ def _parse_exif_datetime(exif: dict[str, str]) -> datetime | None:
     date_str = exif.get("Exif.Photo.DateTimeOriginal") or exif.get("Exif.Image.DateTime")
     if not date_str:
         return None
+    # Sentinel written by cameras with no RTC (clock not set).
+    if date_str.strip() == "0000:00:00 00:00:00":
+        return None
     try:
         # "2026:02:21 13:03:10" → "2026-02-21T13:03:10"
         iso = date_str.strip().replace(":", "-", 2).replace(" ", "T")
