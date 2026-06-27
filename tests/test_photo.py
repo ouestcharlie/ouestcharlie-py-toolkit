@@ -4,6 +4,7 @@ import logging
 import tempfile
 from pathlib import Path
 
+import pyexiv2
 import pytest
 
 from ouestcharlie_toolkit import Photo
@@ -121,6 +122,25 @@ async def test_extract_exif_raises_for_empty_file():
         (Path(tmpdir) / "placeholder.jpg").write_bytes(b"")
         with pytest.raises(ValueError, match="empty"):
             await Photo(LocalBackend(root=tmpdir), "placeholder.jpg").extract_exif()
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_latin1_exif():
+    """Pre-2005 cameras sometimes write EXIF strings in latin-1, not UTF-8.
+
+    Byte 0x82 is valid latin-1 but invalid UTF-8; extract_exif() must not raise.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "legacy.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.Make": "Canon\x82test"}, encoding="latin-1")
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "legacy.jpg").extract_exif()
+
+    assert sidecar.camera_make is not None
+    assert "Canon" in sidecar.camera_make
 
 
 # ---------------------------------------------------------------------------

@@ -234,7 +234,12 @@ class Photo:
 
         local = await self.backend.local_path(self.path)
         img = pyexiv2.Image(str(local))  # pyexiv2 requires str, not Path
-        exif_data: dict[str, str] = img.read_exif()
+        try:
+            exif_data: dict[str, str] = img.read_exif()
+        except UnicodeDecodeError:
+            # Legacy cameras (pre-2005 era) often embed EXIF strings in latin-1/cp1252.
+            # Latin-1 is lossless for all byte values, so this never raises.
+            exif_data = img.read_exif(encoding="latin-1")
         img.close()
 
         self._content_hash = photo_hash
