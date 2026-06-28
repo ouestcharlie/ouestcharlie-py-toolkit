@@ -4,6 +4,7 @@ import logging
 import tempfile
 from pathlib import Path
 
+import pyexiv2
 import pytest
 
 from ouestcharlie_toolkit import Photo
@@ -123,6 +124,25 @@ async def test_extract_exif_raises_for_empty_file():
             await Photo(LocalBackend(root=tmpdir), "placeholder.jpg").extract_exif()
 
 
+@pytest.mark.asyncio
+async def test_extract_exif_latin1_exif():
+    """Pre-2005 cameras sometimes write EXIF strings in latin-1, not UTF-8.
+
+    Byte 0x82 is valid latin-1 but invalid UTF-8; extract_exif() must not raise.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "legacy.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.Make": "Canon\x82test"}, encoding="latin-1")
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "legacy.jpg").extract_exif()
+
+    assert sidecar.camera_make is not None
+    assert "Canon" in sidecar.camera_make
+
+
 # ---------------------------------------------------------------------------
 # Interaction between the two methods
 # ---------------------------------------------------------------------------
@@ -217,6 +237,12 @@ async def test_extract_exif_matches_ref(image_path, ref_xmp_path):
 # ---------------------------------------------------------------------------
 
 _PHOTO_LOGGER = "ouestcharlie_toolkit.photo"
+
+
+def test_parse_exif_datetime_zero_sentinel_returns_none():
+    """'0000:00:00 00:00:00' is written by cameras with no RTC; must return None silently."""
+    result = _parse_exif_datetime({"Exif.Photo.DateTimeOriginal": "0000:00:00 00:00:00"})
+    assert result is None
 
 
 def test_parse_exif_datetime_invalid_logs_debug(caplog):

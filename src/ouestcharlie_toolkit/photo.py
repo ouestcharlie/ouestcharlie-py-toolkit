@@ -30,6 +30,9 @@ def _parse_exif_datetime(exif: dict[str, str]) -> datetime | None:
     date_str = exif.get("Exif.Photo.DateTimeOriginal") or exif.get("Exif.Image.DateTime")
     if not date_str:
         return None
+    # Sentinel written by cameras with no RTC (clock not set).
+    if date_str.strip() == "0000:00:00 00:00:00":
+        return None
     try:
         # "2026:02:21 13:03:10" → "2026-02-21T13:03:10"
         iso = date_str.strip().replace(":", "-", 2).replace(" ", "T")
@@ -234,7 +237,12 @@ class Photo:
 
         local = await self.backend.local_path(self.path)
         img = pyexiv2.Image(str(local))  # pyexiv2 requires str, not Path
-        exif_data: dict[str, str] = img.read_exif()
+        try:
+            exif_data: dict[str, str] = img.read_exif()
+        except UnicodeDecodeError:
+            # Legacy cameras (pre-2005 era) often embed EXIF strings in latin-1/cp1252.
+            # Latin-1 is lossless for all byte values, so this never raises.
+            exif_data = img.read_exif(encoding="latin-1")
         img.close()
 
         self._content_hash = photo_hash
