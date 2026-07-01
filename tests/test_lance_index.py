@@ -189,6 +189,28 @@ def test_round_trip_tags_always_a_list():
 
 
 # ---------------------------------------------------------------------------
+# URI construction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_or_create_passes_file_uri_to_lancedb(tmp_path: Path):
+    from unittest.mock import patch
+
+    captured: dict = {}
+    real_connect = lancedb.connect_async
+
+    async def fake_connect(uri, **kw):
+        captured["uri"] = uri
+        return await real_connect(uri, **kw)
+
+    with patch("ouestcharlie_toolkit.lance_index.lancedb.connect_async", side_effect=fake_connect):
+        await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
+
+    assert captured["uri"].startswith("file://"), f"Expected file:// URI, got: {captured['uri']!r}"
+
+
+# ---------------------------------------------------------------------------
 # LanceIndex.open_or_create / open
 # ---------------------------------------------------------------------------
 

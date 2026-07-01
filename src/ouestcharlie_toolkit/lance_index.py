@@ -221,7 +221,7 @@ class LanceIndex:
         version-dependent schema validation before migration runs.
         New tables are created with the full PHOTO_SCHEMA (no migration needed).
         """
-        uri = str(await backend.local_path(lance_index_path()))
+        uri = (await backend.local_path(lance_index_path())).as_uri()
         db = await lancedb.connect_async(uri)
         if table_name in (await db.list_tables()).tables:
             table = await db.open_table(table_name)
@@ -245,7 +245,7 @@ class LanceIndex:
     @classmethod
     async def open(cls, backend: Backend, table_name: str) -> LanceIndex:
         """Open an existing LanceDB index (raises FileNotFoundError if absent)."""
-        uri = str(await backend.local_path(lance_index_path()))
+        uri = (await backend.local_path(lance_index_path())).as_uri()
         db = await lancedb.connect_async(uri)
         if table_name not in (await db.list_tables()).tables:
             raise FileNotFoundError(f"LanceDB index not found at {uri!r}")
