@@ -10,6 +10,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import lancedb
@@ -190,6 +191,27 @@ def _esc(s: str) -> str:
     return s.replace("'", "''")
 
 
+def _lance_uri(path: Path) -> str:
+    """Return a LanceDB-compatible URI for *path*.
+
+    Handles all Windows path forms produced by Path.resolve(), including
+    mapped drives that expand to UNC on Python 3.12+ (GetFinalPathNameByHandleW).
+    POSIX and Windows drive-letter paths are returned as-is.
+    """
+    path_str = str(path)
+    # Extended-length UNC: \\?\UNC\server\share\path → file://server/share/path
+    if path_str.startswith("\\\\?\\UNC\\"):
+        return "file://" + path_str[8:].replace("\\", "/")
+    # Extended-length local: \\?\C:\path → strip prefix, return as-is
+    if path_str.startswith("\\\\?\\"):
+        return path_str[4:]
+    # Regular UNC: \\server\share\path → file://server/share/path
+    if path_str.startswith("\\\\"):
+        return "file://" + path_str[2:].replace("\\", "/")
+    # POSIX or Windows drive-letter: pass as-is
+    return path_str
+
+
 async def _migrate_table(table: lancedb.table.AsyncTable) -> None:
     """Add any columns present in PHOTO_SCHEMA that are missing from the on-disk table."""
     try:
@@ -221,7 +243,7 @@ class LanceIndex:
         version-dependent schema validation before migration runs.
         New tables are created with the full PHOTO_SCHEMA (no migration needed).
         """
-        uri = (await backend.local_path(lance_index_path())).as_uri()
+        uri = _lance_uri(await backend.local_path(lance_index_path()))
         db = await lancedb.connect_async(uri)
         if table_name in (await db.list_tables()).tables:
             table = await db.open_table(table_name)
@@ -245,7 +267,7 @@ class LanceIndex:
     @classmethod
     async def open(cls, backend: Backend, table_name: str) -> LanceIndex:
         """Open an existing LanceDB index (raises FileNotFoundError if absent)."""
-        uri = (await backend.local_path(lance_index_path())).as_uri()
+        uri = _lance_uri(await backend.local_path(lance_index_path()))
         db = await lancedb.connect_async(uri)
         if table_name not in (await db.list_tables()).tables:
             raise FileNotFoundError(f"LanceDB index not found at {uri!r}")

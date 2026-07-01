@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import lancedb
 import pyarrow as pa
@@ -17,6 +18,7 @@ from ouestcharlie_toolkit.lance_index import (
     FtsFilter,
     LanceIndex,
     _esc,
+    _lance_uri,
     photo_entry_to_row,
     row_to_photo_entry,
 )
@@ -193,21 +195,29 @@ def test_round_trip_tags_always_a_list():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_open_or_create_passes_file_uri_to_lancedb(tmp_path: Path):
-    from unittest.mock import patch
+def _mock_path(s: str) -> MagicMock:
+    m = MagicMock()
+    m.__str__ = lambda _: s
+    return m
 
-    captured: dict = {}
-    real_connect = lancedb.connect_async
 
-    async def fake_connect(uri, **kw):
-        captured["uri"] = uri
-        return await real_connect(uri, **kw)
+def test_lance_uri_unc_path():
+    assert _lance_uri(_mock_path("\\\\server\\share\\foo\\bar")) == "file://server/share/foo/bar"
 
-    with patch("ouestcharlie_toolkit.lance_index.lancedb.connect_async", side_effect=fake_connect):
-        await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
 
-    assert captured["uri"].startswith("file://"), f"Expected file:// URI, got: {captured['uri']!r}"
+def test_lance_uri_extended_length_unc():
+    assert (
+        _lance_uri(_mock_path("\\\\?\\UNC\\server\\share\\foo\\bar"))
+        == "file://server/share/foo/bar"
+    )
+
+
+def test_lance_uri_extended_length_local():
+    assert _lance_uri(_mock_path("\\\\?\\C:\\foo\\bar")) == "C:\\foo\\bar"
+
+
+def test_lance_uri_regular_path_unchanged(tmp_path: Path):
+    assert _lance_uri(tmp_path) == str(tmp_path)
 
 
 # ---------------------------------------------------------------------------
