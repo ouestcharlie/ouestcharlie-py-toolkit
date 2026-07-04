@@ -24,7 +24,9 @@ def _entry(idx: int, searchable: dict | None = None) -> PhotoEntry:
 
 
 async def _index(tmp_path: Path, entries: list[PhotoEntry]) -> LanceIndex:
-    idx = await LanceIndex.open_or_create(LocalBackend(root=tmp_path), PHOTO_TABLE_NAME)
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
     await idx.upsert_partition("p", entries, None)
     return idx
 
