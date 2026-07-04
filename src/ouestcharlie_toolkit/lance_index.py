@@ -10,6 +10,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import lancedb
@@ -214,42 +215,57 @@ class LanceIndex:
         self._table = table
 
     @classmethod
-    async def open_or_create(cls, backend: Backend, table_name: str) -> LanceIndex:
-        """Open an existing LanceDB index, or create one if absent.
+    async def open(
+        cls,
+        backend: Backend,
+        table_name: str,
+        *,
+        create_if_missing: bool = False,
+        index_path: Path | None = None,
+    ) -> LanceIndex:
+        """Open a LanceDB index, optionally creating it if absent.
 
-        Existing tables are opened without passing a schema to avoid any
-        version-dependent schema validation before migration runs.
-        New tables are created with the full PHOTO_SCHEMA (no migration needed).
+        Args:
+            backend: Backend providing the default index location.
+            table_name: Name of the LanceDB table to open or create.
+            create_if_missing: When True, create the index if it does not exist.
+                Existing tables are opened without passing a schema to avoid
+                version-dependent schema validation before migration runs.
+                New tables are created with the full PHOTO_SCHEMA.
+            index_path: Override the default index path
+                (``backend.local_path(lance_index_path())``).
+                Used when the library root is a UNC path where object_store is unreliable.
+
+        Raises:
+            FileNotFoundError: If the index is absent and ``create_if_missing`` is False.
         """
-        uri = str(await backend.local_path(lance_index_path()))
+        if index_path is not None:
+            uri = str(index_path)
+        else:
+            uri = str(await backend.local_path(lance_index_path()))
         db = await lancedb.connect_async(uri)
         if table_name in (await db.list_tables()).tables:
             table = await db.open_table(table_name)
             await _migrate_table(table)
-        else:
+        elif create_if_missing:
             table = await db.create_table(table_name, schema=PHOTO_SCHEMA)
-        # Create FTS index on description — only when the column has a real string type.
-        # A Null-typed column (legacy migration artifact) can't be FTS-indexed; it will
-        # be fixed automatically on the next full re-index when real data is upserted.
-        try:
-            schema = await table.schema()
-            desc_type = schema.field("description").type if "description" in schema.names else None
-            if desc_type is not None and desc_type != pa.null():
-                await table.create_index("description", config=FTS(), replace=True)
-            else:
-                _log.debug("FTS index skipped: description column type is %s", desc_type)
-        except Exception as exc:
-            _log.debug("FTS index creation skipped: %s", exc)
-        return cls(table)
-
-    @classmethod
-    async def open(cls, backend: Backend, table_name: str) -> LanceIndex:
-        """Open an existing LanceDB index (raises FileNotFoundError if absent)."""
-        uri = str(await backend.local_path(lance_index_path()))
-        db = await lancedb.connect_async(uri)
-        if table_name not in (await db.list_tables()).tables:
+            # Create FTS index on description — only when the column has a real string type.
+            # A Null-typed column (legacy migration artifact) can't be FTS-indexed; it will
+            # be fixed automatically on the next full re-index when real data is upserted.
+            try:
+                schema = await table.schema()
+                desc_type = (
+                    schema.field("description").type if "description" in schema.names else None
+                )
+                if desc_type is not None and desc_type != pa.null():
+                    await table.create_index("description", config=FTS(), replace=True)
+                else:
+                    _log.debug("FTS index skipped: description column type is %s", desc_type)
+            except Exception as exc:
+                _log.debug("FTS index creation skipped: %s", exc)
+        else:
             raise FileNotFoundError(f"LanceDB index not found at {uri!r}")
-        return cls(await db.open_table(table_name))
+        return cls(table)
 
     # -----------------------------------------------------------------------
     # Write operations

@@ -8,6 +8,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -67,6 +68,12 @@ class AgentBase:
             return config
         except (json.JSONDecodeError, ValueError) as e:
             raise ConfigurationError(f"Invalid WOOF_BACKEND_CONFIG: {e}") from e
+
+    @property
+    def lance_index_path_override(self) -> Path | None:
+        """Local path override for the LanceDB index, or None to use the default."""
+        raw = self.backend_config.get("lancedb_index_path")
+        return Path(raw) if raw else None
 
     @property
     def cancelled(self) -> bool:

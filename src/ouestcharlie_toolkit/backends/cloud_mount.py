@@ -23,7 +23,7 @@ class CloudMountedBackend(LocalBackend):
     the read is incomplete the file is re-read with exponential backoff to give the
     sync client time to finish the download.  OSError is raised after _MAX_RETRIES.
 
-    Configure with {"type": "cloud_mount", "root": "/path/to/mount"}.
+    Configure with {"type": "cloud_mount", "path": "/path/to/mount"}.
     """
 
     async def read(self, path: str) -> tuple[bytes, VersionToken]:

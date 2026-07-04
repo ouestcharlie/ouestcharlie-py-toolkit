@@ -14,198 +14,53 @@ The Python toolkit (`ouestcharlie-toolkit`) is a shared library that provides fi
 
 Agents import the toolkit and focus on their domain logic (indexing, enrichment, search). The toolkit handles protocol, storage, and consistency concerns.
 
-## Package Structure
-
-See [README.md](README.md) for the package structure and usage examples.
-
 V1 scope: local filesystem backend only. The `backend.py` abstraction enables adding cloud backends (S3, GCS, ADLS Gen2) later without changing agent code.
-
-## MCP Integration
-
-### Server Lifecycle
-
-`AgentBase` responsibilities:
-1. Parse environment variables (`WOOF_BACKEND_CONFIG`, `WOOF_AGENT_TOKEN`)
-2. Initialize the backend connection from config
-3. Wrap FastMCP for MCP server lifecycle
-4. Provide `progress(total)` factory for progress reporting
-5. Provide `check_cancelled()` for cooperative cancellation
-6. Provide `per_photo(photo, partition)` error isolation context manager
-
-See [README.md](README.md) and implementation in [server.py](src/ouestcharlie/server.py) for usage examples.
 
 ## Backend Abstraction
 
-The `Backend` protocol defines the storage operations: `read`, `write_conditional`, `write_new`, `list_files`, `exists`, `delete`, `local_path`, `content_hash`. All paths are relative to the backend root.
+`VersionToken` is opaque to callers — `mtime` for local, `ETag` or `generation` for future remote backends.
 
-`VersionToken` is backend-specific: `mtime` for local filesystem, `ETag` for S3/GCS/Azure Data Lake Storage Gen2, `generation` for GCS. It is opaque to callers.
+`content_hash` is BLAKE3 truncated to 128 bits, base64url-encoded (22 chars). Future remote backends can override to fetch the provider checksum without downloading the file.
 
-`local_path(path)` returns the absolute local filesystem path for backends where the file lives on disk (local, cloud-mounted). Backend implementation is in charge of providing the local file copy.
+**Cross-process locking**: `write_conditional` holds two locks simultaneously for the stat-check + rename — a per-path `threading.Lock` (required on macOS/BSD where `flock` is per-process and does not serialize threads within the same process) and a `_CrossProcessLock` on a `<filename>.lock` sidecar file. Lock files are always created inside `.ouestcharlie/`, never next to original photos.
 
-`content_hash(path)` returns the canonical hash, URL safe. Default implementation reads via `read()` and computes the hash. Future remote backends (kDrive, OneDrive, etc.) can override to fetch the provider checksum from their REST API without downloading the file.
-
-### Local Filesystem Backend
-
-Implementation uses:
-- Async I/O via `asyncio.run_in_executor`
-- Atomic write-to-temp-then-rename for `write_conditional` and `write_new`
-- Version token based on `st_mtime_ns`
-
-See [backends/local.py](src/ouestcharlie/backends/local.py) for implementation.
-
-**Cross-process locking**: `write_conditional` holds two locks simultaneously for the duration of the stat-check + rename:
-
-1. A per-path `threading.Lock` (intra-process thread safety) — required on macOS/BSD where `flock` is per-process and does not serialize threads within the same process.
-2. A `_CrossProcessLock` on a `<filename>.lock` sidecar file (cross-process safety):
-   - macOS/Linux: `fcntl.flock(LOCK_EX)` on the open `fd`.
-   - Windows: `msvcrt.locking(LK_LOCK, 1)` on the open `fd`.
-
-Callers pass a `lock_dir` (backend-relative path) to `write_conditional` so that `.lock` files are always created inside a `METADATA_DIR` (`.ouestcharlie/`) directory, never next to original photos. The lock files persist on disk — this is normal for `flock`-based locking; the OS-level lock releases when the `fd` is closed.
-
-### Cloud-Mounted Backend
-
-`CloudMountedBackend` extends `LocalBackend` for FUSE and Windows CF API mounts (kDrive, OneDrive, GDrive, Dropbox). It overrides `read()` with an exponential-backoff retry loop to handle incomplete reads — Windows CF API may return partial data for dehydrated placeholder files. `local_path()` and `content_hash()` are inherited unchanged: photo-media tools (pyexiv2, image-proc) open the file directly via the mount path, letting FUSE handle on-demand download transparently.
+**Cloud-Mounted Backend**: overrides `read()` with an exponential-backoff retry loop — Windows CF API may return partial data for dehydrated placeholder files.
 
 ## LanceDB Columnar Index (`lance_index.py`)
 
-The LanceDB index replaces per-partition `manifest.json` files as the primary per-photo metadata store (schema version 3+). It is a single columnar table stored at `.ouestcharlie/index.lance/` within the backend root, containing one row per photo across all partitions.
+The LanceDB index replaces per-partition `manifest.json` files as the primary per-photo metadata store (schema version 3+). It is a single columnar table containing one row per photo across all partitions.
 
-All operations use the **`AsyncTable`** API (`lancedb.connect_async()` → `AsyncTable`) — no `asyncio.to_thread` wrappers. `merge_insert().execute()` on an `AsyncTable` returns an awaitable coroutine (`AsyncTable._do_merge`) and is awaited directly, not run in a thread.
+### Index location
 
-### Constants
+By default the index lives at `.ouestcharlie/index.lance/` within the backend root. On Windows, when the library root is a UNC path or a mapped drive that resolves to one, `object_store` (the Rust storage layer under Lance) cannot reliably open files on the network share. The index is then redirected to a local NTFS path (`%LOCALAPPDATA%\ouestcharlie\indexes\<library_name>\`) set by Woof and propagated via `WOOF_BACKEND_CONFIG`. LanceDB accepts local filesystem paths directly — no `file://` URI conversion.
 
-| Constant | Value | Purpose |
-|---|---|---|
-| `DEFAULT_LIMIT` | 10 000 | Upper bound for `get_partition_rows` scans |
-| `PAGE_SIZE` | 500 | Default page size for `search_where` |
+All operations use the `AsyncTable` API. `merge_insert().execute()` returns a coroutine and is awaited directly, not run in a thread.
 
-### Schema
+### Schema non-obvious choices
 
-The PyArrow schema (`PHOTO_SCHEMA`) defines the table structure:
+GPS and thumbnail columns use **flat nullable columns** rather than structs. LanceDB returns null struct fields as default-valued dicts, not `None`, which would require extra handling at every read site.
 
-| Column | Type | Notes |
-|---|---|---|
-| `content_hash` | `string` | Primary key for upserts |
-| `filename` | `string` | |
-| `partition` | `string` | Relative path from backend root |
-| `date_taken` | `timestamp(us)` | Nullable; stored timezone-naive |
-| `utc_offset_minutes` | `int16` | Nullable; reserved for future use |
-| `rating` | `int32` | Nullable |
-| `width`, `height` | `int32` | Nullable |
-| `orientation` | `int32` | Nullable |
-| `make`, `model` | `string` | Nullable |
-| `tags` | `list<string>` | Empty list when absent |
-| `gps_lat`, `gps_lon` | `float64` | Nullable flat columns (not a struct) |
-| `metadata_version` | `int64` | |
-| `xmp_version_token` | `string` | Used for change detection |
-| `thumbnail_avif_hash` | `string` | Nullable; identifies the AVIF chunk file |
-| `thumbnail_tile_index` | `int16` | Nullable; row-major position in the grid |
-| `_last_update` | `timestamp(us)` | Set to `datetime.now(utc)` on each write |
+`date_taken` is stored timezone-naive. All comparisons must strip timezone before comparing.
 
-GPS and thumbnail location use **flat nullable columns** rather than structs. LanceDB returns null struct fields as default-valued dicts, not `None`, which would require extra handling at read sites.
+### `search_where` pagination
 
-### Key Operations
+Two queries are issued: a lightweight `select(["tags"])` scan for total count and tag facets, then a page query with `order_by` / `offset` / `limit` pushed down to LanceDB (available since 0.33). A `filename` tiebreaker is appended to the ordering for deterministic pagination across pages.
 
-**`get_partition_rows(partition, columns, limit)`** — async generator; yields `dict` rows one by one via `to_batches()` / `AsyncRecordBatchReader`. Callers use `async for row in lance_index.get_partition_rows(...)`. Pass `PHOTO_ENTRY_COLUMNS` to skip thumbnail and bookkeeping columns.
+### Partition summary
 
-**`search_where(where_clause, root, order_by, order_desc, page, page_size)`** — fetches all matching rows with `to_arrow()` (single round-trip), sorts the resulting `pa.Table` in memory with `sort_by([(col, "descending"|"ascending")])`, slices the requested page with `slice(offset, page_size)` (zero-copy), and returns an `AsyncIterator[dict]` over the page together with the total count.
+DuckDB runs in `asyncio.to_thread` because it is CPU-bound sync. The Lance query before it uses native async — no `to_thread` wrapping needed there.
 
-Sort is done in Python because `AsyncQuery.order_by()` is not available in lancedb 0.30.2. When it ships in a future release, the in-memory sort can be replaced with a DB-level `ORDER BY … LIMIT … OFFSET`. An unknown `order_by` column name logs a warning and returns results unsorted.
+## Manifest Consistency
 
-`total_count = len(arrow_table)` is computed after filtering but before slicing — no separate `count_rows()` round-trip is needed.
+Unknown fields in `summary.json` are captured in `_extra: dict` and round-tripped through serialization, following HLD schema evolution rules. Agents must never drop fields they don't recognize.
 
-**`maintain()`** — calls `await table.optimize(cleanup_older_than=timedelta(hours=1))` to compact LanceDB fragment files and prune version history older than 1 hour in a single call. Called by Whitebeard at the end of `index_library`.
+## XMP Consistency
 
-### Partition Summary (`partition_summary.py`)
+**Conflict-free merges**: agents write non-overlapping field sets (face tags, scene tags, EXIF fields). Most retry scenarios in the optimistic concurrency loop are therefore trivial merges with no actual conflict.
 
-`compute_partition_summary(lance_index, partition)` runs in two steps: (1) fetch the partition's aggregate columns via `await lance_index._table.query().where(…).select(…).to_arrow()` (native async, no `to_thread`); (2) run a single DuckDB aggregate query over the resulting `pa.Table` in `asyncio.to_thread` (CPU-bound sync). Returns the `ManifestSummary` (photo count, date range, GPS bounding box, rating range). The index is the source of truth; stats are derived from it directly after upsert.
+**Third-party sidecar preservation**: `XmpSidecar` holds `_raw_xml` so fields written by Lightroom, darktable, or ExifTool survive round-trips through OuEstCharlie.
 
-## Manifest Read-Edit with Consistency
-
-`ManifestStore` manages `summary.json` — the backend-wide flat index of all partitions. Per-photo metadata is stored in the LanceDB index; `summary.json` holds partition-level statistics and the schema version.
-
-### Data Model
-
-The toolkit defines typed models: `PhotoEntry`, `ManifestSummary`, `RootSummary`.
-
-`schema.py` carries the canonical `SCHEMA_VERSION` constant (currently `3`) and `LANCE_INDEX_SUBDIR` (`"index.lance"`).
-
-### Read-Modify-Write with Optimistic Concurrency
-
-`ManifestStore.upsert_partition_in_summary(summary)` encapsulates the read-modify-write retry loop for `summary.json`. Agents pass a `ManifestSummary` — the retry logic is invisible to them.
-
-### Unknown Fields Preservation
-
-Unknown fields in `summary.json` are captured in `_extra: dict` and merged back on serialization, following HLD schema evolution rules.
-
-## XMP Read-Edit with Consistency
-
-### XMP Sidecar Format
-
-XMP sidecars are XML files following the XMP specification (ISO 16684), with OuEstCharlie-specific fields in the `http://ouestcharlie.app/ns/1.0/` namespace.
-
-Key fields:
-- **Standard EXIF**: `exif:DateTimeOriginal`, `exif:GPS*`, `tiff:Make`, `tiff:Model`, `tiff:Orientation`
-- **OuEstCharlie**: `ouestcharlie:contentHash`, `ouestcharlie:metadataVersion`, `ouestcharlie:schemaVersion`
-- **Tags**: `dc:subject` contains enrichment tags (`ouestcharlie:faces/*`, `ouestcharlie:scene/*`) and album tags (`album/*`)
-
-### Data Model and Operations
-
-`XmpSidecar` data class with `_raw_xml` field to preserve unknown fields/namespaces for compatibility with Lightroom, darktable, ExifTool.
-
-`XmpStore` provides `read_modify_write(photo_path, modify_fn)` with the same optimistic concurrency pattern as manifests.
-
-See [xmp.py](src/ouestcharlie/xmp.py) for implementation and [README.md](README.md) for usage examples.
-
-### Conflict-Free Merges
-
-Since agents write non-overlapping fields (HLD § Consistency Model), most retry scenarios are simple merges:
-- **Face enrichment** adds `ouestcharlie:faces/*` tags — does not touch `ouestcharlie:scene/*`
-- **Scene enrichment** adds `ouestcharlie:scene/*` tags — does not touch `ouestcharlie:faces/*`
-- **Housekeeping** writes `contentHash`, `metadataVersion`, EXIF fields — does not touch enrichment tags
-
-### XMP Creation at Ingestion
-
-When a new photo is indexed and no XMP sidecar exists:
-1. Compute the content hash via `backend.content_hash(path)` — BLAKE3 truncated to 128 bits, base64url-encoded without padding, 22 characters. Raises `ValueError` for empty files. Future remote backends can override to fetch the provider checksum from their REST API without downloading the file.
-2. Extract EXIF using `pyexiv2`. When a local filesystem path is available (`backend.local_path()` returns non-`None`), the file is opened directly with no temporary copy. For remote backends, the file is staged to a temporary file first.
-3. Build an `XmpSidecar` with extracted fields, `metadataVersion=1`, `schemaVersion=1`
-4. Write using `write_new()` to avoid overwriting an existing sidecar
-
-If an XMP sidecar already exists (created by Lightroom, darktable, etc.), the toolkit reads it, merges in OuEstCharlie-specific fields, and writes using the optimistic concurrency path. Existing third-party fields are preserved.
-
-## Error Handling
-
-Errors follow the three-category model from [controller_api.json](../../controller_api.json):
-
-| Category | Toolkit behavior | Example |
-|---|---|---|
-| `transient` | Logged via MCP, agent continues with next item | File locked by another process |
-| `permanent` | Logged via MCP, photo skipped | Corrupt EXIF, unsupported RAW format |
-| `configuration` | Raised as exception, aborts the tool call | Backend root does not exist, invalid config |
-
-`AgentBase` provides `per_photo(photo, partition)` context manager for error isolation without aborting the batch. See [server.py](src/ouestcharlie/server.py) for implementation.
-
-## Image Processing
-
-Image processing (Rust binary + subprocess wrappers) lives in the separate [`ouestcharlie-imageproc`](https://github.com/ouestcharlie/outestcharlie-imageproc) package. See [imageproc_LLD.md](../outestcharlie-imageproc/imageproc_LLD.md) for the protocol specification and command reference.
-
-This toolkit provides two higher-level builders that use `ouestcharlie-imageproc`:
-
-**`thumbnail_builder.py`** — AVIF grid generation: photos are sorted by `content_hash`, split into chunks of ≤64 (8-column grid, up to 8 rows per AVIF file), and encoded in parallel; returns `list[ThumbnailChunk]`.
-
-**`preview_builder.py`** — on-demand JPEG preview generation:
-- `generate_preview_jpeg(image_proc, backend, partition, entry)` — generates and caches a single-photo JPEG preview; fast path if already cached
-
-## Dependencies
-
-| Dependency | Purpose | Version constraint |
-|---|---|---|
-| `mcp` | MCP server SDK | `>=1.0` |
-| `lancedb` | Columnar photo index (schema v3+) | `>=0.20` |
-| `pyarrow` | LanceDB schema definition and data conversion | `>=18` |
-| `pyexiv2` | EXIF/XMP read-write (wraps Exiv2) | `>=2.8` |
-| `ouestcharlie-imageproc` | Rust coprocessor for photo decode, resize, AVIF grid and JPEG preview | `>=1.0.0` |
+**Namespace registration**: Python 3.13 `ET.register_namespace()` rejects prefixes matching `ns\d+` — use `ext{counter}` as fallback.
 
 ## References
 
@@ -214,3 +69,4 @@ This toolkit provides two higher-level builders that use `ouestcharlie-imageproc
 - [pyexiv2](https://github.com/LeoHsiao1/pyexiv2) — EXIF/IPTC/XMP read-write
 - [XMP Specification (ISO 16684)](https://www.iso.org/standard/75163.html)
 - [HLD § Consistency Model](../../HLD.md) — optimistic concurrency design
+- [image-proc LLD](../ouestcharlie-imageproc/imageproc_LLD.md) — Rust coprocessor protocol

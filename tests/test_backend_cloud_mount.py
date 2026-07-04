@@ -117,7 +117,7 @@ async def test_cloud_mount_read_raises_after_max_retries(monkeypatch) -> None:
 def test_backend_from_config_cloud_mount() -> None:
     """backend_from_config returns CloudMountedBackend for type 'cloud_mount'."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        backend = backend_from_config({"type": "cloud_mount", "root": tmpdir})
+        backend = backend_from_config({"type": "cloud_mount", "path": tmpdir})
     assert isinstance(backend, CloudMountedBackend)
 
 
