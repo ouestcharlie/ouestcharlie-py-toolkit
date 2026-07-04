@@ -69,9 +69,9 @@ def test_configuration_error():
 
 def test_backend_from_config_missing_type():
     with pytest.raises(ConfigurationError, match="type"):
-        backend_from_config({"root": "/tmp/test"})
+        backend_from_config({"path": "/tmp/test"})
 
 
 def test_backend_from_config_unknown_type():
     with pytest.raises(ConfigurationError, match="Unsupported backend type"):
-        backend_from_config({"type": "unknown", "root": "/tmp/test"})
+        backend_from_config({"type": "unknown", "path": "/tmp/test"})

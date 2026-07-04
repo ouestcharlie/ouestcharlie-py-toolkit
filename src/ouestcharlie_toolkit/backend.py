@@ -217,7 +217,7 @@ def backend_from_config(config: dict[str, str]) -> Backend:
 
     Args:
         config: Backend configuration dict with 'type' and type-specific fields.
-                Example: {"type": "filesystem", "root": "/path/to/photos"}
+                Example: {"type": "filesystem", "path": "/path/to/photos"}
 
     Returns:
         Backend instance matching the configured type.
@@ -231,18 +231,18 @@ def backend_from_config(config: dict[str, str]) -> Backend:
     if backend_type == "filesystem":
         from .backends.local import LocalBackend
 
-        root = config.get("root")
+        root = config.get("path")
         if not root:
-            raise ConfigurationError("filesystem backend requires 'root' field")
+            raise ConfigurationError("filesystem backend requires 'path' field")
         _log.debug(f"Backend '{name}', initialized as 'filesystem' with root path '{root}'")
         return LocalBackend(root)
 
     if backend_type == "cloud_mount":
         from .backends.cloud_mount import CloudMountedBackend
 
-        root = config.get("root")
+        root = config.get("path")
         if not root:
-            raise ConfigurationError("cloud_mount backend requires 'root' field")
+            raise ConfigurationError("cloud_mount backend requires 'path' field")
         _log.debug(f"Backend '{name}', initialized as 'cloud_mount' with root path '{root}'")
         return CloudMountedBackend(root)
 

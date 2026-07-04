@@ -51,13 +51,13 @@ def test_local_backend_nonexistent_root():
 
 def test_backend_from_config_local():
     with tempfile.TemporaryDirectory() as tmpdir:
-        backend = backend_from_config({"type": "filesystem", "root": tmpdir})
+        backend = backend_from_config({"type": "filesystem", "path": tmpdir})
         assert isinstance(backend, LocalBackend)
         assert str(backend.root) == str(Path(tmpdir).resolve())
 
 
-def test_backend_from_config_missing_root():
-    with pytest.raises(ConfigurationError, match="root"):
+def test_backend_from_config_missing_path():
+    with pytest.raises(ConfigurationError, match="path"):
         backend_from_config({"type": "filesystem"})
 
 
