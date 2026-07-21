@@ -64,6 +64,8 @@ Unknown fields in `summary.json` are captured in `_extra: dict` and round-trippe
 
 **Namespace registration**: Python 3.13 `ET.register_namespace()` rejects prefixes matching `ns\d+` — use `ext{counter}` as fallback.
 
+**`XPKeywords` tag bootstrap**: `Photo.extract_exif()` seeds `tags` from the Windows-specific `Exif.Image.XPKeywords` EXIF field (semicolon-separated) when creating a brand-new sidecar. This is a one-time bootstrap for libraries whose only keyword source is Windows Explorer/Photos tagging — it is not an authoritative or bidirectional sync with `dc:subject`, since `extract_exif()` never reads an existing sidecar and therefore never overwrites tags added later via Woof or Darktable.
+
 ## References
 
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)

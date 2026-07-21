@@ -144,6 +144,77 @@ async def test_extract_exif_latin1_exif():
 
 
 # ---------------------------------------------------------------------------
+# XPKeywords tag bootstrap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpkeywords_populates_tags():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPKeywords": "beach;vacation; france "})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.tags == ["beach", "vacation", "france"]
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpkeywords_strips_trailing_nul():
+    """XPKeywords is a null-terminated UTF-16LE field; pyexiv2 keeps the trailing NUL."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPKeywords": "beach;vacation;france\x00"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.tags == ["beach", "vacation", "france"]
+    assert all("\x00" not in t for t in sidecar.tags)
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_no_xpkeywords_empty_tags():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+    assert sidecar.tags == []
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_malformed_xpkeywords_yields_empty_tags():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPKeywords": ";;;"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.tags == []
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpkeywords_not_duplicated_in_extra():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPKeywords": "beach;vacation"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert not any("XPKeywords" in k for k in sidecar._extra)
+
+
+# ---------------------------------------------------------------------------
 # Interaction between the two methods
 # ---------------------------------------------------------------------------
 

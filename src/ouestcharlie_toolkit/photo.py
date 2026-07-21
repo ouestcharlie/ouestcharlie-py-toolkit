@@ -132,6 +132,8 @@ _EXIF_EXTRA_SKIP: frozenset[str] = frozenset(
         "Exif.Photo.FocalLength",
         "Exif.Photo.FocalLengthIn35mmFilm",
         "Exif.Photo.LensModel",
+        # Bootstrapped into tags below
+        "Exif.Image.XPKeywords",
     }
 )
 
@@ -295,6 +297,15 @@ class Photo:
         lens_raw = exif_data.get("Exif.Photo.LensModel") or ""
         lens_model = lens_raw.strip() or None
 
+        # Bootstrap tags from Windows XPKeywords on first extraction: no dc:subject
+        # exists yet at this point (extract_exif reads only EXIF, never an existing
+        # sidecar), so this never overrides tags edited later via Woof or Darktable.
+        # XPKeywords is a null-terminated UTF-16LE byte array; pyexiv2 decodes the
+        # UTF-16 but keeps the trailing NUL, so it must be stripped before .strip()
+        # (str.strip() only removes whitespace, not the \x00 control character).
+        xp_keywords = (exif_data.get("Exif.Image.XPKeywords") or "").rstrip("\x00")
+        tags = [t.strip() for t in xp_keywords.split(";") if t.strip()]
+
         return XmpSidecar(
             content_hash=photo_hash,
             date_taken=date_taken,
@@ -310,5 +321,6 @@ class Photo:
             focal_length=focal_length,
             focal_length_35mm=focal_length_35mm,
             lens_model=lens_model,
+            tags=tags,
             _extra=_map_exif_extra(exif_data),
         )
