@@ -60,6 +60,8 @@ Unknown fields in `summary.json` are captured in `_extra: dict` and round-trippe
 
 **Third-party sidecar preservation**: `XmpSidecar` holds `_raw_xml` so fields written by Lightroom, darktable, or ExifTool survive round-trips through OuEstCharlie.
 
+**Dual sidecar naming convention**: `xmp_path_for(photo_path, with_photo_extension=bool)` supports both the full-extension form (`IMG_001.cr3.xmp` — darktable, digiKam, Immich's preferred form) and the extension-stripped form (`IMG_001.xmp` — Lightroom). `XmpStore.read()`/`write()` resolve to whichever form already exists on disk (full-extension checked first), and `create()` always writes new sidecars in the full-extension form. This means existing libraries need no migration, and an update to an existing sidecar never forks a second file under the other convention.
+
 **Namespace registration**: Python 3.13 `ET.register_namespace()` rejects prefixes matching `ns\d+` — use `ext{counter}` as fallback.
 
 ## References

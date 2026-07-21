@@ -131,16 +131,26 @@ def _register_extra_ns(extra: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def xmp_path_for(photo_path: str) -> str:
+def xmp_path_for(photo_path: str, *, with_photo_extension: bool) -> str:
     """Compute the XMP sidecar path for a photo file.
+
+    Two conventions are in use across the photography ecosystem:
+    ``with_photo_extension=True`` keeps the photo's extension in the sidecar
+    name (Darktable, digiKam, Immich's preferred form — e.g.
+    ``IMG_001.cr3.xmp``); ``with_photo_extension=False`` strips it
+    (Lightroom's convention — e.g. ``IMG_001.xmp``).
 
     Args:
         photo_path: Path to the photo file (e.g., "2024/2024-07/IMG_001.jpg").
+        with_photo_extension: Whether to keep the photo's extension in the
+            sidecar filename.
 
     Returns:
-        Path to the XMP sidecar (e.g., "2024/2024-07/IMG_001.xmp").
+        Path to the XMP sidecar.
     """
     p = Path(photo_path)
+    if with_photo_extension:
+        return (p.parent / (p.name + ".xmp")).as_posix()
     return p.with_suffix(".xmp").as_posix()
 
 
@@ -249,6 +259,21 @@ class XmpStore:
         """
         self.backend = backend
 
+    async def _resolve_existing_xmp_path(self, photo_path: str) -> str | None:
+        """Find the on-disk sidecar path for a photo, preferring the full-extension form.
+
+        Checks the full-extension convention first (``IMG_001.cr3.xmp``), then
+        falls back to the extension-stripped convention (``IMG_001.xmp``).
+        Returns None if neither exists.
+        """
+        full_ext_path = xmp_path_for(photo_path, with_photo_extension=True)
+        if await self.backend.exists(full_ext_path):
+            return full_ext_path
+        stripped_path = xmp_path_for(photo_path, with_photo_extension=False)
+        if await self.backend.exists(stripped_path):
+            return stripped_path
+        return None
+
     async def read(self, photo_path: str) -> tuple[XmpSidecar, VersionToken]:
         """Read an XMP sidecar and its version token.
 
@@ -261,7 +286,9 @@ class XmpStore:
         Raises:
             FileNotFoundError: If the XMP sidecar does not exist.
         """
-        xmp_path = xmp_path_for(photo_path)
+        xmp_path = await self._resolve_existing_xmp_path(photo_path)
+        if xmp_path is None:
+            raise FileNotFoundError(f"No XMP sidecar found for {photo_path!r}")
         data, version = await self.backend.read(xmp_path)
         sidecar = parse_xmp(data.decode("utf-8"))
         if not sidecar.content_hash:
@@ -291,7 +318,9 @@ class XmpStore:
         Raises:
             VersionConflictError: If the sidecar was modified since read.
         """
-        xmp_path = xmp_path_for(photo_path)
+        xmp_path = await self._resolve_existing_xmp_path(photo_path)
+        if xmp_path is None:
+            xmp_path = xmp_path_for(photo_path, with_photo_extension=True)
         sidecar.metadata_version += 1
         xml = serialize_xmp(sidecar)
         return await self.backend.write_conditional(xmp_path, xml.encode("utf-8"), expected_version)
@@ -309,7 +338,7 @@ class XmpStore:
         Raises:
             FileExistsError: If the sidecar already exists.
         """
-        xmp_path = xmp_path_for(photo_path)
+        xmp_path = xmp_path_for(photo_path, with_photo_extension=True)
         xml = serialize_xmp(sidecar)
         return await self.backend.write_new(xmp_path, xml.encode("utf-8"))
 
