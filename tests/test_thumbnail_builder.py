@@ -23,9 +23,6 @@ from ouestcharlie_toolkit.thumbnail_builder import (
     generate_partition_thumbnails,
 )
 
-_SAMPLE_JPG = Path(__file__).parent / "sample-images" / "001.jpg"
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
