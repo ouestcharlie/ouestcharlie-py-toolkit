@@ -134,6 +134,9 @@ _EXIF_EXTRA_SKIP: frozenset[str] = frozenset(
         "Exif.Photo.LensModel",
         # Bootstrapped into tags below
         "Exif.Image.XPKeywords",
+        # Bootstrapped into description below
+        "Exif.Image.ImageDescription",
+        "Exif.Image.XPSubject",
     }
 )
 
@@ -306,6 +309,16 @@ class Photo:
         xp_keywords = (exif_data.get("Exif.Image.XPKeywords") or "").rstrip("\x00")
         tags = [t.strip() for t in xp_keywords.split(";") if t.strip()]
 
+        # Bootstrap description from EXIF on first extraction, same rationale as
+        # the XPKeywords fallback above: ImageDescription is the cross-platform
+        # standard caption field, checked first; XPSubject (Windows Explorer/
+        # Photos "Subject") is a Windows-only fallback, same UTF-16LE NUL-
+        # termination quirk as XPKeywords.
+        description = (exif_data.get("Exif.Image.ImageDescription") or "").strip() or None
+        if not description:
+            xp_subject = (exif_data.get("Exif.Image.XPSubject") or "").rstrip("\x00")
+            description = xp_subject.strip() or None
+
         return XmpSidecar(
             content_hash=photo_hash,
             date_taken=date_taken,
@@ -322,5 +335,6 @@ class Photo:
             focal_length_35mm=focal_length_35mm,
             lens_model=lens_model,
             tags=tags,
+            description=description,
             _extra=_map_exif_extra(exif_data),
         )
