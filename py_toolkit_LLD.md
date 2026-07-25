@@ -66,6 +66,8 @@ Unknown fields in `summary.json` are captured in `_extra: dict` and round-trippe
 
 **`XPKeywords` tag bootstrap**: `Photo.extract_exif()` seeds `tags` from the Windows-specific `Exif.Image.XPKeywords` EXIF field (semicolon-separated) when creating a brand-new sidecar. This is a one-time bootstrap for libraries whose only keyword source is Windows Explorer/Photos tagging — it is not an authoritative or bidirectional sync with `dc:subject`, since `extract_exif()` never reads an existing sidecar and therefore never overwrites tags added later via Woof or Darktable.
 
+**`ImageDescription`/`XPSubject` description bootstrap**: `Photo.extract_exif()` seeds `description` from `Exif.Image.ImageDescription` (checked first) or, if empty, the Windows-specific `Exif.Image.XPSubject` field, when creating a brand-new sidecar. Same one-time-bootstrap caveat as `XPKeywords`: not an authoritative or bidirectional sync with `dc:description`, since `extract_exif()` never overwrites a description added later (manually or by AI enrichment).
+
 ## References
 
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)

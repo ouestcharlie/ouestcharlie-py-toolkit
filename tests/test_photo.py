@@ -215,6 +215,115 @@ async def test_extract_exif_xpkeywords_not_duplicated_in_extra():
 
 
 # ---------------------------------------------------------------------------
+# ImageDescription / XPSubject description bootstrap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_image_description_populates_description():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.ImageDescription": "Beach day"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description == "Beach day"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_image_description_wins_over_xpsubject():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif(
+            {
+                "Exif.Image.ImageDescription": "Beach day",
+                "Exif.Image.XPSubject": "Vacation",
+            }
+        )
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description == "Beach day"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpsubject_fallback_when_no_image_description():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPSubject": "Vacation"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description == "Vacation"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpsubject_strips_trailing_nul():
+    """XPSubject is a null-terminated UTF-16LE field; pyexiv2 keeps the trailing NUL."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPSubject": "Vacation\x00"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description == "Vacation"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_no_description_fields_description_none():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+    assert sidecar.description is None
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_empty_description_fields_yield_none():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.ImageDescription": "  ", "Exif.Image.XPSubject": "\x00"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description is None
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_description_not_duplicated_in_extra():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif(
+            {
+                "Exif.Image.ImageDescription": "Beach day",
+                "Exif.Image.XPSubject": "Vacation",
+            }
+        )
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert not any("ImageDescription" in k for k in sidecar._extra)
+    assert not any("XPSubject" in k for k in sidecar._extra)
+
+
+# ---------------------------------------------------------------------------
 # Interaction between the two methods
 # ---------------------------------------------------------------------------
 
