@@ -7,7 +7,7 @@ from typing import Any
 
 import duckdb
 
-from .lance_index import DEFAULT_LIMIT, LanceIndex
+from .lance_index import LanceIndex
 from .schema import ManifestSummary
 
 _AGG_COLUMNS = ["date_taken", "rating", "width", "height", "gps_lat", "gps_lon"]
@@ -26,22 +26,31 @@ FROM photos
 
 
 async def compute_partition_summary(lance_index: LanceIndex, partition: str) -> ManifestSummary:
-    """Compute ManifestSummary for a partition via a single DuckDB aggregation.
+    """Compute ManifestSummary for a single partition.
 
-    LanceDB handles the partition filter and column projection; DuckDB computes
-    all min/max/count aggregates in one SQL pass on the resulting Arrow table.
-    No PhotoEntry objects are created.
+    Thin wrapper over ``aggregate_where`` scoped to one partition's rows.
     """
     part_esc = partition.replace("'", "''")
+    return await aggregate_where(lance_index, f"partition = '{part_esc}'", path=partition)
 
-    # Fetch partition columns with the native async API (AsyncTable — no prefilter kwarg).
-    arrow_tbl = await (
-        lance_index._table.query()
-        .where(f"partition = '{part_esc}'")
-        .select(_AGG_COLUMNS)
-        .limit(DEFAULT_LIMIT)
-        .to_arrow()
-    )
+
+async def aggregate_where(
+    lance_index: LanceIndex, where_clause: str | None, path: str = ""
+) -> ManifestSummary:
+    """Compute a ManifestSummary-shaped aggregate over any WHERE-filtered subset.
+
+    LanceDB handles the row filter and column projection; DuckDB computes all
+    min/max/count aggregates in one SQL pass on the resulting Arrow table. No
+    PhotoEntry objects are created. ``where_clause=None`` aggregates the whole
+    table. Used both for per-partition summaries (Whitebeard) and for
+    runtime, filter-scoped summaries (Wally's ``get_summary`` tool).
+    """
+    # No .limit(): this must aggregate over the entire filtered set (matching
+    # search_where's unlimited facet-count query), not just one page/partition.
+    query = lance_index._table.query().select(_AGG_COLUMNS)
+    if where_clause:
+        query = query.where(where_clause)
+    arrow_tbl = await query.to_arrow()
 
     # DuckDB aggregation is CPU-bound sync — run in a thread pool.
     def _agg() -> tuple[Any, ...] | None:
@@ -51,7 +60,7 @@ async def compute_partition_summary(lance_index: LanceIndex, partition: str) -> 
 
     row = await asyncio.to_thread(_agg)
     if not row:
-        return ManifestSummary(path=partition)
+        return ManifestSummary(path=path)
 
     (
         n,
@@ -103,4 +112,4 @@ async def compute_partition_summary(lance_index: LanceIndex, partition: str) -> 
             lon_s["missing"] = n - lon_cnt
         stats["gps"] = {"type": "gps_bbox", "lat": lat_s, "lon": lon_s}
 
-    return ManifestSummary(path=partition, photo_count=n, _stats=stats)
+    return ManifestSummary(path=path, photo_count=n, _stats=stats)

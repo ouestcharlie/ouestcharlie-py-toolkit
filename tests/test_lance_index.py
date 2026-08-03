@@ -41,7 +41,7 @@ async def _collect_search(
     **kwargs,
 ) -> tuple[list[dict], int]:
     """Collect all rows from search_where into a plain list."""
-    matches, total, _facets = await idx.search_where(where, **kwargs)
+    matches, total = await idx.search_where(where, **kwargs)
     return matches, total
 
 
@@ -456,6 +456,56 @@ async def test_get_partition_rows_empty_when_absent(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# tag_facets_where
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tag_facets_where_no_filter_counts_all_tags(tmp_path: Path):
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition(
+        "a",
+        [
+            _entry("x.jpg", "hash_x", {"tags": ["travel", "france"]}),
+            _entry("y.jpg", "hash_y", {"tags": ["travel"]}),
+        ],
+        None,
+    )
+    facets = await idx.tag_facets_where(None)
+    assert facets == {"travel": 2, "france": 1}
+
+
+@pytest.mark.asyncio
+async def test_tag_facets_where_scoped_by_clause(tmp_path: Path):
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition(
+        "a",
+        [_entry("x.jpg", "hash_x", {"tags": ["travel"], "rating": 5})],
+        None,
+    )
+    await idx.upsert_partition(
+        "b",
+        [_entry("y.jpg", "hash_y", {"tags": ["work"], "rating": 1})],
+        None,
+    )
+    facets = await idx.tag_facets_where("rating >= 5")
+    assert facets == {"travel": 1}
+
+
+@pytest.mark.asyncio
+async def test_tag_facets_where_no_tags_returns_empty(tmp_path: Path):
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition("a", [_entry("x.jpg", "hash_x")], None)
+    assert await idx.tag_facets_where(None) == {}
+
+
+# ---------------------------------------------------------------------------
 # search_where
 # ---------------------------------------------------------------------------
 
@@ -720,7 +770,7 @@ async def _collect_fts(
     fts_filter: FtsFilter,
     where: str | None = None,
 ) -> tuple[list[dict], int]:
-    matches, total, _facets = await idx.search_where(where, fts_filter=fts_filter)
+    matches, total = await idx.search_where(where, fts_filter=fts_filter)
     return matches, total
 
 

@@ -11,7 +11,7 @@ import pytest
 
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex
-from ouestcharlie_toolkit.partition_summary import compute_partition_summary
+from ouestcharlie_toolkit.partition_summary import aggregate_where, compute_partition_summary
 from ouestcharlie_toolkit.schema import PhotoEntry
 
 
@@ -121,3 +121,37 @@ async def test_missing_count_is_correct(tmp_path: Path) -> None:
     idx = await _index(tmp_path, entries)
     summary = await compute_partition_summary(idx, "p")
     assert summary.rating["missing"] == 1
+
+
+# ---------------------------------------------------------------------------
+# aggregate_where — generalized aggregation (runtime summaries)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_aggregate_where_none_scopes_whole_table(tmp_path: Path) -> None:
+    """where_clause=None aggregates every row across all partitions."""
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition("a", [_entry(0, {"rating": 3})], None)
+    await idx.upsert_partition("b", [_entry(1, {"rating": 5})], None)
+
+    summary = await aggregate_where(idx, None)
+    assert summary.photo_count == 2
+    assert summary.rating["min"] == 3
+    assert summary.rating["max"] == 5
+
+
+@pytest.mark.asyncio
+async def test_aggregate_where_filters_rows(tmp_path: Path) -> None:
+    """A WHERE clause narrows the aggregate to matching rows."""
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition("a", [_entry(0, {"rating": 3}), _entry(1, {"rating": 5})], None)
+
+    summary = await aggregate_where(idx, "rating >= 5")
+    assert summary.photo_count == 1
+    assert summary.rating["min"] == 5
+    assert summary.rating["max"] == 5

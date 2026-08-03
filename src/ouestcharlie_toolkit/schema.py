@@ -196,16 +196,17 @@ def thumbnail_avif_path(partition: str, avif_hash: str, tier: str = "thumbnail")
 
 @dataclass
 class RootSummary:
-    """Flat index of all partition summaries for a backend.
+    """Thin schema-version marker for a backend.
 
-    Written at <backend-root>/.ouestcharlie/summary.json.
-    Any folder that directly contains photos gets a manifest.json, and
-    summary.json at the root holds a flat list of all such partitions for
-    pruning during search.
+    Written at <backend-root>/.ouestcharlie/summary.json, once per full
+    indexing session. Its only purpose is letting readers (Wally) detect an
+    unindexed library or a stale schema version without opening the LanceDB
+    index. Per-partition and library-wide statistics are computed at query
+    time instead (see ``aggregate_where`` in ``partition_summary.py``).
     """
 
     schema_version: int
-    partitions: list[ManifestSummary] = field(default_factory=list)
+    last_indexed_at: datetime | None = None
     _extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -319,20 +320,24 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
 
 def serialize_summary(s: RootSummary) -> dict[str, Any]:
     """Serialize a RootSummary to a JSON-compatible dict."""
-    d: dict[str, Any] = {
-        "schemaVersion": s.schema_version,
-        "partitions": [_summary_to_dict(p) for p in s.partitions],
-    }
+    d: dict[str, Any] = {"schemaVersion": s.schema_version}
+    if s.last_indexed_at is not None:
+        d["lastIndexedAt"] = s.last_indexed_at.isoformat()
     d.update(s._extra)
     return d
 
 
 def deserialize_summary(d: dict[str, Any]) -> RootSummary:
-    """Deserialize a JSON dict into a RootSummary, preserving unknown fields."""
-    known_keys = {"schemaVersion", "partitions"}
+    """Deserialize a JSON dict into a RootSummary, preserving unknown fields.
+
+    Tolerant of the legacy bulky shape (a ``partitions`` list) written before
+    this thin-marker redesign — that field is simply ignored, not preserved.
+    """
+    known_keys = {"schemaVersion", "lastIndexedAt", "partitions"}
     extra = {k: v for k, v in d.items() if k not in known_keys}
+    last_indexed_raw = d.get("lastIndexedAt")
     return RootSummary(
         schema_version=d.get("schemaVersion", SCHEMA_VERSION),
-        partitions=[_summary_from_dict(p) for p in d.get("partitions", [])],
+        last_indexed_at=datetime.fromisoformat(last_indexed_raw) if last_indexed_raw else None,
         _extra=extra,
     )
