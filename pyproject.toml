@@ -19,7 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "duckdb>=1.0",
-    "mcp>=1.27",
+    "mcp>=1.27,<2.0.0",
     "pyexiv2>=2.8",
     "blake3>=1.0.8",
     "pyjwt>=2.12.0", # suggested by dependabot

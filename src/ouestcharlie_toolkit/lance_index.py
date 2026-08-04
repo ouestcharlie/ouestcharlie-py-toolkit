@@ -348,6 +348,15 @@ class LanceIndex:
         """Delete all rows for a partition."""
         await self._table.delete(f"partition = '{_esc(partition)}'")
 
+    async def list_partitions(self) -> set[str]:
+        """Return the set of distinct partition values currently in the index.
+
+        Used to detect stale partitions (indexed previously, no longer on
+        disk) now that ``summary.json`` no longer carries a partitions list.
+        """
+        tbl = await self._table.query().select(["partition"]).to_arrow()
+        return set(tbl.column("partition").to_pylist())
+
     async def maintain(self) -> None:
         """Compact fragment files and prune version history older than 1 hour."""
         await self._table.optimize(cleanup_older_than=timedelta(hours=1))
@@ -393,11 +402,11 @@ class LanceIndex:
         order_desc: bool = True,
         page: int = 0,
         page_size: int = PAGE_SIZE,
-    ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """Execute a filtered, sorted, paginated search and return matching rows.
 
         Uses two queries:
-        1. A lightweight scan (tags only) for total count and tag facets.
+        1. A lightweight scan (single column) for the total matching count.
         2. A page query: FTS via ``nearest_to_text`` when fts_filter is set
            (results ranked by relevance, rows carry ``_score``), otherwise a
            native ORDER BY / OFFSET / LIMIT query.
@@ -417,9 +426,7 @@ class LanceIndex:
             page_size: Number of rows per page (default PAGE_SIZE = 500).
 
         Returns:
-            Tuple of (async_row_iterator, total_matching_count, tag_facets).
-            tag_facets is a ``{tag: count}`` dict computed over the full result set
-            (before pagination).
+            Tuple of (page_rows, total_matching_count).
         """
         from lancedb.query import ColumnOrdering
 
@@ -431,15 +438,9 @@ class LanceIndex:
                 q = q.nearest_to_text(fts_filter.query, columns=fts_filter.columns)
             return q
 
-        # Query 1: lightweight scan for count and tag facets (tags column only).
-        facet_table: pa.Table = await _base_query().select(["tags"]).to_arrow()
-        total_count = len(facet_table)
-        tag_counter: dict[str, int] = {}
-        for row_tags in facet_table.column("tags").to_pylist():
-            if row_tags:
-                for t in row_tags:
-                    tag_counter[t] = tag_counter.get(t, 0) + 1
-        tag_facets = dict(sorted(tag_counter.items(), key=lambda kv: -kv[1]))
+        # Query 1: lightweight scan for the total count (single narrow column).
+        count_table: pa.Table = await _base_query().select(["content_hash"]).to_arrow()
+        total_count = len(count_table)
 
         # Query 2: FTS (no sort) or native sort + offset + limit for the page rows.
         if fts_filter:
@@ -468,4 +469,4 @@ class LanceIndex:
                     .to_list()
                 )
 
-        return page_rows, total_count, tag_facets
+        return page_rows, total_count

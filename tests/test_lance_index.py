@@ -41,7 +41,7 @@ async def _collect_search(
     **kwargs,
 ) -> tuple[list[dict], int]:
     """Collect all rows from search_where into a plain list."""
-    matches, total, _facets = await idx.search_where(where, **kwargs)
+    matches, total = await idx.search_where(where, **kwargs)
     return matches, total
 
 
@@ -720,7 +720,7 @@ async def _collect_fts(
     fts_filter: FtsFilter,
     where: str | None = None,
 ) -> tuple[list[dict], int]:
-    matches, total, _facets = await idx.search_where(where, fts_filter=fts_filter)
+    matches, total = await idx.search_where(where, fts_filter=fts_filter)
     return matches, total
 
 

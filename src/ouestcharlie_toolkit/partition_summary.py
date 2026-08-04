@@ -1,4 +1,4 @@
-"""Partition-level summary statistics computed directly from the Lance index."""
+"""Compute summary statistics directly from the Lance index."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 
 import duckdb
 
-from .lance_index import DEFAULT_LIMIT, LanceIndex
+from .lance_index import FtsFilter, LanceIndex
 from .schema import ManifestSummary
 
 _AGG_COLUMNS = ["date_taken", "rating", "width", "height", "gps_lat", "gps_lon"]
@@ -24,34 +24,45 @@ SELECT
 FROM photos
 """
 
+_TAG_FACETS_SQL = """
+SELECT tag, COUNT(*) AS cnt
+FROM (SELECT UNNEST(tags) AS tag FROM photos)
+GROUP BY tag
+ORDER BY cnt DESC
+"""
 
-async def compute_partition_summary(lance_index: LanceIndex, partition: str) -> ManifestSummary:
-    """Compute ManifestSummary for a partition via a single DuckDB aggregation.
 
-    LanceDB handles the partition filter and column projection; DuckDB computes
-    all min/max/count aggregates in one SQL pass on the resulting Arrow table.
-    No PhotoEntry objects are created.
+async def compute_summary(
+    lance_index: LanceIndex,
+    where_clause: str | None,
+    fts_filter: FtsFilter | None = None,
+) -> ManifestSummary:
+    """Compute a ManifestSummary-shaped aggregate over any WHERE/FTS-filtered subset.
+
+    LanceDB handles the row filter, full-text ranking, and column projection;
+    DuckDB computes all min/max/count aggregates, plus tag facet counts.
+    ``where_clause=None`` with no ``fts_filter`` aggregates the whole table.
     """
-    part_esc = partition.replace("'", "''")
-
-    # Fetch partition columns with the native async API (AsyncTable — no prefilter kwarg).
-    arrow_tbl = await (
-        lance_index._table.query()
-        .where(f"partition = '{part_esc}'")
-        .select(_AGG_COLUMNS)
-        .limit(DEFAULT_LIMIT)
-        .to_arrow()
-    )
+    # No .limit(): this must aggregate over the entire filtered set (matching
+    # search_where's unlimited facet-count query), not just one page/partition.
+    query = lance_index._table.query()
+    if where_clause:
+        query = query.where(where_clause)
+    if fts_filter:
+        query = query.nearest_to_text(fts_filter.query, columns=fts_filter.columns)
+    arrow_tbl = await query.select([*_AGG_COLUMNS, "tags"]).to_arrow()
 
     # DuckDB aggregation is CPU-bound sync — run in a thread pool.
-    def _agg() -> tuple[Any, ...] | None:
+    def _agg() -> tuple[tuple[Any, ...] | None, list[tuple[str, int]]]:
         conn = duckdb.connect()
         conn.register("photos", arrow_tbl)
-        return conn.execute(_AGG_SQL).fetchone()
+        agg_row = conn.execute(_AGG_SQL).fetchone()
+        tag_rows = conn.execute(_TAG_FACETS_SQL).fetchall()
+        return agg_row, tag_rows
 
-    row = await asyncio.to_thread(_agg)
+    row, tag_rows = await asyncio.to_thread(_agg)
     if not row:
-        return ManifestSummary(path=partition)
+        return ManifestSummary()
 
     (
         n,
@@ -103,4 +114,7 @@ async def compute_partition_summary(lance_index: LanceIndex, partition: str) -> 
             lon_s["missing"] = n - lon_cnt
         stats["gps"] = {"type": "gps_bbox", "lat": lat_s, "lon": lon_s}
 
-    return ManifestSummary(path=partition, photo_count=n, _stats=stats)
+    if tag_rows:
+        stats["tags"] = {"type": "tag_facets", "counts": {tag: cnt for tag, cnt in tag_rows}}
+
+    return ManifestSummary(photo_count=n, _stats=stats)
