@@ -12,7 +12,6 @@ from .fields import PHOTO_FIELDS, FieldDef, FieldType
 from .logging import setup_logging
 from .manifest import ManifestStore
 from .photo import Photo
-from .progress import report_progress
 from .schema import (
     ManifestSummary,
     PhotoEntry,
@@ -30,7 +29,6 @@ __all__ = [
     "ManifestStore",
     "Photo",
     "XmpStore",
-    "report_progress",
     # Data models
     "PhotoEntry",
     "ManifestSummary",
