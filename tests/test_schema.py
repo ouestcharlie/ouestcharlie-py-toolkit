@@ -146,7 +146,6 @@ def test_from_sidecar_none_fields_present():
 def test_partition_summary():
     """Test ManifestSummary creation with date and rating ranges."""
     summary = ManifestSummary(
-        path="2024/2024-07/",
         photo_count=42,
         _stats={
             "dateTaken": {
@@ -158,7 +157,6 @@ def test_partition_summary():
         },
     )
 
-    assert summary.path == "2024/2024-07/"
     assert summary.photo_count == 42
     assert summary.dateTaken["min"] == datetime(2024, 7, 1)
     assert summary.dateTaken["max"] == datetime(2024, 7, 31)
@@ -168,14 +166,13 @@ def test_partition_summary():
 
 def test_partition_summary_rating_defaults_none():
     """rating stat is absent (None) when not provided."""
-    summary = ManifestSummary(path="2024/", photo_count=10)
+    summary = ManifestSummary(photo_count=10)
     assert summary.rating is None
 
 
 def test_partition_summary_rating_round_trip():
     """rating and date survive serialize → deserialize with nested stat format."""
     summary = ManifestSummary(
-        path="p",
         photo_count=3,
         _stats={
             "dateTaken": {

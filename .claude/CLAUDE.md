@@ -11,12 +11,11 @@ See [README.md](../README.md#running-tests) for the full command reference. Quic
 # Unit tests
 .venv/bin/pytest tests/ -v
 
-# Integration tests (require image-proc binary)
-.venv/bin/pytest tests_integration/ -v
-
-# Rust tests
-cd image-proc && cargo test
 ```
+
+## Documentation Style
+
+- **No caller name-dropping.** py-toolkit is a library with its own interface; it does not know about its callers (Woof, Wally, Whitebeard, ...). Never write docstrings/comments like "used by Wally's `get_summary` tool" — that's a dependency pointing the wrong way, and it silently rots when the caller changes. Describe what the function does and its contract (inputs, outputs, invariants), not who currently calls it.
 
 ## Key Design Patterns
 

@@ -394,29 +394,6 @@ class LanceIndex:
         except Exception as exc:
             _log.debug("get_partition_rows(%r) failed: %s", partition, exc)
 
-    async def tag_facets_where(self, where_clause: str | None) -> dict[str, int]:
-        """Compute ``{tag: count}`` over every row matching where_clause (no pagination).
-
-        A single lightweight scan of the ``tags`` column. Used by runtime
-        summaries (``get_summary``), not by ``search_where`` — search results
-        no longer carry a facet breakdown, to avoid computing it on every
-        page fetch when callers only need it once, on demand.
-        """
-
-        def _base_query():
-            q = self._table.query().select(["tags"])
-            if where_clause:
-                q = q.where(where_clause)
-            return q
-
-        facet_table: pa.Table = await _base_query().to_arrow()
-        tag_counter: dict[str, int] = {}
-        for row_tags in facet_table.column("tags").to_pylist():
-            if row_tags:
-                for t in row_tags:
-                    tag_counter[t] = tag_counter.get(t, 0) + 1
-        return dict(sorted(tag_counter.items(), key=lambda kv: -kv[1]))
-
     async def search_where(
         self,
         where_clause: str | None,

@@ -96,8 +96,7 @@ class PhotoEntry:
 
 
 class ManifestSummary:
-    """Summary statistics for a partition, stored inline in manifest.json and
-    as an entry in the root summary.json.
+    """Aggregate statistics over a set of photos (count plus per-field ranges).
 
     Per-field statistics are stored in ``_stats`` as typed dicts that mirror
     the JSON serialisation format:
@@ -114,12 +113,10 @@ class ManifestSummary:
 
     def __init__(
         self,
-        path: str,
         photo_count: int = 0,
         _stats: dict[str, dict[str, Any]] | None = None,
         _extra: dict[str, Any] | None = None,
     ) -> None:
-        self.path = path
         self.photo_count = photo_count
         self._stats: dict[str, dict[str, Any]] = dict(_stats) if _stats else {}
         self._extra: dict[str, Any] = dict(_extra) if _extra is not None else {}
@@ -132,14 +129,10 @@ class ManifestSummary:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ManifestSummary):
             return NotImplemented
-        return (
-            self.path == other.path
-            and self.photo_count == other.photo_count
-            and self._stats == other._stats
-        )
+        return self.photo_count == other.photo_count and self._stats == other._stats
 
     def __repr__(self) -> str:
-        parts = [f"path={self.path!r}", f"photo_count={self.photo_count}"]
+        parts = [f"photo_count={self.photo_count}"]
         for k, v in self._stats.items():
             parts.append(f"{k}={v!r}")
         return f"ManifestSummary({', '.join(parts)})"
@@ -202,7 +195,7 @@ class RootSummary:
     indexing session. Its only purpose is letting readers (Wally) detect an
     unindexed library or a stale schema version without opening the LanceDB
     index. Per-partition and library-wide statistics are computed at query
-    time instead (see ``aggregate_where`` in ``partition_summary.py``).
+    time instead (see ``compute_summary`` in ``partition_summary.py``).
     """
 
     schema_version: int
@@ -256,7 +249,6 @@ class XmpSidecar:
 
 def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
     d: dict[str, Any] = {
-        "path": s.path,
         "photoCount": s.photo_count,
     }
     # _stats already mirrors the JSON structure; only datetime and bytes need conversion.
@@ -271,14 +263,14 @@ def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
             if stat.get("missing"):
                 out["missing"] = stat["missing"]
             d[name] = out
-        elif t == "int_range":
+        elif t == "int_range" or t == "tag_facets":
             d[name] = stat
     d.update(s._extra)
     return d
 
 
 def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
-    known_keys = {"path", "photoCount", "hashes"}
+    known_keys = {"photoCount", "hashes"}
     stats: dict[str, dict[str, Any]] = {}
     for fd in PHOTO_FIELDS:
         known_keys.add(fd.name)
@@ -311,7 +303,6 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
         }
     extra = {k: v for k, v in d.items() if k not in known_keys}
     return ManifestSummary(
-        path=d["path"],
         photo_count=d.get("photoCount", 0),
         _stats=stats,
         _extra=extra,

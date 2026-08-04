@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from ouestcharlie_toolkit.backend import VersionConflictError
+from ouestcharlie_toolkit.backend import PartitionLockToken, VersionConflictError
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
@@ -127,3 +129,51 @@ async def test_write_full_summary_replaces_legacy_bulky_shape(
 
     raw = json.loads(legacy_path.read_text())
     assert "partitions" not in raw
+
+
+@pytest.mark.asyncio
+async def test_write_full_summary_preserves_full_content_roundtrip(store: ManifestStore) -> None:
+    summary = _summary(last_indexed_at=datetime(2026, 6, 1, 8, 30, 0))
+    summary._extra["futureField"] = "keep-me"
+
+    await store.write_full_summary(summary)
+
+    result, _ = await store.read_summary()
+    assert result.last_indexed_at == datetime(2026, 6, 1, 8, 30, 0)
+    assert result._extra.get("futureField") == "keep-me"
+
+
+@pytest.mark.asyncio
+async def test_write_full_summary_holds_partition_lock(
+    store: ManifestStore, backend: LocalBackend
+) -> None:
+    calls: list[str] = []
+    real_partition_lock = backend.partition_lock
+
+    @asynccontextmanager
+    async def _recording_lock(partition: str) -> AsyncIterator[PartitionLockToken]:
+        calls.append(partition)
+        async with real_partition_lock(partition) as token:
+            yield token
+
+    backend.partition_lock = _recording_lock  # type: ignore[method-assign]
+
+    await store.write_full_summary(_summary())
+
+    assert calls == [""]
+
+
+@pytest.mark.asyncio
+async def test_write_full_summary_concurrent_writers_no_corruption(
+    store: ManifestStore, tmp_path: Path
+) -> None:
+    a = _summary()
+    a._extra["writer"] = "a"
+    b = _summary()
+    b._extra["writer"] = "b"
+
+    await asyncio.gather(store.write_full_summary(a), store.write_full_summary(b))
+
+    summary_path = tmp_path / ".ouestcharlie" / "summary.json"
+    raw = json.loads(summary_path.read_text())
+    assert raw.get("writer") in ("a", "b")
