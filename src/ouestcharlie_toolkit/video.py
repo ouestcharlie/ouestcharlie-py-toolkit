@@ -111,20 +111,41 @@ def _iter_boxes(buf: bytes, start: int, end: int) -> Iterator[tuple[bytes, int, 
         off += size
 
 
+def _matrix_rotation(a: float, b: float, c: float, d: float) -> int:
+    """Display rotation in degrees (0/90/180/270) from a 2×2 transform, snapped
+    to the nearest quarter turn.
+
+    Ports FFmpeg's ``av_display_rotation_get`` (libavutil/display.c): each column
+    is scale-normalized (``hypot``) before the angle is taken, so a matrix that
+    also encodes (possibly anamorphic) scaling still yields the correct rotation.
+    ``av_display_rotation_get`` returns the counter-clockwise angle the matrix
+    applies and is undefined for a singular matrix; here that maps to the
+    clockwise rotation needed to display the frame upright, with a singular
+    matrix (zero-scale column) treated as no rotation.
+    """
+    scale_x = math.hypot(a, c)
+    scale_y = math.hypot(b, d)
+    if scale_x == 0.0 or scale_y == 0.0:
+        return 0  # singular matrix — av_display_rotation_get returns NaN
+    rotation = math.degrees(math.atan2(b / scale_y, a / scale_x))
+    return round(rotation / 90) % 4 * 90
+
+
 def _tkhd_rotation(buf: bytes, start: int, end: int) -> int:
     """Extract the display rotation (0/90/180/270) from a ``tkhd`` box's 3×3 matrix.
 
     The matrix is located by its ``w`` element (``0x40000000`` in 2.30 fixed
-    point) with zero ``u``/``v`` terms — robust to the version-dependent field
-    layout that precedes it.
+    point) with zero ``u``/``v`` perspective terms — robust to the
+    version-dependent field layout that precedes it. Rotation is then derived
+    from the ``a``/``b``/``c``/``d`` terms (16.16 fixed point) via
+    ``_matrix_rotation``.
     """
     for off in range(start, min(end, start + 80), 4):
         if off + 36 > len(buf):
             break
         m = struct.unpack(">9i", buf[off : off + 36])
         if m[8] == 0x40000000 and m[2] == 0 and m[5] == 0:
-            a, b = m[0] / 65536, m[1] / 65536
-            return round(math.degrees(math.atan2(b, a))) % 360
+            return _matrix_rotation(m[0] / 65536, m[1] / 65536, m[3] / 65536, m[4] / 65536)
     return 0
 
 

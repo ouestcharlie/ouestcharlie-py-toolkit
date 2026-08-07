@@ -14,6 +14,7 @@ from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.video import (
     _container_tag,
     _display_rotation,
+    _matrix_rotation,
     _parse_creation_time,
     _parse_iso6709,
     _read_moov_atom,
@@ -227,6 +228,39 @@ def _moov(rotation: int, handler: bytes = b"vide") -> bytes:
 def test_display_rotation_all_orientations():
     for deg in (0, 90, 180, 270):
         assert _display_rotation(_moov(deg)) == deg
+
+
+def test_matrix_rotation_unit_matrices():
+    assert _matrix_rotation(1, 0, 0, 1) == 0
+    assert _matrix_rotation(0, 1, -1, 0) == 90
+    assert _matrix_rotation(-1, 0, 0, -1) == 180
+    assert _matrix_rotation(0, -1, 1, 0) == 270
+
+
+def test_matrix_rotation_scale_normalized():
+    """A rotation combined with uniform scaling still yields the right angle."""
+    assert _matrix_rotation(0, 3, -3, 0) == 90
+    assert _matrix_rotation(0, -0.5, 0.5, 0) == 270
+
+
+def test_matrix_rotation_anamorphic_scale():
+    """Different per-axis scale (av_display_rotation_get normalizes each column)."""
+    assert _matrix_rotation(0, 2, -8, 0) == 90
+    assert _matrix_rotation(-4, 0, 0, -2) == 180
+
+
+def test_matrix_rotation_singular_is_zero():
+    """A singular matrix (zero-scale column) maps to no rotation, not a crash."""
+    assert _matrix_rotation(0, 0, 0, 0) == 0
+    assert _matrix_rotation(1, 0, 0, 0) == 0
+
+
+def test_matrix_rotation_snaps_to_nearest_quarter_turn():
+    """A slight skew (e.g. 2°) rounds to the nearest quarter turn."""
+    import math as _math
+
+    a, b = _math.cos(_math.radians(2)), _math.sin(_math.radians(2))
+    assert _matrix_rotation(a, b, -b, a) == 0
 
 
 def test_display_rotation_ignores_non_video_track():
