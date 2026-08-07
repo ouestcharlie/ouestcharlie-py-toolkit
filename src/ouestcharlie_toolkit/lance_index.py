@@ -70,6 +70,10 @@ PHOTO_SCHEMA = pa.schema(
         pa.field("focal_length", pa.float32(), nullable=True),
         pa.field("focal_length_35mm", pa.int32(), nullable=True),
         pa.field("lens_model", pa.string(), nullable=True),
+        # Video fields — null for photos (media_type defaults to "photo").
+        pa.field("media_type", pa.string(), nullable=True),
+        pa.field("duration_seconds", pa.float64(), nullable=True),
+        pa.field("video_codec", pa.string(), nullable=True),
         pa.field("metadata_version", pa.int64()),
         pa.field("xmp_version_token", pa.string()),
         # Thumbnail tile location — flat nullable columns to avoid null-struct ambiguity.
@@ -123,6 +127,9 @@ def photo_entry_to_row(
         "focal_length": s.get("focal_length"),
         "focal_length_35mm": s.get("focal_length_35mm"),
         "lens_model": s.get("lens_model"),
+        "media_type": s.get("media_type"),
+        "duration_seconds": s.get("duration_seconds"),
+        "video_codec": s.get("video_codec"),
         "metadata_version": entry.metadata_version,
         "xmp_version_token": entry.xmp_version_token,
         "thumbnail_avif_hash": thumbnail[0] if thumbnail is not None else None,
@@ -153,6 +160,9 @@ PHOTO_ENTRY_COLUMNS: list[str] = [
     "focal_length",
     "focal_length_35mm",
     "lens_model",
+    "media_type",
+    "duration_seconds",
+    "video_codec",
     "metadata_version",
     "xmp_version_token",
 ]

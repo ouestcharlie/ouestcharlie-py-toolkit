@@ -63,6 +63,11 @@ _KNOWN_ATTRS: frozenset[str] = frozenset(
         f"{{{_NS_OC}}}contentHash",
         f"{{{_NS_OC}}}schemaVersion",
         f"{{{_NS_OC}}}metadataVersion",
+        # Video fields (ouestcharlie namespace — not standard XMP)
+        f"{{{_NS_OC}}}mediaType",
+        f"{{{_NS_OC}}}durationSeconds",
+        f"{{{_NS_OC}}}videoCodec",
+        f"{{{_NS_OC}}}hasAudio",
         f"{{{_NS_EXIF}}}DateTimeOriginal",
         f"{{{_NS_EXIF}}}Make",
         f"{{{_NS_TIFF}}}Make",
@@ -347,27 +352,43 @@ class XmpStore:
         photo_path: str,
         force: bool = False,
     ) -> tuple[XmpSidecar, VersionToken, bool]:
-        """Return the XMP sidecar for a photo, creating it from EXIF if needed.
+        """Return the XMP sidecar for a photo or video, creating it if needed.
+
+        Dispatches on the file extension: photos (default) go through EXIF
+        extraction, videos through container/stream extraction. Both produce an
+        :class:`XmpSidecar`, so the sidecar format is uniform across media types.
 
         If an XMP sidecar already exists and ``force=False``, the existing
         sidecar is returned unchanged.  If the existing sidecar lacks
         ``ouestcharlie:contentHash`` (e.g. a third-party sidecar written by
-        Lightroom), the hash is computed from the photo bytes and stored on the
+        Lightroom), the hash is computed from the media file and stored on the
         returned sidecar object without writing back.
 
-        If no sidecar exists, or ``force=True``, EXIF is extracted from the
-        photo file, a new sidecar is written, and the new sidecar is returned.
+        If no sidecar exists, or ``force=True``, metadata is extracted from the
+        media file, a new sidecar is written, and the new sidecar is returned.
 
         Args:
-            photo_path: Path to the photo file (relative to backend root).
-            force: Re-extract EXIF and overwrite any existing sidecar.
+            photo_path: Path to the photo or video file (relative to backend root).
+            force: Re-extract metadata and overwrite any existing sidecar.
 
         Returns:
             ``(sidecar, version_token, created)`` where ``created`` is ``True``
             when a new sidecar was written to the backend.
         """
-        # Lazy import — photo.py does not import xmp.py, so no circular dep.
+        # Lazy imports — photo.py/video.py do not import xmp.py, so no circular dep.
         from .photo import Photo
+        from .video import VIDEO_SUFFIXES, Video
+
+        # Select the media handler by extension. Both expose create_identity();
+        # extraction differs (extract_exif vs extract_metadata).
+        if Path(photo_path).suffix.lower() in VIDEO_SUFFIXES:
+            video = Video(self.backend, photo_path)
+            extract = video.extract_metadata
+            create_identity = video.create_identity
+        else:
+            photo = Photo(self.backend, photo_path)
+            extract = photo.extract_exif
+            create_identity = photo.create_identity
 
         existing_sidecar: XmpSidecar | None = None
         existing_version: VersionToken | None = None
@@ -377,14 +398,12 @@ class XmpStore:
         if existing_sidecar is not None and not force:
             if not existing_sidecar.content_hash:
                 # Third-party sidecar without ouestcharlie:contentHash.
-                existing_sidecar.content_hash = await Photo(
-                    self.backend, photo_path
-                ).create_identity()
+                existing_sidecar.content_hash = await create_identity()
             assert existing_version is not None
             return existing_sidecar, existing_version, False
 
-        # Extract EXIF and write sidecar (new or forced overwrite).
-        sidecar = await Photo(self.backend, photo_path).extract_exif()
+        # Extract metadata and write sidecar (new or forced overwrite).
+        sidecar = await extract()
         if existing_version is not None:
             new_version = await self.write(photo_path, sidecar, existing_version)
         else:
@@ -473,6 +492,10 @@ def parse_xmp(xml: str) -> XmpSidecar:
     content_hash = desc.get(f"{oc}contentHash")
     schema_ver_s = desc.get(f"{oc}schemaVersion")
     metadata_ver_s = desc.get(f"{oc}metadataVersion")
+    media_type = desc.get(f"{oc}mediaType") or "photo"
+    duration_s = desc.get(f"{oc}durationSeconds")
+    video_codec = desc.get(f"{oc}videoCodec") or None
+    has_audio_s = desc.get(f"{oc}hasAudio")
     date_s = desc.get(f"{exif}DateTimeOriginal")
     make = desc.get(f"{exif}Make") or desc.get(f"{tiff}Make")
     model = desc.get(f"{exif}Model") or desc.get(f"{tiff}Model")
@@ -569,6 +592,10 @@ def parse_xmp(xml: str) -> XmpSidecar:
         focal_length=focal_length,
         focal_length_35mm=focal_length_35mm,
         lens_model=lens_model,
+        media_type=media_type,
+        duration_seconds=_rational_or_none(duration_s),
+        video_codec=video_codec,
+        has_audio=(has_audio_s == "true") if has_audio_s is not None else None,
         _extra=extra,
     )
 
@@ -613,6 +640,16 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
         desc.set(f"{oc}contentHash", sidecar.content_hash)
     desc.set(f"{oc}schemaVersion", str(sidecar.schema_version))
     desc.set(f"{oc}metadataVersion", str(sidecar.metadata_version))
+
+    # Video fields — only emitted for videos, so photo sidecars stay unchanged.
+    if sidecar.media_type != "photo":
+        desc.set(f"{oc}mediaType", sidecar.media_type)
+        if sidecar.duration_seconds is not None:
+            desc.set(f"{oc}durationSeconds", repr(sidecar.duration_seconds))
+        if sidecar.video_codec is not None:
+            desc.set(f"{oc}videoCodec", sidecar.video_codec)
+        if sidecar.has_audio is not None:
+            desc.set(f"{oc}hasAudio", "true" if sidecar.has_audio else "false")
 
     # Date (ISO 8601)
     _set_or_del(
