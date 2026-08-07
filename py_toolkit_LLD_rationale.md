@@ -20,7 +20,9 @@ All image decoding, orientation correction, resizing, and square-fitting is perf
 
 ### RAW and HEIC as compile-time features
 
-RAW decoding (`rawler`, pure Rust) and HEIC decoding (`libheif-rs`, requires system libheif) are Cargo features rather than hard dependencies. This keeps the default binary lean and avoids forcing `brew install libheif` on all developers. The binary returns a clear error message if a format is not compiled in, making the failure mode obvious.
+RAW decoding (`rawler`, pure Rust) and HEIC decoding (`libheif-rs`, requires system libheif) are Cargo features rather than hard dependencies. This keeps the default binary lean and avoids forcing `brew install libheif` on all developers building from source. The binary returns a clear error message if a format is not compiled in, making the failure mode obvious.
+
+Published wheels enable both features via CI regardless (`IMAGE_PROC_FEATURE_RAW=1 IMAGE_PROC_FEATURE_HEIC=1`), so end users installing from PyPI get HEIC support out of the box — the runtime system-dependency concern is solved by bundling `libheif`'s shared library into the wheel at build time (via `auditwheel`/`delocate`/DLL co-location, one per platform), not by leaving the feature uncompiled. `libheif` is a build-time-only dependency from the end user's perspective, same as `nasm`.
 
 `rawler` is pre-1.0 (API unstable); the version is pinned exactly (`=0.7.2`) to avoid surprise breakage.
 
