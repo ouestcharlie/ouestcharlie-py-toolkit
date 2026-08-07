@@ -1,5 +1,6 @@
 """Tests for the Video domain class."""
 
+import struct
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from ouestcharlie_toolkit import VIDEO_SUFFIXES, Video, video_identity_hash
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.video import (
     _container_tag,
+    _display_rotation,
     _parse_creation_time,
     _parse_iso6709,
     _read_moov_atom,
@@ -183,3 +185,63 @@ def test_video_suffixes():
     assert ".mov" in VIDEO_SUFFIXES
     assert ".mp4" in VIDEO_SUFFIXES
     assert ".jpg" not in VIDEO_SUFFIXES
+
+
+# ---------------------------------------------------------------------------
+# display rotation (tkhd matrix parsing)
+# ---------------------------------------------------------------------------
+
+
+def _box(box_type: bytes, payload: bytes) -> bytes:
+    return struct.pack(">I", 8 + len(payload)) + box_type + payload
+
+
+# Rotation matrices as (a, b, c, d) in 16.16 fixed point; u=v=0, w=0x40000000.
+_MATRICES = {
+    0: (65536, 0, 0, 65536),
+    90: (0, 65536, -65536, 0),
+    180: (-65536, 0, 0, -65536),
+    270: (0, -65536, 65536, 0),
+}
+
+
+def _tkhd(rotation: int) -> bytes:
+    a, b, c, d = _MATRICES[rotation]
+    matrix = struct.pack(">9i", a, b, 0, c, d, 0, 0, 0, 0x40000000)
+    # version/flags(4) + v0 timing(20) + reserved/layer/alt/vol(16) + matrix(36) + w/h(8)
+    payload = b"\x00" * 4 + b"\x00" * 20 + b"\x00" * 16 + matrix + b"\x00" * 8
+    return _box(b"tkhd", payload)
+
+
+def _hdlr(handler: bytes) -> bytes:
+    # version/flags(4) + pre_defined(4) + handler_type(4) + reserved(12) + name(1)
+    payload = b"\x00" * 4 + b"\x00" * 4 + handler + b"\x00" * 12 + b"\x00"
+    return _box(b"hdlr", payload)
+
+
+def _moov(rotation: int, handler: bytes = b"vide") -> bytes:
+    trak = _box(b"trak", _tkhd(rotation) + _box(b"mdia", _hdlr(handler)))
+    return _box(b"moov", trak)
+
+
+def test_display_rotation_all_orientations():
+    for deg in (0, 90, 180, 270):
+        assert _display_rotation(_moov(deg)) == deg
+
+
+def test_display_rotation_ignores_non_video_track():
+    # A rotated audio track must not be reported as the video rotation.
+    assert _display_rotation(_moov(90, handler=b"soun")) == 0
+
+
+def test_display_rotation_absent_is_zero():
+    assert _display_rotation(b"\x00\x00\x00\x08moov") == 0
+
+
+@pytest.mark.asyncio
+async def test_extract_metadata_no_rotation_keeps_dims():
+    """A synthesized (unrotated) video keeps its native landscape dimensions."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_sample_video(Path(tmpdir) / "clip.mp4")
+        sidecar = await Video(LocalBackend(root=tmpdir), "clip.mp4").extract_metadata()
+    assert (sidecar.width, sidecar.height) == (64, 48)

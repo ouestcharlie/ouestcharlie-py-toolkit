@@ -10,7 +10,9 @@ stays uniform across media types.
 from __future__ import annotations
 
 import logging
+import math
 import struct
+from collections.abc import Iterator
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -91,6 +93,64 @@ def _read_moov_atom(path: Path) -> bytes:
     raise ValueError(f"No moov atom found in {path} — not a valid MP4/MOV container")
 
 
+def _iter_boxes(buf: bytes, start: int, end: int) -> Iterator[tuple[bytes, int, int]]:
+    """Yield ``(type, box_start, box_end)`` for each ISO-BMFF box in ``buf[start:end]``."""
+    off = start
+    while off + 8 <= end:
+        size = struct.unpack(">I", buf[off : off + 4])[0]
+        box_type = buf[off + 4 : off + 8]
+        if size == 1:  # 64-bit extended size
+            if off + 16 > end:
+                break
+            size = struct.unpack(">Q", buf[off + 8 : off + 16])[0]
+        if size == 0:  # extends to end
+            size = end - off
+        if size < 8:
+            break
+        yield box_type, off, min(off + size, end)
+        off += size
+
+
+def _tkhd_rotation(buf: bytes, start: int, end: int) -> int:
+    """Extract the display rotation (0/90/180/270) from a ``tkhd`` box's 3×3 matrix.
+
+    The matrix is located by its ``w`` element (``0x40000000`` in 2.30 fixed
+    point) with zero ``u``/``v`` terms — robust to the version-dependent field
+    layout that precedes it.
+    """
+    for off in range(start, min(end, start + 80), 4):
+        if off + 36 > len(buf):
+            break
+        m = struct.unpack(">9i", buf[off : off + 36])
+        if m[8] == 0x40000000 and m[2] == 0 and m[5] == 0:
+            a, b = m[0] / 65536, m[1] / 65536
+            return round(math.degrees(math.atan2(b, a))) % 360
+    return 0
+
+
+def _display_rotation(moov: bytes) -> int:
+    """Return the video track's display rotation in degrees (0/90/180/270).
+
+    Walks ``moov`` for the ``trak`` whose media handler is ``vide`` and reads its
+    ``tkhd`` transformation matrix. Returns 0 when absent or unrotated.
+    """
+    for box_type, s, e in _iter_boxes(moov, 8, len(moov)):
+        if box_type != b"trak":
+            continue
+        handler: bytes | None = None
+        rotation = 0
+        for t2, s2, e2 in _iter_boxes(moov, s + 8, e):
+            if t2 == b"tkhd":
+                rotation = _tkhd_rotation(moov, s2 + 8, e2)
+            elif t2 == b"mdia":
+                for t3, s3, _e3 in _iter_boxes(moov, s2 + 8, e2):
+                    if t3 == b"hdlr":
+                        handler = moov[s3 + 16 : s3 + 20]
+        if handler == b"vide":
+            return rotation
+    return 0
+
+
 def _parse_creation_time(raw: str | None) -> datetime | None:
     """Parse a container ``creation_time`` tag (ISO-8601, often trailing 'Z')."""
     if not raw:
@@ -169,14 +229,21 @@ class Video:
         return self._content_hash
 
     def extract_cover_frame(self, local_path: Path | None = None) -> Image.Image:
-        """Decode a single representative cover frame as a PIL image.
+        """Decode a single representative cover frame as an upright PIL image.
 
         Seeks ~10% into the clip and decodes one frame — the only frame ever
-        decoded (no full-video decode, no audio decode).
+        decoded (no full-video decode, no audio decode). PyAV does not apply the
+        container's display-matrix rotation, so it is applied here: the returned
+        image is oriented for display, matching what a video player would show.
         """
         if local_path is None:
             raise ValueError("local_path is required")
-        return self._decode_cover_frame(local_path)
+        image = self._decode_cover_frame(local_path)
+        rotation = _display_rotation(_read_moov_atom(local_path))
+        if rotation:
+            # Display matrix encodes a clockwise rotation; PIL rotate() is CCW.
+            image = image.rotate(-rotation, expand=True)
+        return image
 
     async def extract_metadata(self) -> XmpSidecar:
         """Extract container/stream metadata into an XmpSidecar.
@@ -212,6 +279,14 @@ class Video:
             metadata = dict(container.metadata)
             cover = self._decode_cover_frame_from_container(container)
 
+        # Store display-oriented dimensions: a 90°/270° rotated video is stored
+        # landscape but displays portrait, so swap to match the cover frame the
+        # gallery renders and uses for aspect ratio.
+        if _display_rotation(header) in (90, 270) and width is not None and height is not None:
+            width, height = height, width
+
+        # Identity hashes the raw (unrotated) decoded frame, so it stays stable
+        # regardless of the rotation-correction logic above.
         self._content_hash = video_identity_hash(header, cover)
 
         date_taken = _parse_creation_time(_container_tag(metadata, "creation_time"))
