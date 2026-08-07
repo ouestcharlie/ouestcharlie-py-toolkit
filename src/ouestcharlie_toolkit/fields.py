@@ -180,4 +180,27 @@ PHOTO_FIELDS: list[FieldDef] = [
         entry_attr="partition",
         label="Directory",
     ),
+    # Video fields. Present on every entry (media_type defaults to "photo"); the
+    # video-only ones are null for photos and drive the gallery's media branching.
+    FieldDef(
+        name="mediaType",
+        type=FieldType.STRING_MATCH,
+        entry_attr="media_type",
+        sidecar_attr="media_type",
+        label="Media type",
+    ),
+    FieldDef(
+        name="durationSeconds",
+        type=FieldType.FLOAT_RANGE,
+        entry_attr="duration_seconds",
+        sidecar_attr="duration_seconds",
+        label="Duration (s)",
+    ),
+    FieldDef(
+        name="videoCodec",
+        type=FieldType.STRING_MATCH,
+        entry_attr="video_codec",
+        sidecar_attr="video_codec",
+        label="Video codec",
+    ),
 ]

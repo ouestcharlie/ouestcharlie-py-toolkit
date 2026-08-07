@@ -232,6 +232,12 @@ class XmpSidecar:
     focal_length: float | None = None  # exif:FocalLength in mm
     focal_length_35mm: int | None = None  # exif:FocalLengthIn35mmFilm
     lens_model: str | None = None  # aux:Lens / exifEX:LensModel / Exif.Photo.LensModel
+    # Video fields. media_type defaults to "photo" so every existing photo sidecar
+    # keeps its meaning without a rewrite; the video-only fields stay None for photos.
+    media_type: str = "photo"  # "photo" | "video"
+    duration_seconds: float | None = None  # container duration in seconds
+    video_codec: str | None = None  # video stream codec name (e.g. "h264", "hevc")
+    has_audio: bool | None = None  # whether the container carries an audio stream
     # Unknown XMP attributes and child elements from third-party apps (Lightroom, darktable, …).
     # Keys use Clark notation: "{ns_uri}localname".
     # Values are either plain strings (for simple attributes) or XML-serialized strings (for

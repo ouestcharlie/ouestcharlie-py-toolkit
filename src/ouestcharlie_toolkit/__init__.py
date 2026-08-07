@@ -18,6 +18,7 @@ from .schema import (
     XmpSidecar,
 )
 from .server import AgentBase
+from .video import VIDEO_SUFFIXES, Video, video_identity_hash
 from .xmp import XmpStore, xmp_path_for
 
 __version__ = "0.1.0"
@@ -28,7 +29,10 @@ __all__ = [
     "Backend",
     "ManifestStore",
     "Photo",
+    "Video",
     "XmpStore",
+    "VIDEO_SUFFIXES",
+    "video_identity_hash",
     # Data models
     "PhotoEntry",
     "ManifestSummary",
