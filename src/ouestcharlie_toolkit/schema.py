@@ -109,7 +109,10 @@ class PhotoEntry:
 
 
 class ManifestSummary:
-    """Aggregate statistics over a set of photos (count plus per-field ranges).
+    """Aggregate statistics over a set of media items (count plus per-field ranges).
+
+    ``media_count`` (JSON ``mediaCount``) counts all matching items — photos and
+    videos alike.
 
     Per-field statistics are stored in ``_stats`` as typed dicts that mirror
     the JSON serialisation format:
@@ -126,11 +129,11 @@ class ManifestSummary:
 
     def __init__(
         self,
-        photo_count: int = 0,
+        media_count: int = 0,
         _stats: dict[str, dict[str, Any]] | None = None,
         _extra: dict[str, Any] | None = None,
     ) -> None:
-        self.photo_count = photo_count
+        self.media_count = media_count
         self._stats: dict[str, dict[str, Any]] = dict(_stats) if _stats else {}
         self._extra: dict[str, Any] = dict(_extra) if _extra is not None else {}
 
@@ -142,10 +145,10 @@ class ManifestSummary:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ManifestSummary):
             return NotImplemented
-        return self.photo_count == other.photo_count and self._stats == other._stats
+        return self.media_count == other.media_count and self._stats == other._stats
 
     def __repr__(self) -> str:
-        parts = [f"photo_count={self.photo_count}"]
+        parts = [f"media_count={self.media_count}"]
         for k, v in self._stats.items():
             parts.append(f"{k}={v!r}")
         return f"ManifestSummary({', '.join(parts)})"
@@ -268,7 +271,7 @@ class XmpSidecar:
 
 def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
     d: dict[str, Any] = {
-        "photoCount": s.photo_count,
+        "mediaCount": s.media_count,
     }
     # _stats already mirrors the JSON structure; only datetime and bytes need conversion.
     for name, stat in s._stats.items():
@@ -282,14 +285,15 @@ def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
             if stat.get("missing"):
                 out["missing"] = stat["missing"]
             d[name] = out
-        elif t == "int_range" or t == "tag_facets":
+        elif t in ("int_range", "float_range", "tag_facets", "string_facets", "bool_counts"):
+            # Already JSON-native (numbers, strings, and count dicts).
             d[name] = stat
     d.update(s._extra)
     return d
 
 
 def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
-    known_keys = {"photoCount", "hashes"}
+    known_keys = {"mediaCount", "hashes"}
     stats: dict[str, dict[str, Any]] = {}
     for fd in PHOTO_FIELDS:
         known_keys.add(fd.name)
@@ -314,6 +318,25 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
             if stat.get("missing"):
                 parsed["missing"] = stat["missing"]
             stats[fd.name] = parsed
+        elif fd.summary_range and fd.type is FieldType.FLOAT_RANGE:
+            parsed = {
+                "type": "float_range",
+                "min": stat.get("min"),
+                "max": stat.get("max"),
+            }
+            if stat.get("missing"):
+                parsed["missing"] = stat["missing"]
+            stats[fd.name] = parsed
+        elif fd.summary_facet and stat.get("type") == "string_facets":
+            counts = stat.get("counts")
+            if isinstance(counts, dict):
+                stats[fd.name] = {"type": "string_facets", "counts": dict(counts)}
+        elif fd.type is FieldType.BOOL and stat.get("type") == "bool_counts":
+            stats[fd.name] = {
+                "type": "bool_counts",
+                "true": stat.get("true", 0),
+                "false": stat.get("false", 0),
+            }
     hashes_stat = d.get("hashes")
     if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
         stats["hashes"] = {
@@ -322,7 +345,7 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
         }
     extra = {k: v for k, v in d.items() if k not in known_keys}
     return ManifestSummary(
-        photo_count=d.get("photoCount", 0),
+        media_count=d.get("mediaCount", 0),
         _stats=stats,
         _extra=extra,
     )

@@ -74,6 +74,7 @@ PHOTO_SCHEMA = pa.schema(
         pa.field("media_type", pa.string(), nullable=True),
         pa.field("duration_seconds", pa.float64(), nullable=True),
         pa.field("video_codec", pa.string(), nullable=True),
+        pa.field("has_audio", pa.bool_(), nullable=True),
         pa.field("metadata_version", pa.int64()),
         pa.field("xmp_version_token", pa.string()),
         # Thumbnail tile location — flat nullable columns to avoid null-struct ambiguity.
@@ -130,6 +131,7 @@ def photo_entry_to_row(
         "media_type": s.get("media_type"),
         "duration_seconds": s.get("duration_seconds"),
         "video_codec": s.get("video_codec"),
+        "has_audio": s.get("has_audio"),
         "metadata_version": entry.metadata_version,
         "xmp_version_token": entry.xmp_version_token,
         "thumbnail_avif_hash": thumbnail[0] if thumbnail is not None else None,
@@ -163,6 +165,7 @@ PHOTO_ENTRY_COLUMNS: list[str] = [
     "media_type",
     "duration_seconds",
     "video_codec",
+    "has_audio",
     "metadata_version",
     "xmp_version_token",
 ]

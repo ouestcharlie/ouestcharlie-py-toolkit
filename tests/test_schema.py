@@ -146,7 +146,7 @@ def test_from_sidecar_none_fields_present():
 def test_partition_summary():
     """Test ManifestSummary creation with date and rating ranges."""
     summary = ManifestSummary(
-        photo_count=42,
+        media_count=42,
         _stats={
             "dateTaken": {
                 "type": "date_range",
@@ -157,7 +157,7 @@ def test_partition_summary():
         },
     )
 
-    assert summary.photo_count == 42
+    assert summary.media_count == 42
     assert summary.dateTaken["min"] == datetime(2024, 7, 1)
     assert summary.dateTaken["max"] == datetime(2024, 7, 31)
     assert summary.rating["min"] == 2
@@ -166,14 +166,14 @@ def test_partition_summary():
 
 def test_partition_summary_rating_defaults_none():
     """rating stat is absent (None) when not provided."""
-    summary = ManifestSummary(photo_count=10)
+    summary = ManifestSummary(media_count=10)
     assert summary.rating is None
 
 
 def test_partition_summary_rating_round_trip():
     """rating and date survive serialize → deserialize with nested stat format."""
     summary = ManifestSummary(
-        photo_count=3,
+        media_count=3,
         _stats={
             "dateTaken": {
                 "type": "date_range",
@@ -200,6 +200,31 @@ def test_partition_summary_rating_round_trip():
     assert restored.rating["max"] == 5
     assert restored.dateTaken["min"] == datetime(2024, 1, 1)
     assert restored.dateTaken["max"] == datetime(2024, 12, 31)
+
+
+def test_partition_summary_video_stats_round_trip():
+    """Video stats (float_range, string_facets, bool_counts) survive round-trip."""
+    from ouestcharlie_toolkit.schema import _summary_from_dict, _summary_to_dict
+
+    summary = ManifestSummary(
+        media_count=4,
+        _stats={
+            "durationSeconds": {"type": "float_range", "min": 12.5, "max": 48.0, "missing": 1},
+            "mediaType": {"type": "string_facets", "counts": {"photo": 3, "video": 1}},
+            "videoCodec": {"type": "string_facets", "counts": {"h264": 1}},
+            "hasAudio": {"type": "bool_counts", "true": 1, "false": 0},
+        },
+    )
+    d = _summary_to_dict(summary)
+    assert d["durationSeconds"] == {"type": "float_range", "min": 12.5, "max": 48.0, "missing": 1}
+    assert d["mediaType"] == {"type": "string_facets", "counts": {"photo": 3, "video": 1}}
+    assert d["hasAudio"] == {"type": "bool_counts", "true": 1, "false": 0}
+
+    restored = _summary_from_dict(d)
+    assert restored.durationSeconds == summary.durationSeconds
+    assert restored.mediaType == summary.mediaType
+    assert restored.videoCodec == summary.videoCodec
+    assert restored.hasAudio == summary.hasAudio
 
 
 # ---------------------------------------------------------------------------
