@@ -130,3 +130,6 @@ dmypy.json
 # macOS
 .DS_Store
 src/ouestcharlie_toolkit/bin/*
+
+# Local dev env (temporary image-proc HEIC/RAW build override)
+.envrc

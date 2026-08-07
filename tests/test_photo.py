@@ -1,11 +1,15 @@
 """Tests for the Photo domain class."""
 
+import io
 import logging
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import pyexiv2
 import pytest
+from PIL import Image as PILImage
+from PIL.TiffImagePlugin import IFDRational
 
 from ouestcharlie_toolkit import Photo
 from ouestcharlie_toolkit.backends.local import LocalBackend
@@ -410,6 +414,173 @@ async def test_extract_exif_matches_ref(image_path, ref_xmp_path):
         if our_val != ref_val:
             mismatches[key] = (our_val, ref_val)
     assert mismatches == {}, f"_extra value mismatches: {mismatches}"
+
+
+# ---------------------------------------------------------------------------
+# HEIC/HEIF EXIF extraction (pillow-heif path)
+# ---------------------------------------------------------------------------
+
+
+def _make_heic_bytes(
+    exif_tags: dict[int, object], gps_ifd: Mapping[int, object] | None = None
+) -> bytes:
+    """Build a minimal in-memory HEIC file with the given numeric EXIF tags.
+
+    Generated fresh per test (rather than a committed binary fixture) so the
+    exact tag values under test are visible at the call site.
+    """
+    import pillow_heif
+
+    pil_img = PILImage.new("RGB", (16, 12), color=(200, 50, 50))
+    exif = PILImage.Exif()
+    for tag_id, value in exif_tags.items():
+        exif[tag_id] = value
+    if gps_ifd is not None:
+        exif[34853] = gps_ifd  # GPSInfo IFD pointer tag
+
+    heif_file = pillow_heif.from_pillow(pil_img)
+    buf = io.BytesIO()
+    heif_file.save(buf, format="HEIF", exif=exif, quality=50)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_returns_sidecar():
+    heic_bytes = _make_heic_bytes(
+        {
+            271: "Acme",
+            272: "Widget9000",
+            36867: "2026:02:21 13:03:10",
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert isinstance(sidecar, XmpSidecar)
+    assert sidecar.camera_make == "Acme"
+    assert sidecar.camera_model == "Widget9000"
+    assert sidecar.date_taken is not None
+    assert sidecar.date_taken.replace(tzinfo=None).isoformat() == "2026-02-21T13:03:10"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_gps():
+    gps_ifd = {
+        1: "N",
+        2: (IFDRational(48, 1), IFDRational(52, 1), IFDRational(1234, 100)),
+        3: "E",
+        4: (IFDRational(2, 1), IFDRational(21, 1), IFDRational(345, 100)),
+    }
+    heic_bytes = _make_heic_bytes({271: "Acme"}, gps_ifd=gps_ifd)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.gps is not None
+    lat, lon = sidecar.gps
+    assert lat == pytest.approx(48.0 + 52 / 60 + 12.34 / 3600, abs=1e-6)
+    assert lon == pytest.approx(2.0 + 21 / 60 + 3.45 / 3600, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_offset_time_not_swapped():
+    """Regression test: 36880 is OffsetTime, 36881 is OffsetTimeOriginal — an earlier
+    draft of _HEIF_TAG_MAP had these two tag IDs swapped."""
+    heic_bytes = _make_heic_bytes(
+        {
+            36867: "2026:02:21 13:03:10",
+            36881: "+02:00",  # OffsetTimeOriginal — must be picked up, not OffsetTime
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.date_taken is not None
+    offset = sidecar.date_taken.utcoffset()
+    assert offset is not None
+    assert offset.total_seconds() == 2 * 3600
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_description_and_keywords():
+    """ImageDescription/XPKeywords/XPSubject are read directly by extract_exif(), not
+    through _map_exif_extra — a field missing from _HEIF_TAG_MAP would silently drop
+    description/tags for every HEIC photo."""
+    xp_keywords = "beach;sunset;".encode("utf-16-le") + b"\x00\x00"
+    heic_bytes = _make_heic_bytes(
+        {
+            270: "A day at the beach",
+            40094: xp_keywords,
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.description == "A day at the beach"
+    assert sidecar.tags == ["beach", "sunset"]
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_dimensions_from_image_when_no_exif_tags():
+    """HEIC files often carry no PixelXDimension/ImageWidth EXIF tags, so width/height
+    must come from the decoded image size, not EXIF alone."""
+    heic_bytes = _make_heic_bytes({271: "Acme"})  # no dimension tags
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.width == 16
+    assert sidecar.height == 12
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_dimensions_use_image_size_over_exif_tags():
+    """Regression: the decoded img.size must win over any PixelXDimension/ImageWidth
+    EXIF tag. PIL returns SHORT-type tags as raw bytes, so a present-but-mangled EXIF
+    dimension used to overwrite the correct size with a non-numeric string → null."""
+    heic_bytes = _make_heic_bytes(
+        {
+            40962: 9999,  # PixelXDimension — bogus, must not win over real 16x12
+            40963: 8888,  # PixelYDimension
+            256: 7777,  # ImageWidth
+            257: 6666,  # ImageLength
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.width == 16
+    assert sidecar.height == 12
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_dimensions_account_for_orientation():
+    """pillow-heif renders HEIC upright and resets EXIF orientation to 1, so width/height
+    must be swapped to the display dimensions when the original orientation is a 90°/270°
+    rotation. Base image is 16x12 landscape; orientation 6 → displayed as 12x16 portrait."""
+    heic_bytes = _make_heic_bytes({274: 6})  # Orientation=6 (rotate 90° CW)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    # Orientation stays 1 (already applied by the decoder), dims are display-oriented.
+    assert sidecar.orientation in (None, 1)
+    assert sidecar.width == 12
+    assert sidecar.height == 16
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_unrecognized_suffix_case_insensitive():
+    heic_bytes = _make_heic_bytes({271: "Acme"})
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.HEIC").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.HEIC").extract_exif()
+
+    assert sidecar.camera_make == "Acme"
 
 
 # ---------------------------------------------------------------------------
