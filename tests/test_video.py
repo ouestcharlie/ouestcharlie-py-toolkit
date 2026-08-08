@@ -13,8 +13,11 @@ from ouestcharlie_toolkit import VIDEO_SUFFIXES, Video, video_identity_hash
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.video import (
     _container_tag,
+    _date_from_filename,
+    _datetime_from_filename,
     _display_rotation,
     _matrix_rotation,
+    _offset_from_filename,
     _parse_creation_time,
     _parse_iso6709,
     _read_moov_atom,
@@ -218,12 +221,102 @@ def test_resolve_video_time_gps_derived_offset():
     assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2020, 7, 15, 18, 0, 0)
 
 
-def test_resolve_video_time_fallback_is_naive():
-    # No Apple tag, no GPS: UTC value exposed as naive local, offset unknown.
+def test_resolve_video_time_samsung_offset_tag():
+    # Samsung/Android record the capture offset in a vendor tag (no Apple tag, no GPS).
+    # Regression: a 12:15 local clip recorded at UTC+1 must not land as 11:15.
+    meta = {
+        "creation_time": "2026-01-11T11:15:45.000000Z",
+        "com.samsung.android.utc_offset": "+0100",
+    }
+    dt = _resolve_video_time(meta, gps=None)
+    assert dt.utcoffset().total_seconds() == 3600
+    assert dt.replace(tzinfo=None) == datetime(2026, 1, 11, 12, 15, 45)  # local wall-clock
+    assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2026, 1, 11, 11, 15, 45)
+
+
+def test_offset_from_filename_winter_and_summer():
+    # Local wall-clock in the name vs UTC creation_time -> the capture offset.
+    # A few seconds of slack (name = recording start, container = finalize) is fine.
+    tz = _offset_from_filename("20230101_164403.mp4", datetime(2023, 1, 1, 15, 44, 13, tzinfo=UTC))
+    assert tz.utcoffset(None).total_seconds() == 3600  # +01:00 (France winter)
+    tz = _offset_from_filename("20220830_131551.mp4", datetime(2022, 8, 30, 11, 16, 25, tzinfo=UTC))
+    assert tz.utcoffset(None).total_seconds() == 2 * 3600  # +02:00 (France summer DST)
+
+
+def test_offset_from_filename_rejects_untrustworthy():
+    utc = datetime(2023, 1, 1, 12, 0, 0, tzinfo=UTC)
+    assert _offset_from_filename(None, utc) is None
+    assert _offset_from_filename("clip.mp4", utc) is None  # no timestamp
+    assert _offset_from_filename("VID_00000000_000000.mp4", utc) is None  # unparseable date
+    # 8 min past the hour -> 7 min from the nearest quarter-hour, beyond tolerance.
+    assert _offset_from_filename("20230101_120800.mp4", utc) is None
+    # Beyond the valid ±14h UTC-offset range.
+    assert _offset_from_filename("20230102_120000.mp4", utc) is None
+
+
+def test_resolve_video_time_filename_offset():
+    # No Apple tag, no offset tag, no GPS — but the filename carries local time.
+    meta = {"creation_time": "2026-01-11T11:15:45.000000Z"}
+    dt = _resolve_video_time(meta, gps=None, filename="20260111_121541.mp4")
+    assert dt.utcoffset().total_seconds() == 3600
+    assert dt.replace(tzinfo=None) == datetime(2026, 1, 11, 12, 15, 45)  # local wall-clock
+    assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2026, 1, 11, 11, 15, 45)
+
+
+def test_resolve_video_time_vendor_tag_beats_filename():
+    # An explicit offset tag is authoritative even when the filename disagrees.
+    meta = {
+        "creation_time": "2026-01-11T11:15:45.000000Z",
+        "com.samsung.android.utc_offset": "+0100",
+    }
+    dt = _resolve_video_time(meta, gps=None, filename="20260111_131541.mp4")  # name says +02:00
+    assert dt.utcoffset().total_seconds() == 3600  # tag (+01:00) wins
+
+
+def test_datetime_from_filename():
+    assert _datetime_from_filename("VID_20220701_123033.mp4") == datetime(2022, 7, 1, 12, 30, 33)
+    assert _datetime_from_filename("20260111121541.mp4") == datetime(2026, 1, 11, 12, 15, 41)
+    assert _datetime_from_filename(None) is None
+    assert _datetime_from_filename("clip.mp4") is None
+    assert _datetime_from_filename("VID_00000000_000000.mp4") is None  # invalid date
+
+
+def test_resolve_video_time_filename_only_naive():
+    # Re-encodes (e.g. Google Photos) strip creation_time but keep the local
+    # wall-clock in the name: naive local date_taken, offset unknown.
+    dt = _resolve_video_time({"encoder": "Google"}, gps=None, filename="VID_20220701_123033.mp4")
+    assert dt.tzinfo is None
+    assert dt == datetime(2022, 7, 1, 12, 30, 33)
+
+
+def test_date_from_filename():
+    # WhatsApp: date but no time (WA0009 is a message sequence, not a clock).
+    assert _date_from_filename("VID-20250317-WA0009.mp4") == datetime(2025, 3, 17, 0, 0, 0)
+    assert _date_from_filename(None) is None
+    assert _date_from_filename("clip.mp4") is None
+    assert _date_from_filename("20250230.mp4") is None  # invalid calendar date
+    # A full datetime name must not be picked up as a bare date here.
+    assert _date_from_filename("20260111_121541.mp4") is None
+
+
+def test_resolve_video_time_date_only_filename():
+    # No creation_time, name has a date but no time -> midnight local, offset unknown.
+    dt = _resolve_video_time({"encoder": "Google"}, gps=None, filename="VID-20250317-WA0009.mp4")
+    assert dt.tzinfo is None
+    assert dt == datetime(2025, 3, 17, 0, 0, 0)
+
+
+def test_resolve_video_time_none_without_creation_or_name():
+    assert _resolve_video_time({"encoder": "Google"}, gps=None, filename="clip.mp4") is None
+
+
+def test_resolve_video_time_fallback_keeps_utc():
+    # No Apple tag, no offset tag, no GPS: creation_time is UTC by spec, so the
+    # timezone is known (UTC) and kept — even though the true local offset isn't.
     meta = {"creation_time": "2020-07-15T18:00:00.000000Z"}
     dt = _resolve_video_time(meta, gps=None)
-    assert dt.tzinfo is None
-    assert dt == datetime(2020, 7, 15, 18, 0, 0)
+    assert dt.utcoffset().total_seconds() == 0  # tz-aware UTC, not naive
+    assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2020, 7, 15, 18, 0, 0)
 
 
 def test_resolve_video_time_none_when_no_timestamp():

@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import struct
 from collections.abc import Iterator
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import TYPE_CHECKING
 
 from .backend import Backend
@@ -193,8 +194,6 @@ def _parse_iso6709(raw: str | None) -> tuple[float, float] | None:
     """
     if not raw:
         return None
-    import re
-
     nums = re.findall(r"[+-]\d+(?:\.\d+)?", raw)
     if len(nums) < 2:
         return None
@@ -203,6 +202,28 @@ def _parse_iso6709(raw: str | None) -> tuple[float, float] | None:
     except ValueError:
         _log.debug("Could not parse ISO-6709 location %r", raw, exc_info=True)
         return None
+
+
+def _parse_utc_offset(raw: str | None) -> timezone | None:
+    """Parse a fixed UTC offset string (e.g. '+0100', '-08:00', 'Z') to a timezone.
+
+    Android vendors record the capture offset in a container tag
+    (``com.samsung.android.utc_offset`` = ``+0100``).
+    Returns None when the value is absent or unparseable.
+    """
+    if not raw:
+        return None
+    raw = raw.strip()
+    if raw in ("Z", "+0000", "+00:00", "-0000", "-00:00"):
+        return UTC
+    m = re.fullmatch(r"([+-])(\d{2}):?(\d{2})", raw)
+    if m is None:
+        return None
+    sign = 1 if m.group(1) == "+" else -1
+    minutes = sign * (int(m.group(2)) * 60 + int(m.group(3)))
+    if abs(minutes) > 14 * 60:  # outside the valid UTC-offset range
+        return None
+    return timezone(timedelta(minutes=minutes))
 
 
 def _timezone_for(gps: tuple[float, float]) -> tzinfo | None:
@@ -230,21 +251,99 @@ def _timezone_for(gps: tuple[float, float]) -> tzinfo | None:
         return None
 
 
+# Local wall-clock encoded in camera filenames, e.g. "20260111_121541.mp4" or
+# "VID_20220830-131551.mp4". Separator between date and time is optional.
+_FILENAME_DATETIME = re.compile(r"(\d{8})[_-]?(\d{6})")
+
+# Date only, no time — e.g. WhatsApp "VID-20250317-WA0009.mp4" (the WA suffix is a
+# message sequence, not a time). The 8 digits must not be immediately followed by 6
+# more (that would be a full datetime, handled above).
+_FILENAME_DATE = re.compile(r"(?<!\d)(\d{8})(?![_-]?\d{6})")
+
+# A filename-derived offset must land within this many minutes of a whole
+# quarter-hour to be trusted (real zone offsets are all multiples of 15 min; the
+# few-second slack between "recording started" in the name and the container's
+# finalize time stays well under this).
+_FILENAME_OFFSET_TOLERANCE_MIN = 5
+
+
+def _datetime_from_filename(filename: str | None) -> datetime | None:
+    """Parse a naive local datetime from a ``YYYYMMDD_HHMMSS`` camera filename, or None."""
+    if not filename:
+        return None
+    m = _FILENAME_DATETIME.search(filename)
+    if m is None:
+        return None
+    try:
+        return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+
+def _date_from_filename(filename: str | None) -> datetime | None:
+    """Parse a date-only ``YYYYMMDD`` filename to midnight local, or None.
+
+    For names that carry a date but no time (e.g. WhatsApp ``VID-20250317-WA…``).
+    Time is unrecoverable, so ``date_taken`` lands at 00:00:00 — enough to group
+    on the correct calendar day.
+    """
+    if not filename:
+        return None
+    m = _FILENAME_DATE.search(filename)
+    if m is None:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d")
+    except ValueError:
+        return None
+
+
+def _offset_from_filename(filename: str | None, utc_dt: datetime) -> timezone | None:
+    """Derive a fixed UTC offset from a timestamped filename against the UTC instant.
+
+    Many camera apps name clips with the **local** wall-clock
+    (``YYYYMMDD_HHMMSS``) while the container's ``creation_time`` is UTC. Their
+    difference is the capture offset. Only trusted when it rounds to a whole
+    quarter-hour within :data:`_FILENAME_OFFSET_TOLERANCE_MIN` and stays inside
+    the valid ±14h UTC-offset range; otherwise (a renamed file, a name that isn't
+    local time) returns None so the caller falls through to the UTC fallback.
+    """
+    local = _datetime_from_filename(filename)
+    if local is None:
+        return None
+    diff_min = (local - utc_dt.astimezone(UTC).replace(tzinfo=None)).total_seconds() / 60
+    rounded = round(diff_min / 15) * 15
+    if abs(diff_min - rounded) > _FILENAME_OFFSET_TOLERANCE_MIN or abs(rounded) > 14 * 60:
+        return None
+    return timezone(timedelta(minutes=rounded))
+
+
 def _resolve_video_time(
-    metadata: dict[str, str], gps: tuple[float, float] | None
+    metadata: dict[str, str],
+    gps: tuple[float, float] | None,
+    filename: str | None = None,
 ) -> datetime | None:
     """Resolve a video's ``date_taken`` as local wall-clock.
 
-    Container ``creation_time`` is defined as UTC, but ``date_taken`` is naive
-    local wall-clock everywhere else in the system (see OEC-18). Return a
-    timezone-aware datetime carrying local time **and** the resolved offset when
-    the offset is known — downstream indexing derives the UTC instant and offset
-    from it — and a naive datetime when the offset cannot be determined.
+    Returns a timezone-aware datetime whenever a UTC ``creation_time`` is present
+    (its timezone is known even when the local offset is not), and a naive
+    datetime when only a filename timestamp is available. Downstream indexing
+    (OEC-18) derives the naive-local ``date_taken``, the UTC instant, and the
+    offset from it. Returns None only when no timestamp exists at all.
 
     Precedence:
       1. Apple ``com.apple.quicktime.creationdate`` — already local + offset.
-      2. UTC ``creation_time`` + GPS location — offset derived from coordinates.
-      3. UTC ``creation_time`` alone — treated as naive local (offset unknown).
+      2. UTC ``creation_time`` + explicit vendor offset tag (e.g. Samsung/Android).
+      3. UTC ``creation_time`` + GPS location — offset derived from coordinates.
+      4. UTC ``creation_time`` + timestamped filename — offset derived from the
+         local wall-clock in the name vs the UTC instant (see
+         :func:`_offset_from_filename`).
+      5. UTC ``creation_time`` alone — kept as tz-aware UTC (local offset unknown,
+         so the derived naive-local date_taken may be off by the true offset).
+      6. No ``creation_time`` at all (e.g. re-encodes that stripped it) but a
+         timestamped filename — naive local wall-clock, offset unknown. Mirrors
+         the photo case with no EXIF offset. Falls back to a date-only filename
+         (midnight local) when the name carries a date but no time.
     """
     # 1. Apple's tag carries local wall-clock with an explicit offset.
     apple = _parse_creation_time(_container_tag(metadata, "com.apple.quicktime.creationdate"))
@@ -253,20 +352,42 @@ def _resolve_video_time(
 
     creation = _parse_creation_time(_container_tag(metadata, "creation_time"))
     if creation is None:
-        return apple  # a naive Apple date if present, else None
+        # 6. No UTC anchor: fall back to a naive Apple date, else the filename's
+        # local wall-clock, else a date-only filename (midnight), else nothing.
+        if apple is not None:
+            return apple
+        return _datetime_from_filename(filename) or _date_from_filename(filename)
 
     # creation_time is UTC by spec; make that explicit before converting.
     utc_dt = creation if creation.tzinfo is not None else creation.replace(tzinfo=UTC)
 
-    # 2. Derive the offset from the capture location.
+    # 2. Android vendors record the capture offset in a container tag even when
+    # no Apple creationdate or GPS location is present.
+    offset = _parse_utc_offset(
+        _container_tag(metadata, "com.samsung.android.utc_offset", "com.android.utc_offset")
+    )
+    if offset is not None:
+        return utc_dt.astimezone(offset)
+
+    # 3. Derive the offset from the capture location.
     if gps is not None:
         zone = _timezone_for(gps)
         if zone is not None:
             return utc_dt.astimezone(zone)
 
-    # 3. Offset unknown: expose the UTC value as naive local wall-clock. This can
-    # be off by the true offset, but mirrors the photo case with no OffsetTime.
-    return utc_dt.replace(tzinfo=None)
+    # 4. No tag or location, but many camera apps name clips with the local
+    # wall-clock while creation_time is UTC — recover the offset from that gap.
+    fname_offset = _offset_from_filename(filename, utc_dt)
+    if fname_offset is not None:
+        return utc_dt.astimezone(fname_offset)
+
+    # 5. Local offset unknown, but creation_time is UTC by spec — that timezone is
+    # itself known, so keep it (tz-aware UTC) rather than discarding it. Downstream
+    # (OEC-18) records the exact UTC instant in date_taken_utc; the naive-local
+    # date_taken it derives is the UTC wall-clock, which can be off by the true
+    # local offset. Unlike a photo's EXIF DateTimeOriginal (genuinely naive local,
+    # no tz), a video always carries at least the UTC anchor.
+    return utc_dt
 
 
 def _container_tag(metadata: dict[str, str], *keys: str) -> str | None:
@@ -377,9 +498,11 @@ class Video:
         gps = _parse_iso6709(
             _container_tag(metadata, "com.apple.quicktime.location.ISO6709", "location")
         )
-        # creation_time is UTC; resolve local wall-clock (offset from the Apple tag
-        # or GPS) so date_taken matches the naive-local convention (OEC-18).
-        date_taken = _resolve_video_time(metadata, gps)
+        # creation_time is UTC; resolve local wall-clock (offset from the Apple tag,
+        # GPS, or a timestamped filename) so date_taken matches the naive-local
+        # convention (OEC-18).
+        filename = self.path.replace("\\", "/").rsplit("/", 1)[-1]
+        date_taken = _resolve_video_time(metadata, gps, filename=filename)
         camera_make = _container_tag(metadata, "com.apple.quicktime.make", "make")
         camera_model = _container_tag(metadata, "com.apple.quicktime.model", "model")
 
