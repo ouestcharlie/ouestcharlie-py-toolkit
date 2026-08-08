@@ -2,7 +2,7 @@
 
 import struct
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import av
@@ -18,6 +18,8 @@ from ouestcharlie_toolkit.video import (
     _parse_creation_time,
     _parse_iso6709,
     _read_moov_atom,
+    _resolve_video_time,
+    _timezone_for,
 )
 
 
@@ -180,6 +182,59 @@ def test_container_tag_first_non_empty():
     meta = {"com.apple.quicktime.make": " Apple ", "make": "Other"}
     assert _container_tag(meta, "com.apple.quicktime.make", "make") == "Apple"
     assert _container_tag({"make": ""}, "com.apple.quicktime.make", "make") is None
+
+
+# ---------------------------------------------------------------------------
+# Time resolution: UTC creation_time -> local wall-clock (OEC-18 / OEC-39e)
+# ---------------------------------------------------------------------------
+
+
+def test_timezone_for_resolves_gps_to_zone():
+    zone = _timezone_for((48.8566, 2.3522))  # Paris (lat, lon)
+    assert zone is not None
+    # France summer offset is +02:00.
+    summer = datetime(2020, 7, 1, 12, tzinfo=zone)
+    assert summer.utcoffset().total_seconds() == 2 * 3600
+
+
+def test_resolve_video_time_apple_creationdate_preferred():
+    # Apple tag carries local wall-clock + offset; used as-is even if creation_time exists.
+    meta = {
+        "com.apple.quicktime.creationdate": "2020-05-03T20:00:00+0200",
+        "creation_time": "2020-05-03T18:00:00.000000Z",
+    }
+    dt = _resolve_video_time(meta, gps=None)
+    assert dt.replace(tzinfo=None) == datetime(2020, 5, 3, 20, 0, 0)  # local wall-clock
+    assert dt.utcoffset().total_seconds() == 2 * 3600
+    assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2020, 5, 3, 18, 0, 0)
+
+
+def test_resolve_video_time_gps_derived_offset():
+    # UTC creation_time + Paris location -> +02:00 in summer.
+    meta = {"creation_time": "2020-07-15T18:00:00.000000Z"}
+    dt = _resolve_video_time(meta, gps=(48.8566, 2.3522))
+    assert dt.utcoffset().total_seconds() == 2 * 3600
+    assert dt.replace(tzinfo=None) == datetime(2020, 7, 15, 20, 0, 0)  # local wall-clock
+    assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2020, 7, 15, 18, 0, 0)
+
+
+def test_resolve_video_time_fallback_is_naive():
+    # No Apple tag, no GPS: UTC value exposed as naive local, offset unknown.
+    meta = {"creation_time": "2020-07-15T18:00:00.000000Z"}
+    dt = _resolve_video_time(meta, gps=None)
+    assert dt.tzinfo is None
+    assert dt == datetime(2020, 7, 15, 18, 0, 0)
+
+
+def test_resolve_video_time_none_when_no_timestamp():
+    assert _resolve_video_time({}, gps=None) is None
+
+
+def test_resolve_video_time_france_summer_not_shifted_to_18():
+    # Regression: a 20:00 local French clip must not land as 18:00 in date_taken.
+    meta = {"creation_time": "2020-07-15T18:00:00.000000Z"}
+    dt = _resolve_video_time(meta, gps=(48.8566, 2.3522))
+    assert dt.replace(tzinfo=None).hour == 20
 
 
 def test_video_suffixes():

@@ -51,6 +51,9 @@ PHOTO_SCHEMA = pa.schema(
         pa.field("filename", pa.string()),
         pa.field("partition", pa.string()),
         pa.field("date_taken", pa.timestamp("us"), nullable=True),
+        # UTC instant of date_taken, for cross-timezone chronological ordering.
+        # Null when no offset is known (date_taken is then local wall-clock only).
+        pa.field("date_taken_utc", pa.timestamp("us"), nullable=True),
         pa.field("utc_offset_minutes", pa.int16(), nullable=True),
         pa.field("rating", pa.int32(), nullable=True),
         pa.field("width", pa.int32(), nullable=True),
@@ -106,12 +109,21 @@ def photo_entry_to_row(
     s = entry.searchable
     gps = s.get("gps")
     dt = s.get("date_taken")
+    # date_taken is stored as naive local wall-clock (for calendar queries). When the
+    # source carries a UTC offset (EXIF OffsetTimeOriginal, or a resolved video offset),
+    # dt is timezone-aware: derive the UTC instant and the signed offset before stripping
+    # tzinfo. Without an offset, dt is naive and both UTC columns stay null.
+    offset = dt.utcoffset() if dt is not None else None
+    date_taken_utc = (
+        dt.astimezone(UTC).replace(tzinfo=None) if dt is not None and offset is not None else None
+    )
     return {
         "content_hash": entry.content_hash,
         "filename": entry.filename,
         "partition": partition,
         "date_taken": dt.replace(tzinfo=None) if dt is not None else None,
-        "utc_offset_minutes": None,  # not yet extracted
+        "date_taken_utc": date_taken_utc,
+        "utc_offset_minutes": (int(offset.total_seconds() / 60) if offset is not None else None),
         "rating": s.get("rating"),
         "width": s.get("width"),
         "height": s.get("height"),
