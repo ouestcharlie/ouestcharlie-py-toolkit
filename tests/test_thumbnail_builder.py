@@ -19,6 +19,7 @@ from ouestcharlie_toolkit.schema import (
 from ouestcharlie_toolkit.thumbnail_builder import (
     GRID_MAX_PHOTOS,
     _call_image_proc,
+    _stage_photos,
     delete_partition_thumbnails,
     generate_partition_thumbnails,
 )
@@ -38,6 +39,21 @@ def _fake_photo_entry(filename: str, content_hash: str, orientation: int | None 
 
 
 _FAKE_HASH = "A" * 22
+
+
+def _write_sample_video(path: Path, *, frames: int = 15) -> None:
+    """Synthesize a tiny mpeg4 MP4 for tests."""
+    import av
+    from PIL import Image as PILImage
+
+    with av.open(str(path), "w") as container:
+        vstream = container.add_stream("mpeg4", rate=30)
+        vstream.width, vstream.height = 64, 48
+        vstream.pix_fmt = "yuv420p"
+        for i in range(frames):
+            img = PILImage.new("RGB", (64, 48), ((i * 15) % 256, 40, 90))
+            container.mux(vstream.encode(av.VideoFrame.from_image(img)))
+        container.mux(vstream.encode())
 
 
 class _FakeAvifProcess:
@@ -71,6 +87,49 @@ class _FakeAvifProcessError:
 
     async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
         return b"", b"encoding failed: bad photo"
+
+
+# ---------------------------------------------------------------------------
+# _stage_photos — video cover-frame staging
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage_photos_decodes_video_cover_to_jpeg(tmp_path: Path) -> None:
+    """A video entry is staged as a decoded cover-frame JPEG, not the raw container."""
+    from PIL import Image as PILImage
+
+    _write_sample_video(tmp_path / "clip.mp4")
+    backend = LocalBackend(root=tmp_path)
+    entry = _fake_photo_entry("clip.mp4", "V" * 22, orientation=None)
+    entry.searchable = {"media_type": "video"}
+
+    staged_dir = tmp_path / "stage"
+    staged_dir.mkdir()
+    payload = await _stage_photos(backend, "", [entry], str(staged_dir))
+
+    assert len(payload) == 1
+    assert payload[0]["ext"] == ".jpg"
+    assert payload[0]["orientation"] is None
+    assert payload[0]["content_hash"] == "V" * 22
+    jpeg = Path(payload[0]["path"])
+    assert jpeg.exists() and jpeg.parent == staged_dir
+    with PILImage.open(jpeg) as img:
+        assert img.size == (64, 48)
+
+
+@pytest.mark.asyncio
+async def test_stage_photos_photo_uses_original_path(tmp_path: Path) -> None:
+    """A photo entry references its original file directly (no re-staging)."""
+    (tmp_path / "p.jpg").write_bytes(b"jpegbytes")
+    backend = LocalBackend(root=tmp_path)
+    entry = _fake_photo_entry("p.jpg", "P" * 22, orientation=6)
+
+    payload = await _stage_photos(backend, "", [entry], str(tmp_path))
+
+    assert payload[0]["ext"] == ".jpg"
+    assert payload[0]["path"].endswith("p.jpg")
+    assert payload[0]["orientation"] == 6
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ dependencies = [
     "pyarrow>=18",
     "pillow-heif>=0.18",
     "Pillow>=11",
+    "av>=13", # PyAV: video metadata + cover-frame extraction (bundles ffmpeg libs)
 ]
 
 [dependency-groups]

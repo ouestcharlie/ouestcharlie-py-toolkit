@@ -136,7 +136,7 @@ async def test_compute_summary_none_scopes_whole_table(tmp_path: Path) -> None:
     await idx.upsert_partition("b", [_entry(1, {"rating": 5})], None)
 
     summary = await compute_summary(idx, None)
-    assert summary.photo_count == 2
+    assert summary.media_count == 2
     assert summary.rating["min"] == 3
     assert summary.rating["max"] == 5
 
@@ -150,7 +150,7 @@ async def test_compute_summary_filters_rows(tmp_path: Path) -> None:
     await idx.upsert_partition("a", [_entry(0, {"rating": 3}), _entry(1, {"rating": 5})], None)
 
     summary = await compute_summary(idx, "rating >= 5")
-    assert summary.photo_count == 1
+    assert summary.media_count == 1
     assert summary.rating["min"] == 5
     assert summary.rating["max"] == 5
 
@@ -221,7 +221,7 @@ async def test_compute_summary_fts_filter_scopes_aggregate(tmp_path: Path) -> No
     summary = await compute_summary(
         idx, None, fts_filter=FtsFilter(query="Canyon", columns=["description"])
     )
-    assert summary.photo_count == 1
+    assert summary.media_count == 1
     assert summary.rating["min"] == 3
     assert summary.rating["max"] == 3
 
@@ -244,5 +244,91 @@ async def test_compute_summary_fts_filter_combined_with_where(tmp_path: Path) ->
     summary = await compute_summary(
         idx, "rating >= 4", fts_filter=FtsFilter(query="Canyon", columns=["description"])
     )
-    assert summary.photo_count == 1
+    assert summary.media_count == 1
     assert summary.tags["counts"] == {"travel": 1}
+
+
+# ---------------------------------------------------------------------------
+# Video field statistics (media_type / duration / codec / has_audio)
+# ---------------------------------------------------------------------------
+
+
+def _photo(idx: int) -> PhotoEntry:
+    return _entry(idx, {"media_type": "photo"})
+
+
+def _video(idx: int, **video: object) -> PhotoEntry:
+    return _entry(idx, {"media_type": "video", **video})
+
+
+@pytest.mark.asyncio
+async def test_media_type_facets(tmp_path: Path) -> None:
+    """media_type is summarized as string_facets counting photos vs videos."""
+    entries = [_photo(0), _photo(1), _video(2), _photo(3)]
+    idx = await _index(tmp_path, entries)
+    summary = await compute_summary(idx, None)
+    assert summary.mediaType == {
+        "type": "string_facets",
+        "counts": {"photo": 3, "video": 1},
+    }
+
+
+@pytest.mark.asyncio
+async def test_duration_float_range(tmp_path: Path) -> None:
+    """durationSeconds yields a float_range min/max over videos with a duration."""
+    entries = [
+        _photo(0),
+        _video(1, duration_seconds=12.5),
+        _video(2, duration_seconds=48.0),
+    ]
+    idx = await _index(tmp_path, entries)
+    summary = await compute_summary(idx, None)
+    assert summary.durationSeconds["type"] == "float_range"
+    assert summary.durationSeconds["min"] == 12.5
+    assert summary.durationSeconds["max"] == 48.0
+    # Only the photo lacks a duration.
+    assert summary.durationSeconds["missing"] == 1
+
+
+@pytest.mark.asyncio
+async def test_video_codec_facets(tmp_path: Path) -> None:
+    """videoCodec is summarized as string_facets over the video subset only."""
+    entries = [
+        _photo(0),
+        _video(1, video_codec="h264"),
+        _video(2, video_codec="hevc"),
+        _video(3, video_codec="h264"),
+    ]
+    idx = await _index(tmp_path, entries)
+    summary = await compute_summary(idx, None)
+    assert summary.videoCodec == {
+        "type": "string_facets",
+        "counts": {"h264": 2, "hevc": 1},
+    }
+
+
+@pytest.mark.asyncio
+async def test_has_audio_bool_counts(tmp_path: Path) -> None:
+    """hasAudio yields true/false counts, excluding photos (null has_audio)."""
+    entries = [
+        _photo(0),
+        _video(1, has_audio=True),
+        _video(2, has_audio=True),
+        _video(3, has_audio=False),
+    ]
+    idx = await _index(tmp_path, entries)
+    summary = await compute_summary(idx, None)
+    assert summary.hasAudio == {"type": "bool_counts", "true": 2, "false": 1}
+
+
+@pytest.mark.asyncio
+async def test_photo_only_library_has_no_video_stats(tmp_path: Path) -> None:
+    """A photo-only set carries no duration/codec/has_audio stats (absent, not zero)."""
+    entries = [_photo(0), _photo(1)]
+    idx = await _index(tmp_path, entries)
+    summary = await compute_summary(idx, None)
+    assert summary.durationSeconds is None
+    assert summary.videoCodec is None
+    assert summary.hasAudio is None
+    # media_type facet is still present (photos are a category).
+    assert summary.mediaType == {"type": "string_facets", "counts": {"photo": 2}}

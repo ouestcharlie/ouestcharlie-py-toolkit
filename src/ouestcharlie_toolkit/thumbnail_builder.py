@@ -31,6 +31,7 @@ from ouestcharlie_toolkit.schema import (
     ThumbnailGridLayout,
     thumbnail_avif_path,
 )
+from ouestcharlie_toolkit.video import VIDEO_SUFFIXES, Video
 
 _log = logging.getLogger(__name__)
 
@@ -55,7 +56,12 @@ async def _stage_photos(
     photo_entries: list[PhotoEntry],
     tmpdir: str,
 ) -> list[dict[str, object]]:
-    """Read photos from the backend once and write them to ``tmpdir``.
+    """Build the image-proc ``photos`` payload for a chunk.
+
+    Photos reference their backend-local path directly. Videos cannot be decoded
+    by image-proc, so their cover frame is decoded here and written as a JPEG
+    into ``tmpdir``; the payload then points at that JPEG. The video's cover
+    frame flows through the AVIF grid exactly like a photo from that point on.
 
     Returns the image-proc ``photos`` payload (list of dicts with path, ext,
     orientation, content_hash).  ``photo_entries`` must already be sorted by
@@ -67,15 +73,48 @@ async def _stage_photos(
         photo_path = f"{prefix}{entry.filename}"
         ext = os.path.splitext(entry.filename)[1]
         local = await backend.local_path(photo_path)
-        photos_payload.append(
-            {
-                "path": str(local),
-                "ext": ext,
-                "orientation": entry.searchable.get("orientation"),
-                "content_hash": entry.content_hash,
-            }
-        )
+        if ext.lower() in VIDEO_SUFFIXES:
+            # Decode the cover frame to a JPEG upright (frames are already
+            # display-oriented), so no EXIF orientation applies downstream.
+            jpeg_path = await asyncio.to_thread(
+                _stage_video_cover, backend, photo_path, local, entry.content_hash, tmpdir
+            )
+            photos_payload.append(
+                {
+                    "path": jpeg_path,
+                    "ext": ".jpg",
+                    "orientation": None,
+                    "content_hash": entry.content_hash,
+                }
+            )
+        else:
+            photos_payload.append(
+                {
+                    "path": str(local),
+                    "ext": ext,
+                    "orientation": entry.searchable.get("orientation"),
+                    "content_hash": entry.content_hash,
+                }
+            )
     return photos_payload
+
+
+def _stage_video_cover(
+    backend: Backend,
+    video_path: str,
+    local: Path,
+    content_hash: str,
+    tmpdir: str,
+) -> str:
+    """Decode a video's cover frame and write it as a JPEG in ``tmpdir``.
+
+    Returns the JPEG path. Runs synchronously (PyAV decode + PIL encode); call
+    via ``asyncio.to_thread`` from async code.
+    """
+    cover = Video(backend, video_path).extract_cover_frame(local)
+    jpeg_path = os.path.join(tmpdir, f"{content_hash}.jpg")
+    cover.save(jpeg_path, "JPEG", quality=90)
+    return jpeg_path
 
 
 async def _call_image_proc(

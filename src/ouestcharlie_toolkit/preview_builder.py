@@ -9,6 +9,7 @@ Pipeline (jpeg_preview command):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
@@ -18,12 +19,28 @@ from ouestcharlie_imageproc.image_proc import PersistentImageProc
 
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.schema import PhotoEntry, preview_jpeg_path
+from ouestcharlie_toolkit.video import VIDEO_SUFFIXES, Video
 
 _log = logging.getLogger(__name__)
 
 # JPEG preview settings.
 PREVIEW_JPEG_MAX_LONG_EDGE: int = 1440
 PREVIEW_JPEG_QUALITY: int = 85
+
+
+async def _stage_video_cover(backend: Backend, video_path: str, local: Path, tmpdir: str) -> str:
+    """Decode a video's cover frame to a full-resolution JPEG in ``tmpdir``.
+
+    Returns the JPEG path. The PyAV decode + PIL encode runs in a worker thread.
+    """
+
+    def _decode() -> str:
+        cover = Video(backend, video_path).extract_cover_frame(local)
+        jpeg_path = os.path.join(tmpdir, "cover.jpg")
+        cover.save(jpeg_path, "JPEG", quality=95)
+        return jpeg_path
+
+    return await asyncio.to_thread(_decode)
 
 
 async def generate_preview_jpeg(
@@ -34,11 +51,13 @@ async def generate_preview_jpeg(
     max_long_edge: int = PREVIEW_JPEG_MAX_LONG_EDGE,
     jpeg_quality: int = PREVIEW_JPEG_QUALITY,
 ) -> str:
-    """Generate a JPEG preview for a single photo.
+    """Generate a JPEG preview for a single photo or video.
 
     Decodes the original photo via image-proc (handles RAW, JPEG, TIFF, PNG,
     WebP), applies EXIF orientation, resizes to ``max_long_edge`` on the long
-    edge (preserving aspect ratio), and saves as JPEG.
+    edge (preserving aspect ratio), and saves as JPEG. For a video, the cover
+    frame is decoded first (PyAV) and that frame is resized/encoded instead —
+    the resulting JPEG doubles as the ``<video>`` poster.
 
     The result is cached at ``.ouestcharlie/{partition}/previews/{content_hash}.jpg``.
     Subsequent calls for the same photo return immediately if the cache file
@@ -75,14 +94,25 @@ async def generate_preview_jpeg(
     )
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        staged_path = await backend.local_path(photo_path)
+        local_path = await backend.local_path(photo_path)
+
+        if ext.lower() in VIDEO_SUFFIXES:
+            # image-proc cannot decode video containers: decode the cover frame
+            # (already upright) to a JPEG and let image-proc resize that instead.
+            src_path: str = await _stage_video_cover(backend, photo_path, local_path, tmpdir)
+            src_ext = ".jpg"
+            orientation = None
+        else:
+            src_path = str(local_path)
+            src_ext = ext
+            orientation = entry.searchable.get("orientation")
 
         tmp_output = os.path.join(tmpdir, "preview.jpg")
         payload = {
             "photo": {
-                "path": str(staged_path),
-                "ext": ext,
-                "orientation": entry.searchable.get("orientation"),
+                "path": src_path,
+                "ext": src_ext,
+                "orientation": orientation,
                 "content_hash": entry.content_hash,
             },
             "max_long_edge": max_long_edge,

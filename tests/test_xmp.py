@@ -308,6 +308,46 @@ def test_serialize_xmp_width_height_round_trip():
     assert restored.height == 4000
 
 
+def test_serialize_xmp_video_fields_round_trip():
+    """Video fields survive serialize → parse."""
+    from ouestcharlie_toolkit.schema import XmpSidecar
+
+    s = XmpSidecar(
+        content_hash="KfVidZzA2nBcR8xYvLm1Pw",
+        media_type="video",
+        duration_seconds=12.5,
+        video_codec="hevc",
+        has_audio=True,
+    )
+    restored = parse_xmp(serialize_xmp(s))
+    assert restored.media_type == "video"
+    assert restored.duration_seconds == 12.5
+    assert restored.video_codec == "hevc"
+    assert restored.has_audio is True
+
+
+def test_serialize_xmp_has_audio_false_round_trip():
+    """has_audio=False is distinct from None and round-trips."""
+    from ouestcharlie_toolkit.schema import XmpSidecar
+
+    s = XmpSidecar(content_hash="KfVidZzA2nBcR8xYvLm1Pw", media_type="video", has_audio=False)
+    restored = parse_xmp(serialize_xmp(s))
+    assert restored.has_audio is False
+
+
+def test_serialize_xmp_photo_omits_video_fields():
+    """A photo sidecar (default media_type) writes no video attributes."""
+    from ouestcharlie_toolkit.schema import XmpSidecar
+
+    s = XmpSidecar(content_hash="KfPhoZzA2nBcR8xYvLm1Pw")
+    xml = serialize_xmp(s)
+    assert "mediaType" not in xml
+    assert "videoCodec" not in xml
+    restored = parse_xmp(xml)
+    assert restored.media_type == "photo"
+    assert restored.has_audio is None
+
+
 def test_serialize_xmp_none_rating_omits_field():
     """When rating is None, xmp:Rating is not written to XMP."""
     from ouestcharlie_toolkit.schema import XmpSidecar

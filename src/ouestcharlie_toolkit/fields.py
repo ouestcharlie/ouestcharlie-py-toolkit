@@ -22,6 +22,7 @@ class FieldType(Enum):
     FLOAT_RANGE = auto()  # float min/max bounds; no summary pruning
     STRING_COLLECTION = auto()  # list[str] with AND exact match (e.g. tags)
     STRING_MATCH = auto()  # str with case-insensitive substring match
+    BOOL = auto()  # bool; exact true/false match, presence-aware (null excluded)
     TEXT = auto()  # str; full-text search via FTS index, returns relevance score
     GPS_BOX = auto()  # (lat, lon) point
     DESCRIPTIVE = auto()  # placeholder: future similarity/embedding match
@@ -37,7 +38,13 @@ class FieldDef:
         type:               Match and pruning semantics for this field.
         entry_attr:         Attribute name on PhotoEntry that holds this field's value.
         summary_range:  True if the field contributes min/max range stats to the
-                        partition summary. Applies to DATE_RANGE and INT_RANGE fields.
+                        summary. Applies to DATE_RANGE, INT_RANGE, and FLOAT_RANGE
+                        fields. (Partition pruning, when implemented, is a separate
+                        concern scoped to DATE_RANGE/INT_RANGE only.)
+        summary_facet:  True if the field contributes categorical value counts
+                        (``string_facets``) to the summary. Set only on low-cardinality
+                        STRING_MATCH fields (e.g. media type, codec); leaving it False
+                        keeps high-cardinality columns (make, model, directory) out.
         sidecar_attr:   Attribute name on XmpSidecar to read when building a PhotoEntry.
                         None means the field has no direct XmpSidecar source (e.g. it is
                         derived or supplied externally, like filename or content_hash).
@@ -48,6 +55,7 @@ class FieldDef:
     type: FieldType
     entry_attr: str
     summary_range: bool = False
+    summary_facet: bool = False
     sidecar_attr: str | None = None
     label: str | None = None
 
@@ -179,5 +187,38 @@ PHOTO_FIELDS: list[FieldDef] = [
         type=FieldType.STRING_MATCH,
         entry_attr="partition",
         label="Directory",
+    ),
+    # Video fields. Present on every entry (media_type defaults to "photo"); the
+    # video-only ones are null for photos and drive the gallery's media branching.
+    FieldDef(
+        name="mediaType",
+        type=FieldType.STRING_MATCH,
+        entry_attr="media_type",
+        summary_facet=True,
+        sidecar_attr="media_type",
+        label="Media type",
+    ),
+    FieldDef(
+        name="durationSeconds",
+        type=FieldType.FLOAT_RANGE,
+        entry_attr="duration_seconds",
+        summary_range=True,
+        sidecar_attr="duration_seconds",
+        label="Duration (s)",
+    ),
+    FieldDef(
+        name="videoCodec",
+        type=FieldType.STRING_MATCH,
+        entry_attr="video_codec",
+        summary_facet=True,
+        sidecar_attr="video_codec",
+        label="Video codec",
+    ),
+    FieldDef(
+        name="hasAudio",
+        type=FieldType.BOOL,
+        entry_attr="has_audio",
+        sidecar_attr="has_audio",
+        label="Has audio",
     ),
 ]
