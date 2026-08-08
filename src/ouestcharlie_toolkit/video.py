@@ -13,7 +13,7 @@ import logging
 import math
 import struct
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime, tzinfo
 from typing import TYPE_CHECKING
 
 from .backend import Backend
@@ -205,6 +205,70 @@ def _parse_iso6709(raw: str | None) -> tuple[float, float] | None:
         return None
 
 
+def _timezone_for(gps: tuple[float, float]) -> tzinfo | None:
+    """Resolve an IANA timezone from (lat, lon) coordinates, or None.
+
+    Uses ``tzfpy`` for the offline coordinate→zone lookup; returns None when the
+    dependency is unavailable or the point falls outside any zone (e.g. open
+    ocean), so the caller can fall back to the offset-unknown case.
+    """
+    try:
+        from tzfpy import get_tz
+    except ImportError:
+        _log.debug("tzfpy not installed; cannot derive video timezone from GPS")
+        return None
+    lat, lon = gps
+    tz_name = get_tz(lon, lat)  # tzfpy takes (longitude, latitude)
+    if not tz_name:
+        return None
+    from zoneinfo import ZoneInfo
+
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:  # pragma: no cover - malformed/unknown zone name
+        _log.debug("Unknown timezone %r from GPS %r", tz_name, gps, exc_info=True)
+        return None
+
+
+def _resolve_video_time(
+    metadata: dict[str, str], gps: tuple[float, float] | None
+) -> datetime | None:
+    """Resolve a video's ``date_taken`` as local wall-clock.
+
+    Container ``creation_time`` is defined as UTC, but ``date_taken`` is naive
+    local wall-clock everywhere else in the system (see OEC-18). Return a
+    timezone-aware datetime carrying local time **and** the resolved offset when
+    the offset is known — downstream indexing derives the UTC instant and offset
+    from it — and a naive datetime when the offset cannot be determined.
+
+    Precedence:
+      1. Apple ``com.apple.quicktime.creationdate`` — already local + offset.
+      2. UTC ``creation_time`` + GPS location — offset derived from coordinates.
+      3. UTC ``creation_time`` alone — treated as naive local (offset unknown).
+    """
+    # 1. Apple's tag carries local wall-clock with an explicit offset.
+    apple = _parse_creation_time(_container_tag(metadata, "com.apple.quicktime.creationdate"))
+    if apple is not None and apple.utcoffset() is not None:
+        return apple
+
+    creation = _parse_creation_time(_container_tag(metadata, "creation_time"))
+    if creation is None:
+        return apple  # a naive Apple date if present, else None
+
+    # creation_time is UTC by spec; make that explicit before converting.
+    utc_dt = creation if creation.tzinfo is not None else creation.replace(tzinfo=UTC)
+
+    # 2. Derive the offset from the capture location.
+    if gps is not None:
+        zone = _timezone_for(gps)
+        if zone is not None:
+            return utc_dt.astimezone(zone)
+
+    # 3. Offset unknown: expose the UTC value as naive local wall-clock. This can
+    # be off by the true offset, but mirrors the photo case with no OffsetTime.
+    return utc_dt.replace(tzinfo=None)
+
+
 def _container_tag(metadata: dict[str, str], *keys: str) -> str | None:
     """Return the first non-empty value among *keys* in a container metadata dict."""
     for key in keys:
@@ -310,10 +374,12 @@ class Video:
         # regardless of the rotation-correction logic above.
         self._content_hash = video_identity_hash(header, cover)
 
-        date_taken = _parse_creation_time(_container_tag(metadata, "creation_time"))
         gps = _parse_iso6709(
             _container_tag(metadata, "com.apple.quicktime.location.ISO6709", "location")
         )
+        # creation_time is UTC; resolve local wall-clock (offset from the Apple tag
+        # or GPS) so date_taken matches the naive-local convention (OEC-18).
+        date_taken = _resolve_video_time(metadata, gps)
         camera_make = _container_tag(metadata, "com.apple.quicktime.make", "make")
         camera_model = _container_tag(metadata, "com.apple.quicktime.model", "model")
 

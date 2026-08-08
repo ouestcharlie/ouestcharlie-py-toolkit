@@ -14,7 +14,7 @@ from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 
 OUESTCHARLIE_NS = "http://ouestcharlie.app/ns/1.0/"
 # Current schema version this software writes.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 # Oldest index schema version this software can still read and migrate in place
 # (additive-only changes, e.g. new nullable Lance columns). An index whose
 # version is within [LOWEST_SCHEMA_VERSION, SCHEMA_VERSION] is used as-is; older

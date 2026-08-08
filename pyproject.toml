@@ -29,6 +29,7 @@ dependencies = [
     "pillow-heif>=0.18",
     "Pillow>=11",
     "av>=13", # PyAV: video metadata + cover-frame extraction (bundles ffmpeg libs)
+    "tzfpy>=0.15", # offline GPS->timezone lookup for video local-time resolution (Rust, no deps)
 ]
 
 [dependency-groups]

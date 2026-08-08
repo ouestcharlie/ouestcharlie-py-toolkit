@@ -120,6 +120,26 @@ def test_row_date_taken_made_naive():
     assert row["date_taken"].year == 2024
 
 
+def test_row_date_taken_utc_and_offset_from_aware_datetime():
+    """A tz-aware date_taken yields local wall-clock, its UTC instant, and the offset."""
+    from datetime import timedelta, timezone
+
+    dt = datetime(2020, 7, 15, 20, 0, tzinfo=timezone(timedelta(hours=2)))  # 20:00 +02:00
+    row = photo_entry_to_row(_entry(searchable={"date_taken": dt}), "p", None)
+    assert row["date_taken"] == datetime(2020, 7, 15, 20, 0)  # naive local wall-clock
+    assert row["date_taken_utc"] == datetime(2020, 7, 15, 18, 0)  # UTC instant
+    assert row["utc_offset_minutes"] == 120
+
+
+def test_row_date_taken_utc_null_when_naive():
+    """A naive date_taken (no offset) leaves the UTC columns null."""
+    entry = _entry(searchable={"date_taken": datetime(2020, 7, 15, 20, 0)})
+    row = photo_entry_to_row(entry, "p", None)
+    assert row["date_taken"] == datetime(2020, 7, 15, 20, 0)
+    assert row["date_taken_utc"] is None
+    assert row["utc_offset_minutes"] is None
+
+
 def test_row_tags_defaults_to_empty_list():
     row = photo_entry_to_row(_entry(), "p", None)
     assert row["tags"] == []
