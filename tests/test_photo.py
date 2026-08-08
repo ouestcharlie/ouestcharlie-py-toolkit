@@ -4,6 +4,7 @@ import io
 import logging
 import tempfile
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 
 import pyexiv2
@@ -117,6 +118,25 @@ async def test_extract_exif_no_exif_fields_are_none():
     assert sidecar.camera_make is None
     assert sidecar.camera_model is None
     assert sidecar.gps is None
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_date_taken_from_filename_when_no_exif():
+    # No EXIF datetime, but the filename carries a full local wall-clock.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "IMG_20240501_120000.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "IMG_20240501_120000.jpg").extract_exif()
+    assert sidecar.date_taken == datetime(2024, 5, 1, 12, 0, 0)
+    assert sidecar.date_taken.tzinfo is None  # naive local, offset unknown
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_date_only_from_filename_when_no_exif():
+    # No EXIF datetime and only a date in the name -> midnight local.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "scan-20240501.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "scan-20240501.jpg").extract_exif()
+    assert sidecar.date_taken == datetime(2024, 5, 1, 0, 0, 0)
 
 
 @pytest.mark.asyncio

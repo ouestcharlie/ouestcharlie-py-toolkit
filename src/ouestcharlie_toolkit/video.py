@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import TYPE_CHECKING
 
 from .backend import Backend
+from .filename_time import date_from_filename, datetime_from_filename
 from .hashing import content_hash
 from .schema import XmpSidecar
 
@@ -251,51 +252,11 @@ def _timezone_for(gps: tuple[float, float]) -> tzinfo | None:
         return None
 
 
-# Local wall-clock encoded in camera filenames, e.g. "20260111_121541.mp4" or
-# "VID_20220830-131551.mp4". Separator between date and time is optional.
-_FILENAME_DATETIME = re.compile(r"(\d{8})[_-]?(\d{6})")
-
-# Date only, no time — e.g. WhatsApp "VID-20250317-WA0009.mp4" (the WA suffix is a
-# message sequence, not a time). The 8 digits must not be immediately followed by 6
-# more (that would be a full datetime, handled above).
-_FILENAME_DATE = re.compile(r"(?<!\d)(\d{8})(?![_-]?\d{6})")
-
 # A filename-derived offset must land within this many minutes of a whole
 # quarter-hour to be trusted (real zone offsets are all multiples of 15 min; the
 # few-second slack between "recording started" in the name and the container's
 # finalize time stays well under this).
 _FILENAME_OFFSET_TOLERANCE_MIN = 5
-
-
-def _datetime_from_filename(filename: str | None) -> datetime | None:
-    """Parse a naive local datetime from a ``YYYYMMDD_HHMMSS`` camera filename, or None."""
-    if not filename:
-        return None
-    m = _FILENAME_DATETIME.search(filename)
-    if m is None:
-        return None
-    try:
-        return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
-    except ValueError:
-        return None
-
-
-def _date_from_filename(filename: str | None) -> datetime | None:
-    """Parse a date-only ``YYYYMMDD`` filename to midnight local, or None.
-
-    For names that carry a date but no time (e.g. WhatsApp ``VID-20250317-WA…``).
-    Time is unrecoverable, so ``date_taken`` lands at 00:00:00 — enough to group
-    on the correct calendar day.
-    """
-    if not filename:
-        return None
-    m = _FILENAME_DATE.search(filename)
-    if m is None:
-        return None
-    try:
-        return datetime.strptime(m.group(1), "%Y%m%d")
-    except ValueError:
-        return None
 
 
 def _offset_from_filename(filename: str | None, utc_dt: datetime) -> timezone | None:
@@ -308,7 +269,7 @@ def _offset_from_filename(filename: str | None, utc_dt: datetime) -> timezone | 
     the valid ±14h UTC-offset range; otherwise (a renamed file, a name that isn't
     local time) returns None so the caller falls through to the UTC fallback.
     """
-    local = _datetime_from_filename(filename)
+    local = datetime_from_filename(filename)
     if local is None:
         return None
     diff_min = (local - utc_dt.astimezone(UTC).replace(tzinfo=None)).total_seconds() / 60
@@ -356,7 +317,7 @@ def _resolve_video_time(
         # local wall-clock, else a date-only filename (midnight), else nothing.
         if apple is not None:
             return apple
-        return _datetime_from_filename(filename) or _date_from_filename(filename)
+        return datetime_from_filename(filename) or date_from_filename(filename)
 
     # creation_time is UTC by spec; make that explicit before converting.
     utc_dt = creation if creation.tzinfo is not None else creation.replace(tzinfo=UTC)

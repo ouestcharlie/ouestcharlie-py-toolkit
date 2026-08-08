@@ -13,8 +13,6 @@ from ouestcharlie_toolkit import VIDEO_SUFFIXES, Video, video_identity_hash
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.video import (
     _container_tag,
-    _date_from_filename,
-    _datetime_from_filename,
     _display_rotation,
     _matrix_rotation,
     _offset_from_filename,
@@ -273,30 +271,12 @@ def test_resolve_video_time_vendor_tag_beats_filename():
     assert dt.utcoffset().total_seconds() == 3600  # tag (+01:00) wins
 
 
-def test_datetime_from_filename():
-    assert _datetime_from_filename("VID_20220701_123033.mp4") == datetime(2022, 7, 1, 12, 30, 33)
-    assert _datetime_from_filename("20260111121541.mp4") == datetime(2026, 1, 11, 12, 15, 41)
-    assert _datetime_from_filename(None) is None
-    assert _datetime_from_filename("clip.mp4") is None
-    assert _datetime_from_filename("VID_00000000_000000.mp4") is None  # invalid date
-
-
 def test_resolve_video_time_filename_only_naive():
     # Re-encodes (e.g. Google Photos) strip creation_time but keep the local
     # wall-clock in the name: naive local date_taken, offset unknown.
     dt = _resolve_video_time({"encoder": "Google"}, gps=None, filename="VID_20220701_123033.mp4")
     assert dt.tzinfo is None
     assert dt == datetime(2022, 7, 1, 12, 30, 33)
-
-
-def test_date_from_filename():
-    # WhatsApp: date but no time (WA0009 is a message sequence, not a clock).
-    assert _date_from_filename("VID-20250317-WA0009.mp4") == datetime(2025, 3, 17, 0, 0, 0)
-    assert _date_from_filename(None) is None
-    assert _date_from_filename("clip.mp4") is None
-    assert _date_from_filename("20250230.mp4") is None  # invalid calendar date
-    # A full datetime name must not be picked up as a bare date here.
-    assert _date_from_filename("20260111_121541.mp4") is None
 
 
 def test_resolve_video_time_date_only_filename():

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .backend import Backend
+from .filename_time import date_from_filename, datetime_from_filename
 from .schema import XmpSidecar
 
 _log = logging.getLogger(__name__)
@@ -384,6 +385,12 @@ class Photo:
         self._content_hash = photo_hash
 
         date_taken = _parse_exif_datetime(exif_data)
+        if date_taken is None:
+            # No usable EXIF timestamp: fall back to a date/time encoded in the
+            # filename (e.g. "IMG_20240501_120000.jpg", or a date-only scan/export
+            # name). Naive local, offset unknown — same as EXIF without OffsetTime.
+            filename = self.path.replace("\\", "/").rsplit("/", 1)[-1]
+            date_taken = datetime_from_filename(filename) or date_from_filename(filename)
         camera_make = (exif_data.get("Exif.Image.Make") or "").strip() or None
         camera_model = (exif_data.get("Exif.Image.Model") or "").strip() or None
         orientation_s = exif_data.get("Exif.Image.Orientation")
