@@ -1,5 +1,6 @@
 """Test XMP utilities, parsing, and serialization."""
 
+import codecs
 import logging
 import shutil
 import tempfile
@@ -482,6 +483,18 @@ def test_serialize_xmp_fresh():
     assert "Z9" in xml
     assert "street" in xml
     assert "night" in xml
+
+
+def test_serialize_xmp_emits_correct_utf8_bom():
+    """The xpacket BOM must encode to the 3-byte UTF-8 BOM, not a double-encoded one.
+
+    Regression guard: writing the BOM as three code points ``\\xef\\xbb\\xbf`` in
+    the source string would UTF-8-encode to ``c3af c2bb c2bf`` on disk. The header
+    must use a single U+FEFF code point so it encodes to ``ef bb bf``.
+    """
+    encoded = serialize_xmp(XmpSidecar(content_hash="KfDef456A2nBcR8xYvLm1P")).encode("utf-8")
+    assert encoded.startswith(b"<?xpacket begin='" + codecs.BOM_UTF8)
+    assert b"\xc3\xaf\xc2\xbb\xc2\xbf" not in encoded
 
 
 def test_serialize_xmp_roundtrip():

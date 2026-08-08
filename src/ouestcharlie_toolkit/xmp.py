@@ -29,7 +29,7 @@ _NS_AUX = "http://ns.adobe.com/exif/1.0/aux/"  # Adobe aux:Lens
 _NS_EXIFEX = "http://cipa.jp/exif/1.0/"  # CIPA exifEX:LensModel
 _NS_XML = "http://www.w3.org/XML/1998/namespace"  # xml:lang on rdf:li
 
-_XPACKET_HEADER = "<?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
+_XPACKET_HEADER = "<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
 _XPACKET_FOOTER = "\n<?xpacket end='w'?>"
 
 # Minimal well-formed XMP shell — namespaces are declared by ET as fields are added.
@@ -295,7 +295,7 @@ class XmpStore:
         if xmp_path is None:
             raise FileNotFoundError(f"No XMP sidecar found for {photo_path!r}")
         data, version = await self.backend.read(xmp_path)
-        sidecar = parse_xmp(data.decode("utf-8"))
+        sidecar = parse_xmp(data.decode("utf-8-sig"))
         if not sidecar.content_hash:
             _log.warning(f"Empty identity for sidecar '{xmp_path}")
         return sidecar, version
