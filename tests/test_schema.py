@@ -227,6 +227,32 @@ def test_partition_summary_video_stats_round_trip():
     assert restored.hasAudio == summary.hasAudio
 
 
+def test_partition_summary_gps_bbox_round_trip():
+    """gps_bbox stat survives serialize → deserialize (was silently dropped)."""
+    from ouestcharlie_toolkit.schema import _summary_from_dict, _summary_to_dict
+
+    summary = ManifestSummary(
+        media_count=5,
+        _stats={
+            "gps": {
+                "type": "gps_bbox",
+                "lat": {"min": 48.8, "max": 51.5, "missing": 2},
+                "lon": {"min": -0.1, "max": 2.4},
+            },
+        },
+    )
+    d = _summary_to_dict(summary)
+    # The bounding box must reach the serialized dict, not be dropped.
+    assert d["gps"] == {
+        "type": "gps_bbox",
+        "lat": {"min": 48.8, "max": 51.5, "missing": 2},
+        "lon": {"min": -0.1, "max": 2.4},
+    }
+
+    restored = _summary_from_dict(d)
+    assert restored.gps == summary.gps
+
+
 # ---------------------------------------------------------------------------
 # XMP sidecars
 # ---------------------------------------------------------------------------
