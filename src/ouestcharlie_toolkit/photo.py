@@ -414,6 +414,26 @@ class Photo:
         width = _int_or_none(width_s)
         height = _int_or_none(height_s)
 
+        # EXIF carried no dimension tags (common for scans, PNG/WebP, and
+        # re-encoded JPEGs that drop PixelXDimension/ImageWidth). The decoded
+        # header always has the real pixel size. HEIC already fills these in
+        # _read_heif_exif; this covers the pyexiv2 path. img.size is the *stored*
+        # (pre-rotation) buffer size, so it agrees with the EXIF orientation the
+        # same way an EXIF-provided PixelXDimension would — no axis swap (that is
+        # the caller's job, per the stored-orientation convention). See HLD
+        # "Orientation and stored dimensions".
+        if (width is None or height is None) and Path(
+            self.path
+        ).suffix.lower() not in _HEIF_SUFFIXES:
+            from PIL import Image
+
+            try:
+                with Image.open(local) as pil_img:
+                    width, height = pil_img.size
+            except (OSError, ValueError):
+                # Unreadable/unsupported by PIL — leave as null, same as before.
+                pass
+
         def _rational_or_none(v: str | None) -> float | None:
             if not v:
                 return None

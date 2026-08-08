@@ -604,6 +604,88 @@ async def test_extract_exif_heic_unrecognized_suffix_case_insensitive():
 
 
 # ---------------------------------------------------------------------------
+# Dimension fallback via PIL when EXIF has no dimension tags
+# ---------------------------------------------------------------------------
+
+
+def _write_image(path: Path, size: tuple[int, int], fmt: str) -> None:
+    """Write a real (decodable) image of the given pixel size and format."""
+    PILImage.new("RGB", size, color=(120, 160, 200)).save(path, format=fmt)
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_from_exif_tags_win_over_pil():
+    """When EXIF carries dimension tags, they are used verbatim and the PIL fallback
+    is not triggered — even if they disagree with the actual pixels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        _write_image(path, (20, 10), "JPEG")  # real pixels are 20x10
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Photo.PixelXDimension": "1234", "Exif.Photo.PixelYDimension": "567"})
+        img.close()
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.width == 1234
+    assert sidecar.height == 567
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_pil_fallback_jpeg_no_tags():
+    """A JPEG stripped of PixelXDimension/ImageWidth still yields width/height from
+    the decoded pixels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        _write_image(path, (20, 10), "JPEG")
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.width == 20
+    assert sidecar.height == 10
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_pil_fallback_png():
+    """PNG files carry no EXIF dimension tags; width/height come from the pixels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.png"
+        _write_image(path, (24, 8), "PNG")
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.png").extract_exif()
+
+    assert sidecar.width == 24
+    assert sidecar.height == 8
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_unreadable_stay_none():
+    """A file PIL cannot decode leaves width/height null rather than raising."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Valid JFIF header but no SOF marker: pyexiv2 reads it, PIL cannot size it.
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.width is None
+    assert sidecar.height is None
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_pil_fallback_keeps_stored_orientation():
+    """Stored-orientation convention: a rotated JPEG with no dimension tags reports the
+    *stored* (pre-rotation) size and preserves the EXIF orientation — no axis swap
+    (unlike the HEIC path, which decodes upright). See HLD 'Orientation and stored
+    dimensions'."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        _write_image(path, (20, 10), "JPEG")  # stored landscape buffer
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.Orientation": "6"})  # rotate 90° CW on display
+        img.close()
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.orientation == 6
+    assert sidecar.width == 20  # stored dims, not swapped
+    assert sidecar.height == 10
+
+
+# ---------------------------------------------------------------------------
 # Logging behaviour in EXIF helpers
 # ---------------------------------------------------------------------------
 
