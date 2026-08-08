@@ -285,8 +285,15 @@ def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
             if stat.get("missing"):
                 out["missing"] = stat["missing"]
             d[name] = out
-        elif t in ("int_range", "float_range", "tag_facets", "string_facets", "bool_counts"):
-            # Already JSON-native (numbers, strings, and count dicts).
+        elif t in (
+            "int_range",
+            "float_range",
+            "tag_facets",
+            "string_facets",
+            "bool_counts",
+            "gps_bbox",
+        ):
+            # Already JSON-native (numbers, strings, count dicts, and lat/lon boxes).
             d[name] = stat
     d.update(s._extra)
     return d
@@ -337,6 +344,14 @@ def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
                 "true": stat.get("true", 0),
                 "false": stat.get("false", 0),
             }
+        elif fd.type is FieldType.GPS_BOX and stat.get("type") == "gps_bbox":
+            # JSON-native lat/lon boxes ({"min", "max", "missing"}); copy as-is.
+            parsed = {"type": "gps_bbox"}
+            if isinstance(stat.get("lat"), dict):
+                parsed["lat"] = dict(stat["lat"])
+            if isinstance(stat.get("lon"), dict):
+                parsed["lon"] = dict(stat["lon"])
+            stats[fd.name] = parsed
     hashes_stat = d.get("hashes")
     if isinstance(hashes_stat, dict) and hashes_stat.get("value"):
         stats["hashes"] = {

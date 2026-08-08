@@ -222,3 +222,22 @@ PHOTO_FIELDS: list[FieldDef] = [
         label="Has audio",
     ),
 ]
+
+
+# Field types whose values map to a single scalar LanceDB column and can drive
+# an ORDER BY. Collections (tags), GPS boxes, full-text, and descriptive fields
+# have no meaningful total order and are excluded.
+SORTABLE_FIELD_TYPES: frozenset[FieldType] = frozenset(
+    {
+        FieldType.DATE_RANGE,
+        FieldType.INT_RANGE,
+        FieldType.FLOAT_RANGE,
+        FieldType.STRING_MATCH,
+        FieldType.BOOL,
+    }
+)
+
+
+def is_sortable(fdef: FieldDef) -> bool:
+    """Return True if a field can be used as a ``sort_by`` key."""
+    return fdef.type in SORTABLE_FIELD_TYPES

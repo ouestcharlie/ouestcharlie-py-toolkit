@@ -485,7 +485,10 @@ class LanceIndex:
                     .to_list()
                 )
             except Exception as exc:
-                _log.warning("order_by(%r) failed, returning page unsorted: %s", order_by, exc)
+                # Defense-in-depth: callers (Wally) validate order_by against the
+                # sortable-field set before reaching here, so a failure now signals
+                # a bug rather than bad user input — hence error, not warning.
+                _log.error("order_by(%r) failed, returning page unsorted: %s", order_by, exc)
                 page_rows = (
                     await _base_query()
                     .order_by([ColumnOrdering(column_name="filename", ascending=True)])
