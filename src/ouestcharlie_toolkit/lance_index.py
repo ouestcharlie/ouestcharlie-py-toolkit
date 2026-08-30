@@ -16,6 +16,7 @@ from typing import Any
 import lancedb
 import pyarrow as pa
 from lancedb.index import FTS
+from lancedb.query import AsyncFTSQuery, AsyncQuery
 
 from .backend import Backend
 from .fields import PHOTO_FIELDS, FieldType
@@ -455,7 +456,7 @@ class LanceIndex:
         """
         from lancedb.query import ColumnOrdering
 
-        def _base_query():
+        def _base_query() -> AsyncQuery | AsyncFTSQuery:
             q = self._table.query()
             if where_clause:
                 q = q.where(where_clause)
@@ -463,9 +464,22 @@ class LanceIndex:
                 q = q.nearest_to_text(fts_filter.query, columns=fts_filter.columns)
             return q
 
-        # Query 1: lightweight scan for the total count (single narrow column).
-        count_table: pa.Table = await _base_query().select(["content_hash"]).to_arrow()
-        total_count = len(count_table)
+        # Query 1: total count.
+        if fts_filter:
+            # nearest_to_text has no native row-count equivalent (table.count_rows
+            # only accepts a SQL filter, not an FTS ranking query), so counting
+            # means materializing matches — and nearest_to_text applies an
+            # implicit default row cap when no .limit() is chained, which would
+            # silently truncate this count for any FTS search matching more rows
+            # than that default, hence the explicit limit.
+            count_table: pa.Table = (
+                await _base_query().select(["content_hash"]).limit(DEFAULT_LIMIT).to_arrow()
+            )
+            total_count = len(count_table)
+        else:
+            # Plain SQL filter: the table's native count_rows avoids materializing
+            # any rows at all.
+            total_count = await self._table.count_rows(where_clause)
 
         # Query 2: FTS (no sort) or native sort + offset + limit for the page rows.
         if fts_filter:
