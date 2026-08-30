@@ -771,6 +771,24 @@ async def test_fts_rows_carry_score(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_fts_total_count_matches_page_beyond_default_cap(tmp_path: Path):
+    """total_count must not undercount when matches exceed nearest_to_text's implicit cap.
+
+    Regression test for OEC-23c: the count query used to omit .limit() on the FTS
+    path, so it inherited LanceDB's implicit ~10-row default for nearest_to_text
+    and reported a total lower than the number of rows actually returned.
+    """
+    descriptions = {f"match{i}": "Fontanabran hike" for i in range(15)}
+    # Control items: distinct description, must not be counted or returned.
+    descriptions |= {f"other{i}": "Sandy beach waves" for i in range(5)}
+    idx = await _fts_index(tmp_path, descriptions)
+    rows, total = await _collect_fts(idx, FtsFilter(query="Fontanabran", columns=["description"]))
+    assert total == 15
+    assert len(rows) == 15
+    assert all(r["filename"].startswith("match") for r in rows)
+
+
+@pytest.mark.asyncio
 async def test_fts_combined_with_sql_filter(tmp_path: Path):
     """FTS and a SQL WHERE clause must both apply: only rows matching both are returned."""
     idx = await LanceIndex.open(
@@ -785,13 +803,39 @@ async def test_fts_combined_with_sql_filter(tmp_path: Path):
         ],
         None,
     )
-    rows, _ = await _collect_fts(
+    rows, total = await _collect_fts(
         idx,
         FtsFilter(query="Canyon", columns=["description"]),
         where="rating >= 4",
     )
     assert len(rows) == 1
     assert rows[0]["filename"] == "match.jpg"
+    assert total == 1
+
+
+@pytest.mark.asyncio
+async def test_fts_total_count_zero_when_no_matches(tmp_path: Path):
+    """total_count must be 0, not the page-cap default, when FTS matches nothing."""
+    idx = await _fts_index(tmp_path, {"beach": "Sandy beach waves"})
+    rows, total = await _collect_fts(idx, FtsFilter(query="Canyon", columns=["description"]))
+    assert rows == []
+    assert total == 0
+
+
+@pytest.mark.asyncio
+async def test_fts_total_count_stable_across_pages(tmp_path: Path):
+    """total_count must be identical regardless of which FTS page is requested."""
+    descriptions = {f"match{i}": "Fontanabran hike" for i in range(12)}
+    # Control items: distinct description, must not inflate the count or leak into a page.
+    descriptions |= {f"other{i}": "Sandy beach waves" for i in range(4)}
+    idx = await _fts_index(tmp_path, descriptions)
+    fts_filter = FtsFilter(query="Fontanabran", columns=["description"])
+    page0, total_p0 = await idx.search_where(None, fts_filter=fts_filter, page=0, page_size=5)
+    page1, total_p1 = await idx.search_where(None, fts_filter=fts_filter, page=1, page_size=5)
+    assert len(page0) == 5
+    assert len(page1) == 5
+    assert total_p0 == total_p1 == 12
+    assert all(r["filename"].startswith("match") for r in page0 + page1)
 
 
 # ---------------------------------------------------------------------------
