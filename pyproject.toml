@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ouestcharlie-py-toolkit"
-version = "0.14.1"
+version = "0.15.0"
 description = "Shared Python toolkit for OuEstCharlie agents"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -19,7 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "duckdb>=1.0",
-    "mcp>=1.27,<2.0.0",
+    "mcp>=2.0,<3.0.0",
     "pyexiv2>=2.8",
     "blake3>=1.0.8",
     "pyjwt>=2.12.0", # suggested by dependabot
