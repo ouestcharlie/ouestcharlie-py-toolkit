@@ -11,8 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.server.session import ServerSession
+from mcp.server.mcpserver import Context, MCPServer
 
 from .backend import Backend, ConfigurationError, backend_from_config
 from .manifest import ManifestStore
@@ -22,7 +21,7 @@ _log = logging.getLogger(__name__)
 
 
 class AgentBase:
-    """Base class for OuEstCharlie agents that wraps FastMCP.
+    """Base class for OuEstCharlie agents that wraps MCPServer.
 
     Handles:
     - Environment variable parsing (WOOF_BACKEND_CONFIG, WOOF_AGENT_TOKEN)
@@ -42,9 +41,9 @@ class AgentBase:
         """
         self.name = name
         self.version = version
-        self.mcp = FastMCP(name=name)
+        self.mcp = MCPServer(name=name)
         self._cancelled = False
-        self._current_ctx: Context[ServerSession, None] | None = None
+        self._current_ctx: Context[None, None] | None = None
 
         # Parse environment
         self.backend_config = self._parse_backend_config()
