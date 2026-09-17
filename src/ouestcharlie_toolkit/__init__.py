@@ -1,5 +1,7 @@
 """OuEstCharlie toolkit - shared Python library for photo management agents."""
 
+from importlib.metadata import version
+
 from .backend import (
     Backend,
     ConfigurationError,
@@ -21,7 +23,7 @@ from .server import AgentBase
 from .video import VIDEO_SUFFIXES, Video, video_identity_hash
 from .xmp import XmpStore, xmp_path_for
 
-__version__ = "0.1.0"
+__version__ = version("ouestcharlie-py-toolkit")
 
 __all__ = [
     # Core classes
