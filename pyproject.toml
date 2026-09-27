@@ -73,3 +73,14 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "pillow_heif.*"
 ignore_missing_imports = true
+
+# pyarrow ships no type information (no py.typed, no bundled stubs).
+[[tool.mypy.overrides]]
+module = "pyarrow.*"
+ignore_missing_imports = true
+
+# ouestcharlie-imageproc <= 2.4.0 on PyPI has no py.typed marker: analyse it
+# anyway. Remove once a release with the marker is the minimum version.
+[[tool.mypy.overrides]]
+module = "ouestcharlie_imageproc.*"
+follow_untyped_imports = true

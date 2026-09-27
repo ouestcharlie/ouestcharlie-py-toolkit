@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import duckdb
+from lancedb.query import AsyncFTSQuery, AsyncQuery
 
 from .fields import PHOTO_FIELDS, FieldType
 from .lance_index import FtsFilter, LanceIndex
@@ -71,11 +72,14 @@ async def compute_summary(
 
     # No .limit(): this must aggregate over the entire filtered set (matching
     # search_where's unlimited facet-count query), not just one page/partition.
-    query = lance_index._table.query()
+    base_query = lance_index._table.query()
     if where_clause:
-        query = query.where(where_clause)
-    if fts_filter:
-        query = query.nearest_to_text(fts_filter.query, columns=fts_filter.columns)
+        base_query = base_query.where(where_clause)
+    query: AsyncQuery | AsyncFTSQuery = (
+        base_query.nearest_to_text(fts_filter.query, columns=fts_filter.columns)
+        if fts_filter
+        else base_query
+    )
     arrow_tbl = await query.select(select_cols).to_arrow()
 
     # Build the MIN/MAX/COUNT aggregate query dynamically from the range fields.
@@ -94,21 +98,25 @@ async def compute_summary(
     agg_sql = "SELECT " + ", ".join(agg_parts) + " FROM photos"
 
     # DuckDB aggregation is CPU-bound sync — run in a thread pool.
-    def _agg() -> tuple[dict[str, Any], list[tuple[str, int]], dict[str, list], dict[str, dict]]:
+    def _agg() -> tuple[
+        dict[str, Any], list[tuple[str, int]], dict[str, list[Any]], dict[str, dict[Any, int]]
+    ]:
         conn = duckdb.connect()
         conn.register("photos", arrow_tbl)
         cur = conn.execute(agg_sql)
         cols = [d[0] for d in cur.description]
-        agg = dict(zip(cols, cur.fetchone(), strict=True))
+        row = cur.fetchone()
+        assert row is not None  # an aggregate without GROUP BY always yields one row
+        agg = dict(zip(cols, row, strict=True))
         tags = conn.execute(_TAG_FACETS_SQL).fetchall()
-        facets: dict[str, list] = {}
+        facets: dict[str, list[Any]] = {}
         for f in facet_fields:
             c = f.entry_attr
             facets[f.name] = conn.execute(
                 f"SELECT {c} AS v, COUNT(*) AS c FROM photos "
                 f"WHERE {c} IS NOT NULL GROUP BY {c} ORDER BY c DESC"
             ).fetchall()
-        bools: dict[str, dict] = {}
+        bools: dict[str, dict[Any, int]] = {}
         for f in bool_fields:
             c = f.entry_attr
             rows = conn.execute(

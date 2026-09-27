@@ -57,7 +57,7 @@ else:
     import fcntl as _fcntl
     from typing import IO
 
-    class _CrossProcessLock:  # type: ignore[no-redef]
+    class _CrossProcessLock:
         """Exclusive cross-process lock on a sidecar ``.lock`` file (POSIX).
 
         Uses ``fcntl.flock(LOCK_EX)`` held on the open fd.
