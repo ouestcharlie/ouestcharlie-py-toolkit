@@ -96,7 +96,7 @@ def _decode_undefined_ascii(val: str) -> str:
         return val  # already a string
     try:
         return "".join(chr(int(b)) for b in val.split())
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         _log.debug("Could not decode UNDEFINED ASCII EXIF field %r", val, exc_info=True)
         return val
 
@@ -303,7 +303,7 @@ def _parse_exif_gps(exif: dict[str, str]) -> tuple[float, float] | None:
             return -total if ref in ("S", "W") else total
 
         return (dms_to_decimal(lat_raw, lat_ref), dms_to_decimal(lon_raw, lon_ref))
-    except (ValueError, ZeroDivisionError, IndexError):
+    except ValueError, ZeroDivisionError, IndexError:
         _log.debug("Could not parse EXIF GPS %r / %r", lat_raw, lon_raw, exc_info=True)
         return None
 
@@ -402,7 +402,7 @@ class Photo:
         def _int_or_none(v: str | None) -> int | None:
             try:
                 return int(v) if v else None
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 return None
 
         width_s = exif_data.get("Exif.Photo.PixelXDimension") or exif_data.get(
@@ -430,7 +430,7 @@ class Photo:
             try:
                 with Image.open(local) as pil_img:
                     width, height = pil_img.size
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 # Unreadable/unsupported by PIL — leave as null, same as before.
                 pass
 
@@ -443,7 +443,7 @@ class Photo:
                     dv = int(d)
                     return int(n) / dv if dv else None
                 return float(v)
-            except (ValueError, TypeError, ZeroDivisionError):
+            except ValueError, TypeError, ZeroDivisionError:
                 return None
 
         # ISO — pyexiv2 returns a single value or space-separated list; take first token

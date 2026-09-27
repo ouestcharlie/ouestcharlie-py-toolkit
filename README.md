@@ -49,7 +49,7 @@ System prerequisites:
 ```bash
 # For macOs on arm64 architecture, the full Python version is required e.g.: cpython-3.14.5-macos-aarch64-none
 #  the version string is listed by `uv python list`
-uv venv --python 3.13 
+uv venv --python 3.14
 uv sync
 ```
 
@@ -95,6 +95,7 @@ XMP parsing and serialization use stdlib only and have no native dependencies.
 ```python
 from ouestcharlie_toolkit import AgentBase
 
+
 class HousekeepingAgent(AgentBase):
     def __init__(self):
         super().__init__(name="ouestcharlie-housekeeping", version="1.0.0")
@@ -111,6 +112,7 @@ class HousekeepingAgent(AgentBase):
 
             return {"photosProcessed": len(photos), "errors": 0}
 
+
 if __name__ == "__main__":
     agent = HousekeepingAgent()
     agent.run()  # Runs on stdio transport
@@ -121,6 +123,7 @@ if __name__ == "__main__":
 
 ```python
 from ouestcharlie_toolkit import XmpStore
+
 
 async def add_face_tags(store: XmpStore, photo_path: str, faces: list[str]):
     def modify(xmp):
