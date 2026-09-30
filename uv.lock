@@ -734,7 +734,7 @@ wheels = [
 
 [[package]]
 name = "ouestcharlie-py-toolkit"
-version = "0.16.0"
+version = "0.15.0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },
