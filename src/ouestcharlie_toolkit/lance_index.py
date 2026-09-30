@@ -331,10 +331,13 @@ class LanceIndex:
         except Exception as exc:
             _log.debug("Could not fetch existing thumbnails for %r: %s", partition, exc)
 
-        # Step 2: Build rows, deduplicating within the batch.
+        # Step 2: Build rows, deduplicating within the batch. Callers pick one
+        # representative per hash, so a duplicate here is a caller bug: warn,
+        # and keep the lexicographically smallest filename so the result is
+        # deterministic.
         seen_hashes: set[str] = set()
         rows_to_write = []
-        for entry in entries:
+        for entry in sorted(entries, key=lambda e: e.filename):
             if entry.content_hash in seen_hashes:
                 _log.warning(
                     "Duplicate content_hash %r in partition %r — skipping %r",

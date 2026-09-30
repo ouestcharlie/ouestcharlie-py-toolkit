@@ -165,6 +165,19 @@ class Backend(Protocol):
         """Check if a file exists at the given path."""
         ...
 
+    async def dir_exists(self, path: str) -> bool:
+        """Check if a directory exists at the given path.
+
+        Args:
+            path: Directory path relative to the backend root; ``""`` is the
+                root itself. A trailing slash is allowed.
+
+        Returns:
+            True for an existing directory. False for a missing path, a file,
+            or a path outside the backend root.
+        """
+        ...
+
     async def delete(self, path: str) -> None:
         """Delete a file.
 

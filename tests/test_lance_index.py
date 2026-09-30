@@ -388,12 +388,13 @@ async def test_upsert_same_hash_different_partitions_creates_two_rows(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_upsert_duplicate_hash_in_batch_keeps_first(tmp_path: Path):
-    """Two entries with the same hash in one batch must produce exactly one row."""
+async def test_upsert_duplicate_hash_in_batch_keeps_smallest_filename(tmp_path: Path):
+    """Two entries with the same hash in one batch must produce exactly one row,
+    named after the lexicographically smallest filename regardless of list order."""
     idx = await LanceIndex.open(
         LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
     )
-    entries = [_entry("first.jpg", "hash_dup"), _entry("second.jpg", "hash_dup")]
+    entries = [_entry("second.jpg", "hash_dup"), _entry("first.jpg", "hash_dup")]
     await idx.upsert_partition("p", entries, None)
     rows = await _collect_partition(idx, "p")
     assert len(rows) == 1

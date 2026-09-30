@@ -342,6 +342,15 @@ class LocalBackend:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, full_path.exists)
 
+    async def dir_exists(self, path: str) -> bool:
+        """Check if a directory exists (False outside the backend root)."""
+        try:
+            full_path = self._resolve(path)
+        except ValueError:
+            return False
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, full_path.is_dir)
+
     async def delete(self, path: str) -> None:
         """Delete a file."""
         full_path = self._resolve(path)
