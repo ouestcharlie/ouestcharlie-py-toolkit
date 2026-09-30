@@ -464,7 +464,7 @@ class LanceIndex:
             if where_clause:
                 q = q.where(where_clause)
             if fts_filter:
-                q = q.nearest_to_text(fts_filter.query, columns=fts_filter.columns)
+                return q.nearest_to_text(fts_filter.query, columns=fts_filter.columns)
             return q
 
         # Query 1: total count.

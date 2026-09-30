@@ -7,7 +7,7 @@ name = "ouestcharlie-py-toolkit"
 version = "0.15.0"
 description = "Shared Python toolkit for OuEstCharlie agents"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 license = "MIT"
 license-files = ["LICENSE*"]
 authors = [
@@ -15,6 +15,7 @@ authors = [
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
 ]
 dependencies = [
@@ -23,7 +24,7 @@ dependencies = [
     "pyexiv2>=2.8",
     "blake3>=1.0.8",
     "pyjwt>=2.12.0", # suggested by dependabot
-    "ouestcharlie-imageproc~=2.3.1",
+    "ouestcharlie-imageproc~=2.4.1",
     "lancedb>=0.33",
     "pyarrow>=18",
     "pillow-heif>=0.18",
@@ -51,7 +52,7 @@ Issues = "https://github.com/ouestcharlie/ouestcharlie/issues"
 packages = ["src/ouestcharlie_toolkit"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
@@ -62,7 +63,7 @@ asyncio_mode = "strict"
 tmp_path_retention_policy = "none"
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 
 [[tool.mypy.overrides]]
@@ -71,4 +72,9 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "pillow_heif.*"
+ignore_missing_imports = true
+
+# pyarrow ships no type information (no py.typed, no bundled stubs).
+[[tool.mypy.overrides]]
+module = "pyarrow.*"
 ignore_missing_imports = true

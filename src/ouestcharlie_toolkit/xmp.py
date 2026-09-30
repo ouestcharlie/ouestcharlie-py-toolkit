@@ -211,7 +211,7 @@ def _parse_xmp_gps(lat_str: str | None, lon_str: str | None) -> tuple[float, flo
         return None
     try:
         return (_xmp_coord_to_decimal(lat_str), _xmp_coord_to_decimal(lon_str))
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         _log.debug("Could not parse XMP GPS %r / %r", lat_str, lon_str, exc_info=True)
         return None
 
@@ -539,13 +539,13 @@ def parse_xmp(xml: str) -> XmpSidecar:
                 dv = int(d)
                 return int(n) / dv if dv else None
             return float(s)
-        except (ValueError, TypeError, ZeroDivisionError):
+        except ValueError, TypeError, ZeroDivisionError:
             return None
 
     def _int_or_none(s: str | None) -> int | None:
         try:
             return int(s) if s is not None else None
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return None
 
     aperture = _rational_or_none(desc.get(f"{exif}FNumber"))

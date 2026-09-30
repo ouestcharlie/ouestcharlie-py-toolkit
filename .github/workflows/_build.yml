@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install hatch
         run: pip install hatch
@@ -30,6 +30,13 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -v
+
+      # Checks src/ against the installed package's dependencies (strict
+      # mode, config in pyproject.toml).
+      - name: Type check
+        run: |
+          pip install "mypy>=2.3"
+          mypy src
 
       - uses: actions/upload-artifact@v6
         with:
