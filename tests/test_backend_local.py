@@ -294,6 +294,25 @@ async def test_exists_false_for_missing_file() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["", "sub", "sub/", "sub/inner"])
+async def test_dir_exists_true_for_existing_dir(path: str) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "sub" / "inner").mkdir(parents=True)
+        backend = LocalBackend(root=tmpdir)
+        assert await backend.dir_exists(path) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["missing", "sub/a.txt", "..", "/sub", "sub/../../x"])
+async def test_dir_exists_false_for_missing_file_or_outside(path: str) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "sub").mkdir()
+        (Path(tmpdir) / "sub" / "a.txt").write_bytes(b"x")
+        backend = LocalBackend(root=tmpdir)
+        assert await backend.dir_exists(path) is False
+
+
+@pytest.mark.asyncio
 async def test_delete_removes_file() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "bye.txt").write_bytes(b"x")
