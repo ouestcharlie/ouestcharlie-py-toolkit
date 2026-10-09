@@ -15,6 +15,7 @@ from mcp.server.mcpserver import Context, MCPServer
 
 from .backend import Backend, ConfigurationError, backend_from_config
 from .manifest import ManifestStore
+from .tags import DEFAULT_EXCLUDED_TAG_PREFIXES, normalize_paths
 from .xmp import XmpStore
 
 _log = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ class AgentBase:
         # Initialize backend
         self.backend: Backend = backend_from_config(self.backend_config)
         self.manifest_store = ManifestStore(self.backend)
-        self.xmp_store = XmpStore(self.backend)
+        self.xmp_store = XmpStore(self.backend, self.excluded_tag_prefixes)
 
     def _parse_backend_config(self) -> dict[str, Any]:
         """Parse WOOF_BACKEND_CONFIG from environment."""
@@ -73,6 +74,23 @@ class AgentBase:
         """Local path override for the LanceDB index, or None to use the default."""
         raw = self.backend_config.get("lancedb_index_path")
         return Path(raw) if raw else None
+
+    @property
+    def excluded_tag_prefixes(self) -> list[str]:
+        """Tag path prefixes kept out of the index (library setting).
+
+        Falls back to ``DEFAULT_EXCLUDED_TAG_PREFIXES`` when the key is absent
+        (config from a Woof that predates the setting). An empty list disables
+        the filter.
+        """
+        raw = self.backend_config.get("excluded_tag_prefixes")
+        if raw is None:
+            return list(DEFAULT_EXCLUDED_TAG_PREFIXES)
+        if not isinstance(raw, list):
+            raise ConfigurationError(
+                f"excluded_tag_prefixes must be a list of strings, got {type(raw).__name__}"
+            )
+        return normalize_paths(str(p) for p in raw)
 
     @property
     def cancelled(self) -> bool:

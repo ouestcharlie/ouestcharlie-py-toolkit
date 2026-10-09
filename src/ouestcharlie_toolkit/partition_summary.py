@@ -33,11 +33,24 @@ def _bool_fields() -> list[Any]:
     return [f for f in PHOTO_FIELDS if f.type is FieldType.BOOL]
 
 
+# Tag facets per node of the hierarchy: each tag path ("a|b|c") contributes all
+# its ancestors ("a", "a|b", "a|b|c"), and a photo counts once per node even when
+# several of its paths share it (rid = one id per photo row).
 _TAG_FACETS_SQL = """
-SELECT tag, COUNT(*) AS cnt
-FROM (SELECT UNNEST(tags) AS tag FROM photos)
-GROUP BY tag
-ORDER BY cnt DESC
+SELECT node, COUNT(DISTINCT rid) AS cnt
+FROM (
+    SELECT rid, UNNEST(list_transform(
+        range(1, len(parts) + 1), i -> array_to_string(parts[1:i], '|'))) AS node
+    FROM (
+        SELECT rid, string_split(path, '|') AS parts
+        FROM (
+            SELECT rid, UNNEST(tags) AS path
+            FROM (SELECT row_number() OVER () AS rid, tags FROM photos)
+        )
+    )
+)
+GROUP BY node
+ORDER BY cnt DESC, node
 """
 
 

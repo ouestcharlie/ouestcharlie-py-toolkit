@@ -377,6 +377,7 @@ _SAMPLE_XMP_WITH_EXTRAS = """\
       xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'
       xmlns:xmp='http://ns.adobe.com/xmp/1.0/'
       xmlns:lr='http://ns.adobe.com/lightroom/1.0/'
+      xmlns:darktable='http://darktable.sf.net/'
       ouestcharlie:contentHash='abc123'
       ouestcharlie:schemaVersion='1'
       ouestcharlie:metadataVersion='1'
@@ -386,6 +387,11 @@ _SAMPLE_XMP_WITH_EXTRAS = """\
           <rdf:li>Europe|France|Paris</rdf:li>
         </rdf:Bag>
       </lr:hierarchicalSubject>
+      <darktable:history>
+        <rdf:Seq>
+          <rdf:li darktable:operation='exposure'/>
+        </rdf:Seq>
+      </darktable:history>
     </rdf:Description>
   </rdf:RDF>
 </x:xmpmeta>
@@ -402,13 +408,15 @@ def test_parse_xmp_preserves_unknown_attr():
 
 
 def test_parse_xmp_preserves_unknown_child_element():
-    """Unknown child elements
-    (e.g. lr:hierarchicalSubject bag) are stored in _extra."""
+    """Unknown child elements (e.g. darktable:history) are stored in _extra;
+    lr:hierarchicalSubject is a known field parsed into tags."""
     s = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
-    key = "{http://ns.adobe.com/lightroom/1.0/}hierarchicalSubject"
+    key = "{http://darktable.sf.net/}history"
     assert key in s._extra
     assert s._extra[key].startswith("<")
-    assert "Paris" in s._extra[key]
+    assert "exposure" in s._extra[key]
+    assert "{http://ns.adobe.com/lightroom/1.0/}hierarchicalSubject" not in s._extra
+    assert s.tags == ["Europe|France|Paris"]
 
 
 def test_serialize_xmp_roundtrip_preserves_extra():
@@ -427,8 +435,8 @@ def test_serialize_xmp_roundtrip_preserves_extra():
     assert restored.rating == original.rating
     assert "{http://ns.adobe.com/xmp/1.0/}Rating" not in restored._extra
     # Child element: content preserved (whitespace may differ after ET round-trip)
-    lr_key = "{http://ns.adobe.com/lightroom/1.0/}hierarchicalSubject"
-    assert "Paris" in restored._extra[lr_key]
+    assert "exposure" in restored._extra["{http://darktable.sf.net/}history"]
+    assert restored.tags == ["Europe|France|Paris"]
 
 
 def test_parse_xmp_minimal():
@@ -737,3 +745,184 @@ async def test_same_stem_different_extensions_get_distinct_sidecars():
         assert jpg_sidecar.content_hash == "jpg-hash"
         assert (root / "photo.cr3.xmp").exists()
         assert (root / "photo.jpg.xmp").exists()
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical tags — lr:hierarchicalSubject / dc:subject
+# ---------------------------------------------------------------------------
+
+_LR = "http://ns.adobe.com/lightroom/1.0/"
+_DC = "http://purl.org/dc/elements/1.1/"
+_RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+
+
+def _tags_xmp(hierarchical: list[str] | None, subject: list[str] | None, container="Bag") -> str:
+    """Build a sidecar with the given lr:hierarchicalSubject / dc:subject entries."""
+
+    def _bag(tag: str, items: list[str]) -> str:
+        lis = "".join(f"<rdf:li>{i}</rdf:li>" for i in items)
+        return f"<{tag}><rdf:{container}>{lis}</rdf:{container}></{tag}>"
+
+    body = ""
+    if hierarchical is not None:
+        body += _bag("lr:hierarchicalSubject", hierarchical)
+    if subject is not None:
+        body += _bag("dc:subject", subject)
+    return (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        f"<rdf:RDF xmlns:rdf='{_RDF}'>"
+        f"<rdf:Description rdf:about='' xmlns:lr='{_LR}' xmlns:dc='{_DC}'"
+        " xmlns:darktable='http://darktable.sf.net/'>"
+        f"{body}"
+        "<darktable:history><rdf:Seq><rdf:li darktable:operation='exposure'/></rdf:Seq>"
+        "</darktable:history>"
+        "</rdf:Description></rdf:RDF></x:xmpmeta>"
+    )
+
+
+def _li_texts(xml: str, ns: str, local: str) -> list[str] | None:
+    """rdf:li texts of the given element in a serialized sidecar, or None if absent."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(xml.split("?>", 1)[1].rsplit("<?xpacket", 1)[0])
+    desc = root.find(f"{{{_RDF}}}RDF/{{{_RDF}}}Description")
+    assert desc is not None
+    elems = desc.findall(f"{{{ns}}}{local}")
+    if not elems:
+        return None
+    assert len(elems) == 1, f"duplicate {local} element"
+    bag = elems[0].find(f"{{{_RDF}}}Bag")
+    assert bag is not None
+    return [li.text or "" for li in bag.findall(f"{{{_RDF}}}li")]
+
+
+def test_hierarchical_subject_takes_precedence():
+    s = parse_xmp(
+        _tags_xmp(
+            ["Places|Europe|France|Paris", "Family"],
+            ["Places", "Europe", "France", "Paris", "Family"],
+        )
+    )
+    assert s.tags == ["Places|Europe|France|Paris", "Family"]
+
+
+def test_flat_only_dc_subject_terms_kept():
+    """A dc:subject term outside every path was added by a dc:subject-only tool."""
+    s = parse_xmp(_tags_xmp(["Places|Europe"], ["Places", "Europe", "Alpinism"]))
+    assert s.tags == ["Places|Europe", "Alpinism"]
+
+
+def test_darktable_tags_excluded_by_default():
+    s = parse_xmp(
+        _tags_xmp(
+            ["darktable|format|jpg", "darktable|changed", "jpg"],
+            ["darktable", "format", "jpg", "changed", "Alpinism"],
+        )
+    )
+    # "jpg" is a user tag in its own right (own path); "format"/"changed" are only
+    # levels of excluded paths; "Alpinism" is a flat dc:subject-only tag.
+    assert s.tags == ["jpg", "Alpinism"]
+    assert s._excluded_tags == ["darktable|format|jpg", "darktable|changed"]
+
+
+def test_excluded_tag_prefixes_custom():
+    xml = _tags_xmp(["Lightroom|Internal|x", "darktable|format|jpg", "Family"], None)
+    s = parse_xmp(xml, ["Lightroom|Internal"])
+    assert s.tags == ["darktable|format|jpg", "Family"]
+    assert s._excluded_tags == ["Lightroom|Internal|x"]
+    s = parse_xmp(xml, [])
+    assert s.tags == ["Lightroom|Internal|x", "darktable|format|jpg", "Family"]
+    assert s._excluded_tags == []
+
+
+def test_dc_subject_only_pipe_term_is_hierarchical():
+    s = parse_xmp(_tags_xmp(None, ["Trips|2025|Alps", "Family"]))
+    assert s.tags == ["Trips|2025|Alps", "Family"]
+
+
+def test_dc_subject_only_excluded_term_dropped():
+    s = parse_xmp(_tags_xmp(None, ["darktable", "Family"]))
+    assert s.tags == ["Family"]
+    assert s._excluded_tags == ["darktable"]
+
+
+def test_hierarchical_ancestor_paths_collapsed_to_leaves():
+    s = parse_xmp(_tags_xmp(["Places", "Places|Europe", "Places|Europe|France"], None))
+    assert s.tags == ["Places|Europe|France"]
+
+
+def test_tag_paths_normalized_on_read():
+    s = parse_xmp(_tags_xmp([" Places | Europe ", "", "Places|Europe"], None))
+    assert s.tags == ["Places|Europe"]
+
+
+def test_seq_container_accepted():
+    s = parse_xmp(_tags_xmp(["Places|Europe"], ["Places", "Europe", "Alpinism"], container="Seq"))
+    assert s.tags == ["Places|Europe", "Alpinism"]
+
+
+def test_write_hierarchical_and_flattened_subject():
+    xml = serialize_xmp(XmpSidecar(tags=["Places|Europe|France", "Places|Asia", "Family"]))
+    assert "lr:hierarchicalSubject" in xml
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == [
+        "Places|Europe|France",
+        "Places|Asia",
+        "Family",
+    ]
+    assert _li_texts(xml, _DC, "subject") == ["Places", "Europe", "France", "Asia", "Family"]
+
+
+def test_write_flat_tags_also_in_hierarchical_subject():
+    """darktable reads only lr:hierarchicalSubject when present: flat tags go there too."""
+    xml = serialize_xmp(XmpSidecar(tags=["vacation", "paris"]))
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == ["vacation", "paris"]
+    assert _li_texts(xml, _DC, "subject") == ["vacation", "paris"]
+
+
+def test_excluded_tags_round_trip():
+    original = parse_xmp(
+        _tags_xmp(["darktable|format|jpg", "Family"], ["darktable", "format", "jpg", "Family"])
+    )
+    xml = serialize_xmp(original)
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == ["Family", "darktable|format|jpg"]
+    assert _li_texts(xml, _DC, "subject") == ["Family"]
+    assert "exposure" in xml  # darktable:history kept via _extra
+    restored = parse_xmp(xml)
+    assert restored.tags == ["Family"]
+    assert restored._excluded_tags == ["darktable|format|jpg"]
+
+
+def test_excluded_tags_only_writes_hierarchical_subject_without_dc_subject():
+    s = parse_xmp(_tags_xmp(["darktable|format|jpg"], ["darktable", "format", "jpg"]))
+    xml = serialize_xmp(s)
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == ["darktable|format|jpg"]
+    assert _li_texts(xml, _DC, "subject") is None
+
+
+def test_roundtrip_hierarchical():
+    original = parse_xmp(
+        _tags_xmp(["Places|Europe|France|Paris", "Trips|2025"], None), excluded_tag_prefixes=[]
+    )
+    restored = parse_xmp(serialize_xmp(original))
+    assert restored.tags == original.tags == ["Places|Europe|France|Paris", "Trips|2025"]
+
+
+def test_serialize_xmp_empty_tags_omits_hierarchical_subject():
+    xml = serialize_xmp(XmpSidecar(content_hash="KfCccZzA2nBcR8xYvLm1Pw", tags=[]))
+    assert "hierarchicalSubject" not in xml
+    assert "subject" not in xml
+
+
+@pytest.mark.asyncio
+async def test_store_read_applies_excluded_tag_prefixes():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "a.jpg.xmp").write_text(
+            _tags_xmp(["darktable|format|jpg", "Lightroom|Internal|x", "Family"], None)
+        )
+        default_store = XmpStore(LocalBackend(root=tmpdir))
+        s, _ = await default_store.read("a.jpg")
+        assert s.tags == ["Lightroom|Internal|x", "Family"]
+
+        custom_store = XmpStore(LocalBackend(root=tmpdir), ["Lightroom|Internal"])
+        s, _ = await custom_store.read("a.jpg")
+        assert s.tags == ["darktable|format|jpg", "Family"]

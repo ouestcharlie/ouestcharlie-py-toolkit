@@ -190,6 +190,33 @@ async def test_compute_summary_tags_scoped_by_clause(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_compute_summary_tag_facets_per_hierarchy_node(tmp_path: Path) -> None:
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition(
+        "a",
+        [
+            _entry(0, {"tags": ["Places|Europe|France|Paris", "Places|Europe|France|Lyon"]}),
+            _entry(1, {"tags": ["Places|Europe|Italy", "Family"]}),
+            _entry(2, {"tags": ["Family"]}),
+        ],
+        None,
+    )
+    summary = await compute_summary(idx, None)
+    assert summary.tags["counts"] == {
+        "Places": 2,
+        "Places|Europe": 2,
+        # Photo 0 has two paths under France but counts once for it.
+        "Places|Europe|France": 1,
+        "Places|Europe|France|Paris": 1,
+        "Places|Europe|France|Lyon": 1,
+        "Places|Europe|Italy": 1,
+        "Family": 2,
+    }
+
+
+@pytest.mark.asyncio
 async def test_compute_summary_no_tags_stat_absent(tmp_path: Path) -> None:
     idx = await LanceIndex.open(
         LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True

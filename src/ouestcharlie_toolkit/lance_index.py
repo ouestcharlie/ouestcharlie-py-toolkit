@@ -15,12 +15,13 @@ from typing import Any
 
 import lancedb
 import pyarrow as pa
-from lancedb.index import FTS
+from lancedb.index import FTS, LabelList
 from lancedb.query import AsyncFTSQuery, AsyncQuery
 
 from .backend import Backend
 from .fields import PHOTO_FIELDS, FieldType
 from .schema import PhotoEntry, lance_index_path
+from .tags import tag_terms
 
 _log = logging.getLogger(__name__)
 
@@ -62,7 +63,11 @@ PHOTO_SCHEMA = pa.schema(
         pa.field("orientation", pa.int32(), nullable=True),
         pa.field("make", pa.string(), nullable=True),
         pa.field("model", pa.string(), nullable=True),
+        # Leaf tag paths ("Places|Europe|France"), as read from the sidecar.
         pa.field("tags", pa.list_(pa.string())),
+        # Derived from tags: every ancestor path and every level name, for
+        # subtree and any-level tag filters (LABEL_LIST-indexed).
+        pa.field("tag_terms", pa.list_(pa.string()), nullable=True),
         pa.field("gps_lat", pa.float64(), nullable=True),
         pa.field("gps_lon", pa.float64(), nullable=True),
         # Caption (dc:description) — FTS-indexed
@@ -132,6 +137,7 @@ def photo_entry_to_row(
         "make": s.get("make"),
         "model": s.get("model"),
         "tags": list(s.get("tags") or []),
+        "tag_terms": tag_terms(s.get("tags") or []),
         "gps_lat": gps[0] if gps is not None else None,
         "gps_lon": gps[1] if gps is not None else None,
         "description": s.get("description"),
@@ -234,6 +240,20 @@ async def _migrate_table(table: lancedb.table.AsyncTable) -> None:
                 _log.warning("Lance migration: could not add column %r: %s", field.name, exc)
 
 
+async def _ensure_tag_terms_index(table: lancedb.table.AsyncTable) -> None:
+    """Create the LABEL_LIST index backing array_has(tag_terms, …) filters if absent.
+
+    Rows written after the index was built are still matched (scanned) until
+    ``maintain()`` optimizes the table, so this only affects speed.
+    """
+    try:
+        if any(idx.columns == ["tag_terms"] for idx in await table.list_indices()):
+            return
+        await table.create_index("tag_terms", config=LabelList(), replace=True)
+    except Exception as exc:
+        _log.debug("tag_terms index creation skipped: %s", exc)
+
+
 class LanceIndex:
     """Thin wrapper around a LanceDB async table storing all photos for one backend."""
 
@@ -273,6 +293,8 @@ class LanceIndex:
         if table_name in (await db.list_tables()).tables:
             table = await db.open_table(table_name)
             await _migrate_table(table)
+            if create_if_missing:  # writer (Whitebeard) only — readers never build indexes
+                await _ensure_tag_terms_index(table)
         elif create_if_missing:
             table = await db.create_table(table_name, schema=PHOTO_SCHEMA)
             # Create FTS index on description — only when the column has a real string type.
@@ -289,6 +311,7 @@ class LanceIndex:
                     _log.debug("FTS index skipped: description column type is %s", desc_type)
             except Exception as exc:
                 _log.debug("FTS index creation skipped: %s", exc)
+            await _ensure_tag_terms_index(table)
         else:
             raise FileNotFoundError(f"LanceDB index not found at {uri!r}")
         return cls(table)

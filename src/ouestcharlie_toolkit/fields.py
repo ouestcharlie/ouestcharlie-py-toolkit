@@ -108,6 +108,7 @@ PHOTO_FIELDS: list[FieldDef] = [
         type=FieldType.STRING_COLLECTION,
         entry_attr="tags",
         sidecar_attr="tags",
+        label="Tags (hierarchical, '|'-separated)",
     ),
     # String match — case-insensitive substring
     # Note: XmpSidecar uses camera_make/camera_model; PhotoEntry uses make/model
