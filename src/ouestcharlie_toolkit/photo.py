@@ -11,6 +11,7 @@ from typing import Any
 from .backend import Backend
 from .filename_time import date_from_filename, datetime_from_filename
 from .schema import XmpSidecar
+from .tags import normalize_paths
 
 _log = logging.getLogger(__name__)
 
@@ -465,7 +466,7 @@ class Photo:
         # UTF-16 but keeps the trailing NUL, so it must be stripped before .strip()
         # (str.strip() only removes whitespace, not the \x00 control character).
         xp_keywords = (exif_data.get("Exif.Image.XPKeywords") or "").rstrip("\x00")
-        tags = [t.strip() for t in xp_keywords.split(";") if t.strip()]
+        tags = normalize_paths(xp_keywords.split(";"))
 
         # Bootstrap description from EXIF on first extraction, same rationale as
         # the XPKeywords fallback above: ImageDescription is the cross-platform

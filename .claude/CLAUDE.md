@@ -13,6 +13,17 @@ See [README.md](../README.md#running-tests) for the full command reference. Quic
 
 ```
 
+## Linting
+
+Ruff is a dev dependency, pinned in `pyproject.toml` (locked in `uv.lock`) — the same version the pre-commit hook runs. Use the venv's copy, never `uvx ruff` or a global `ruff` (unpinned version, results may differ from the hook):
+
+```
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+```
+
+To upgrade it, change the pin with `uv add --dev ruff==<version>`.
+
 ## Documentation Style
 
 - **No caller name-dropping.** py-toolkit is a library with its own interface; it does not know about its callers (Woof, Wally, Whitebeard, ...). Never write docstrings/comments like "used by Wally's `get_summary` tool" — that's a dependency pointing the wrong way, and it silently rots when the caller changes. Describe what the function does and its contract (inputs, outputs, invariants), not who currently calls it.

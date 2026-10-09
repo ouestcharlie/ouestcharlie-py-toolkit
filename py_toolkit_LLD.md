@@ -42,6 +42,8 @@ GPS and thumbnail columns use **flat nullable columns** rather than structs. Lan
 
 `date_taken` is stored timezone-naive. All comparisons must strip timezone before comparing.
 
+`tags` holds the photo's leaf tag paths (`Places|Europe|France`, see [Hierarchical tags](#hierarchical-tags)). `tag_terms` is derived from it at write time: every ancestor path plus every level name, folded with `tags.fold` (NFC, then lowercase: `places`, `places|europe`, `places|europe|france`, `europe`, `france`). Tag filters fold the value the same way, so matching ignores case while the predicate stays an exact match the index can serve; lowercasing `tag_terms` at query time would bypass the index. `tags` keeps the user's spelling. Tag filters are `array_has(tag_terms, …)`, so one exact-match predicate serves both a subtree query (`Places|Europe`) and a name-at-any-level query (`France`). A `LABEL_LIST` scalar index backs it; only the writer (`open(create_if_missing=True)`) creates it, and `maintain()` brings rows written since then under it. A semi-structured JSON tree column was rejected: the any-level query has no simple JSON-path form, and JSON columns get no scalar index.
+
 ### `search_where` pagination
 
 Two queries are issued: a lightweight `select(["tags"])` scan for total count and tag facets, then a page query with `order_by` / `offset` / `limit` pushed down to LanceDB (available since 0.33). A `filename` tiebreaker is appended to the ordering for deterministic pagination across pages.
@@ -49,6 +51,8 @@ Two queries are issued: a lightweight `select(["tags"])` scan for total count an
 ### Partition summary
 
 DuckDB runs in `asyncio.to_thread` because it is CPU-bound sync. The Lance query before it uses native async — no `to_thread` wrapping needed there.
+
+Tag facets are counted per hierarchy node: each path in `tags` contributes all its ancestors, and a photo counts once per node even when several of its paths share it (`COUNT(DISTINCT rid)`). The `tag_facets` keys are therefore paths, ancestors included; clients rebuild the tree by splitting on `|`. Spellings that differ only by case are one node, grouped by `lower(nfc_normalize(node))` (the SQL twin of `tags.fold`, which is why `fold` uses `lower()` rather than `casefold()`) and shown with the most frequent spelling, ties broken by sort order. Keys are rebuilt top down from the parent's key (`_tag_facet_counts`), so a child never disagrees with its parent's spelling.
 
 ## Manifest Consistency
 
@@ -63,6 +67,16 @@ Unknown fields in `summary.json` are captured in `_extra: dict` and round-trippe
 **Dual sidecar naming convention**: `xmp_path_for(photo_path, with_photo_extension=bool)` supports both the full-extension form (`IMG_001.cr3.xmp` — darktable, digiKam, Immich's preferred form) and the extension-stripped form (`IMG_001.xmp` — Lightroom). `XmpStore.read()`/`write()` resolve to whichever form already exists on disk (full-extension checked first), and `create()` always writes new sidecars in the full-extension form. This means existing libraries need no migration, and an update to an existing sidecar never forks a second file under the other convention.
 
 **Namespace registration**: Python 3.13 `ET.register_namespace()` rejects prefixes matching `ns\d+` — use `ext{counter}` as fallback.
+
+### Hierarchical tags
+
+`tags.py` holds the path helpers. A tag is a `|`-separated path (darktable/Lightroom convention); a flat tag is a one-level path. `XmpSidecar.tags` holds the user's leaf paths: an ancestor also present as its own entry is implied and dropped. Paths are normalized on read (levels trimmed, empty levels dropped, duplicates removed). Stored paths keep their case; search, facets and excluded tag prefixes ignore it.
+
+**Read** (`parse_xmp`): `lr:hierarchicalSubject` takes precedence, as in darktable, which reads tags only from it when it exists. A `dc:subject` term that is not a level of any hierarchical path was added by a `dc:subject`-only tool and is kept as a one-level path; the other `dc:subject` terms are just the flattened levels. Without `lr:hierarchicalSubject`, each `dc:subject` term is read as a path. `rdf:Bag` and `rdf:Seq` are both accepted.
+
+**Excluded tag prefixes**: paths equal to or below one of the library's `excluded_tag_prefixes` (default `["darktable"]`: darktable's automatic `darktable|format|jpg`, `darktable|changed`, …) are moved to `XmpSidecar._excluded_tags` instead of `tags`. Matching is on whole levels and ignores case (`darktable` excludes `Darktable|format`, not `darktable-fans`). The setting comes from `WOOF_BACKEND_CONFIG` via `AgentBase.excluded_tag_prefixes` (default when the key is absent, e.g. an older Woof) and is applied by `XmpStore`, so it takes effect at the next full reindex. Excluded paths are never indexed but are written back.
+
+**Write** (`serialize_xmp`): `lr:hierarchicalSubject` gets the user's paths (flat tags too: darktable would otherwise ignore them once the element exists) followed by `_excluded_tags`; `dc:subject` gets every level of every user path, deduplicated in first-seen order — darktable's and Lightroom's default "include parents" export. Neither element is written when both lists are empty.
 
 **`XPKeywords` tag bootstrap**: `Photo.extract_exif()` seeds `tags` from the Windows-specific `Exif.Image.XPKeywords` EXIF field (semicolon-separated) when creating a brand-new sidecar. This is a one-time bootstrap for libraries whose only keyword source is Windows Explorer/Photos tagging — it is not an authoritative or bidirectional sync with `dc:subject`, since `extract_exif()` never reads an existing sidecar and therefore never overwrites tags added later via Woof or Darktable.
 

@@ -150,6 +150,17 @@ def test_row_tags_populated():
     assert row["tags"] == ["a", "b"]
 
 
+def test_row_tag_terms_derived_from_tag_paths():
+    row = photo_entry_to_row(_entry(searchable={"tags": ["Places|Europe", "Family"]}), "p", None)
+    # tags keep their spelling; tag_terms are folded for case-insensitive search
+    assert row["tags"] == ["Places|Europe", "Family"]
+    assert row["tag_terms"] == ["places", "places|europe", "europe", "family"]
+
+
+def test_row_tag_terms_empty_without_tags():
+    assert photo_entry_to_row(_entry(), "p", None)["tag_terms"] == []
+
+
 def test_row_last_update_is_naive_for_lancedb():
     # LanceDB stores timestamps without timezone; _last_update must be naive (tzinfo=None).
     row = photo_entry_to_row(_entry(), "p", None)
@@ -199,6 +210,12 @@ def test_round_trip_tags():
     entry = _entry(searchable={"tags": ["sunset", "travel"]})
     restored = row_to_photo_entry(photo_entry_to_row(entry, "p", None))
     assert restored.searchable["tags"] == ["sunset", "travel"]
+
+
+def test_round_trip_hierarchical_tags():
+    entry = _entry(searchable={"tags": ["Places|Europe|France", "Family"]})
+    restored = row_to_photo_entry(photo_entry_to_row(entry, "p", None))
+    assert restored.searchable["tags"] == ["Places|Europe|France", "Family"]
 
 
 def test_round_trip_tags_always_a_list():
@@ -307,6 +324,69 @@ async def test_open_or_create_creates_fts_index_on_description(tmp_path: Path):
         for i in indices
     )
     assert fts_on_description, f"No FTS index on 'description' found. Indices: {indices}"
+
+
+@pytest.mark.asyncio
+async def test_open_or_create_creates_label_list_index_on_tag_terms(tmp_path: Path):
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    indices = await idx._table.list_indices()
+    assert any(i.columns == ["tag_terms"] and i.index_type == "LabelList" for i in indices), (
+        f"No LabelList index on 'tag_terms'. Indices: {indices}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_open_existing_table_adds_tag_terms_index_once(tmp_path: Path):
+    """An index created before tag_terms existed gets the column and its index on open."""
+    backend = LocalBackend(root=tmp_path)
+    uri = str(tmp_path / ".ouestcharlie" / "index.lance")
+    db = await lancedb.connect_async(uri)
+    old_schema = pa.schema([f for f in PHOTO_SCHEMA if f.name != "tag_terms"])
+    await db.create_table(PHOTO_TABLE_NAME, schema=old_schema)
+
+    await LanceIndex.open(backend, PHOTO_TABLE_NAME, create_if_missing=True)
+    idx = await LanceIndex.open(backend, PHOTO_TABLE_NAME, create_if_missing=True)
+    indices = [i for i in await idx._table.list_indices() if i.columns == ["tag_terms"]]
+    assert len(indices) == 1
+
+
+@pytest.mark.asyncio
+async def test_reader_open_does_not_create_tag_terms_index(tmp_path: Path):
+    backend = LocalBackend(root=tmp_path)
+    uri = str(tmp_path / ".ouestcharlie" / "index.lance")
+    db = await lancedb.connect_async(uri)
+    await db.create_table(PHOTO_TABLE_NAME, schema=PHOTO_SCHEMA)
+
+    idx = await LanceIndex.open(backend, PHOTO_TABLE_NAME)
+    assert not [i for i in await idx._table.list_indices() if i.columns == ["tag_terms"]]
+
+
+@pytest.mark.asyncio
+async def test_search_where_tag_terms_subtree_and_any_level(tmp_path: Path):
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition(
+        "p",
+        [
+            _entry("paris.jpg", "h_paris", {"tags": ["Places|Europe|France|Paris"]}),
+            _entry("tokyo.jpg", "h_tokyo", {"tags": ["Places|Asia|Japan|Tokyo"]}),
+        ],
+        None,
+    )
+    await idx.maintain()  # brings new rows under the LabelList index
+
+    async def _names(where: str) -> set[str]:
+        rows, _ = await _collect_search(idx, where)
+        return {r["filename"] for r in rows}
+
+    # tag_terms are folded: callers fold the value too (Wally does)
+    assert await _names("array_has(tag_terms, 'places|europe')") == {"paris.jpg"}
+    assert await _names("array_has(tag_terms, 'paris')") == {"paris.jpg"}
+    assert await _names("array_has(tag_terms, 'places')") == {"paris.jpg", "tokyo.jpg"}
+    assert await _names("array_has(tag_terms, 'europe|france')") == set()
 
 
 # ---------------------------------------------------------------------------

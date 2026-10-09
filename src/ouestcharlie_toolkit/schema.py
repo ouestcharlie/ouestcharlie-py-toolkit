@@ -14,12 +14,12 @@ from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 
 OUESTCHARLIE_NS = "http://ouestcharlie.app/ns/1.0/"
 # Current schema version this software writes.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 # Oldest index schema version this software can still read and migrate in place
 # (additive-only changes, e.g. new nullable Lance columns). An index whose
 # version is within [LOWEST_SCHEMA_VERSION, SCHEMA_VERSION] is used as-is; older
 # indexes need a full reindex, newer ones a software upgrade.
-LOWEST_SCHEMA_VERSION = 3
+LOWEST_SCHEMA_VERSION = 6
 
 
 def is_index_schema_compatible(version: int) -> bool:
@@ -239,6 +239,8 @@ class XmpSidecar:
     rating: int | None = None  # xmp:Rating (0=unrated, 1-5=stars, -1=rejected)
     width: int | None = None  # pixel width (exif:PixelXDimension / tiff:ImageWidth)
     height: int | None = None  # pixel height (exif:PixelYDimension / tiff:ImageLength)
+    # User tags as "|"-separated paths (e.g. "Places|Europe|France"); flat tags are
+    # one-level paths. Read from lr:hierarchicalSubject first, then dc:subject.
     tags: list[str] = field(default_factory=list)
     description: str | None = None  # dc:description (human-readable caption, any language)
     # Camera shoot settings
@@ -259,6 +261,9 @@ class XmpSidecar:
     # Values are either plain strings (for simple attributes) or XML-serialized strings (for
     # structured child elements like bags/sequences, identifiable by a leading "<").
     _extra: dict[str, str] = field(default_factory=dict)
+    # Tag paths matching the library's excluded tag prefixes (e.g. darktable|format|jpg).
+    # Never indexed; written back to lr:hierarchicalSubject so they survive a round trip.
+    _excluded_tags: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -5,12 +5,21 @@ from __future__ import annotations
 import contextlib
 import logging
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 
 from .backend import Backend, VersionConflictError, VersionToken
 from .schema import OUESTCHARLIE_NS, SCHEMA_VERSION, XmpSidecar
+from .tags import (
+    DEFAULT_EXCLUDED_TAG_PREFIXES,
+    flatten,
+    is_excluded,
+    leaf_paths,
+    levels,
+    normalize_path,
+    normalize_paths,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -27,6 +36,7 @@ _NS_XMP = "http://ns.adobe.com/xmp/1.0/"
 _NS_DC = "http://purl.org/dc/elements/1.1/"
 _NS_AUX = "http://ns.adobe.com/exif/1.0/aux/"  # Adobe aux:Lens
 _NS_EXIFEX = "http://cipa.jp/exif/1.0/"  # CIPA exifEX:LensModel
+_NS_LR = "http://ns.adobe.com/lightroom/1.0/"  # lr:hierarchicalSubject
 _NS_XML = "http://www.w3.org/XML/1998/namespace"  # xml:lang on rdf:li
 
 _XPACKET_HEADER = "<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
@@ -46,7 +56,7 @@ _FRESH_XMP_SHELL = (
 _WELL_KNOWN_NS: dict[str, str] = {
     "http://ns.adobe.com/xmp/1.0/": "xmp",
     "http://ns.adobe.com/photoshop/1.0/": "photoshop",
-    "http://ns.adobe.com/lightroom/1.0/": "lr",
+    _NS_LR: "lr",
     "http://ns.adobe.com/camera-raw-settings/1.0/": "crs",
     "http://ns.adobe.com/xap/1.0/mm/": "xmpMM",
     "http://darktable.sf.net/": "darktable",
@@ -93,6 +103,7 @@ _KNOWN_CHILDREN: frozenset[str] = frozenset(
         f"{{{_NS_EXIF}}}GPSLatitude",
         f"{{{_NS_EXIF}}}GPSLongitude",
         f"{{{_NS_DC}}}subject",
+        f"{{{_NS_LR}}}hierarchicalSubject",  # rdf:Bag of "|"-separated tag paths
         f"{{{_NS_DC}}}description",  # LangAlt caption
         f"{{{_NS_EXIF}}}ISOSpeedRatings",  # rdf:Seq of ints
     }
@@ -248,6 +259,61 @@ def _find_description(root: ET.Element) -> ET.Element | None:
     return rdf.find(f"{{{_NS_RDF}}}Description")
 
 
+def _read_li_list(elem: ET.Element | None) -> list[str] | None:
+    """Return the rdf:li texts of an rdf:Bag/rdf:Seq child, or None when *elem* is absent."""
+    if elem is None:
+        return None
+    rdf = f"{{{_NS_RDF}}}"
+    container = elem.find(f"{rdf}Bag")
+    if container is None:
+        container = elem.find(f"{rdf}Seq")
+    if container is None:
+        return []
+    return [li.text or "" for li in container.findall(f"{rdf}li")]
+
+
+# ---------------------------------------------------------------------------
+# Tag helpers
+# ---------------------------------------------------------------------------
+
+
+def _split_excluded(paths: list[str], prefixes: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Split tag paths into (user tags, excluded tags)."""
+    prefixes = tuple(prefixes)
+    kept = [p for p in paths if not is_excluded(p, prefixes)]
+    excluded = [p for p in paths if is_excluded(p, prefixes)]
+    return kept, excluded
+
+
+def _read_tags(
+    hierarchical: list[str] | None,
+    subject: list[str] | None,
+    excluded_tag_prefixes: Iterable[str],
+) -> tuple[list[str], list[str]]:
+    """Resolve user tag paths from lr:hierarchicalSubject and dc:subject.
+
+    ``lr:hierarchicalSubject`` takes precedence, as in darktable. A ``dc:subject``
+    term that is not a level of any hierarchical path was added by a tool that
+    only writes ``dc:subject``: it is kept as a one-level path. Without
+    ``lr:hierarchicalSubject``, each ``dc:subject`` term is read as a path.
+
+    Returns:
+        ``(tags, excluded)``: user tag paths (leaf paths only) and the paths
+        matching *excluded_tag_prefixes*.
+    """
+    if hierarchical is not None:
+        paths = normalize_paths(hierarchical)
+        known_levels = {lvl for p in paths for lvl in levels(p)}
+        flat_only = [
+            t for t in (normalize_path(s) for s in subject or []) if t and t not in known_levels
+        ]
+        paths = normalize_paths(paths + flat_only)
+    else:
+        paths = normalize_paths(subject or [])
+    tags, excluded = _split_excluded(paths, excluded_tag_prefixes)
+    return leaf_paths(tags), excluded
+
+
 # ---------------------------------------------------------------------------
 # XMP store
 # ---------------------------------------------------------------------------
@@ -256,13 +322,20 @@ def _find_description(root: ET.Element) -> ET.Element | None:
 class XmpStore:
     """Store for reading and writing XMP sidecar files with optimistic concurrency."""
 
-    def __init__(self, backend: Backend) -> None:
+    def __init__(
+        self,
+        backend: Backend,
+        excluded_tag_prefixes: Iterable[str] = DEFAULT_EXCLUDED_TAG_PREFIXES,
+    ) -> None:
         """Initialize the XMP store.
 
         Args:
             backend: Backend instance for storage operations.
+            excluded_tag_prefixes: Tag paths kept out of ``XmpSidecar.tags`` on
+                read (see ``parse_xmp``).
         """
         self.backend = backend
+        self.excluded_tag_prefixes = tuple(excluded_tag_prefixes)
 
     async def _resolve_existing_xmp_path(self, photo_path: str) -> str | None:
         """Find the on-disk sidecar path for a photo, preferring the full-extension form.
@@ -295,7 +368,7 @@ class XmpStore:
         if xmp_path is None:
             raise FileNotFoundError(f"No XMP sidecar found for {photo_path!r}")
         data, version = await self.backend.read(xmp_path)
-        sidecar = parse_xmp(data.decode("utf-8-sig"))
+        sidecar = parse_xmp(data.decode("utf-8-sig"), self.excluded_tag_prefixes)
         if not sidecar.content_hash:
             _log.warning(f"Empty identity for sidecar '{xmp_path}")
         return sidecar, version
@@ -404,6 +477,9 @@ class XmpStore:
 
         # Extract metadata and write sidecar (new or forced overwrite).
         sidecar = await extract()
+        sidecar.tags, sidecar._excluded_tags = _split_excluded(
+            sidecar.tags, self.excluded_tag_prefixes
+        )
         if existing_version is not None:
             new_version = await self.write(photo_path, sidecar, existing_version)
         else:
@@ -454,7 +530,10 @@ class XmpStore:
 # ---------------------------------------------------------------------------
 
 
-def parse_xmp(xml: str) -> XmpSidecar:
+def parse_xmp(
+    xml: str,
+    excluded_tag_prefixes: Iterable[str] = DEFAULT_EXCLUDED_TAG_PREFIXES,
+) -> XmpSidecar:
     """Parse XMP XML into an XmpSidecar.
 
     Known fields are mapped to typed XmpSidecar attributes. Unknown attributes
@@ -463,6 +542,8 @@ def parse_xmp(xml: str) -> XmpSidecar:
 
     Args:
         xml: XMP XML string (with or without <?xpacket ?> wrappers).
+        excluded_tag_prefixes: Tag paths equal to or below one of these prefixes
+            are kept out of ``tags`` and stored in ``_excluded_tags`` instead.
 
     Returns:
         XmpSidecar populated from the XMP data.
@@ -511,12 +592,11 @@ def parse_xmp(xml: str) -> XmpSidecar:
         lon_elem.text if lon_elem is not None else None,
     )
 
-    tags: list[str] = []
-    subject = desc.find(f"{dc}subject")
-    if subject is not None:
-        bag = subject.find(f"{rdf}Bag")
-        if bag is not None:
-            tags = [li.text or "" for li in bag.findall(f"{rdf}li")]
+    tags, excluded_tags = _read_tags(
+        _read_li_list(desc.find(f"{{{_NS_LR}}}hierarchicalSubject")),
+        _read_li_list(desc.find(f"{dc}subject")),
+        excluded_tag_prefixes,
+    )
 
     # dc:description — LangAlt caption
     description: str | None = None
@@ -597,6 +677,7 @@ def parse_xmp(xml: str) -> XmpSidecar:
         video_codec=video_codec,
         has_audio=(has_audio_s == "true") if has_audio_s is not None else None,
         _extra=extra,
+        _excluded_tags=excluded_tags,
     )
 
 
@@ -695,11 +776,21 @@ def serialize_xmp(sidecar: XmpSidecar) -> str:
         lon_e = ET.SubElement(desc, f"{exif_ns}GPSLongitude")
         lon_e.text = _decimal_to_xmp_coord(sidecar.gps[1], is_lat=False)
 
-    # Tags as dc:subject > rdf:Bag > rdf:li
-    if sidecar.tags:
+    # Tags, darktable-style: every path (flat ones included, since darktable reads
+    # only lr:hierarchicalSubject when present) plus the preserved excluded paths
+    # go to lr:hierarchicalSubject; every level of every user path to dc:subject.
+    user_tags = normalize_paths(sidecar.tags)
+    hierarchical = normalize_paths(user_tags + sidecar._excluded_tags)
+    if hierarchical:
+        h_el = ET.SubElement(desc, f"{{{_NS_LR}}}hierarchicalSubject")
+        bag = ET.SubElement(h_el, f"{rdf_ns}Bag")
+        for path in hierarchical:
+            li = ET.SubElement(bag, f"{rdf_ns}li")
+            li.text = path
+    if user_tags:
         subj = ET.SubElement(desc, f"{dc_ns}subject")
         bag = ET.SubElement(subj, f"{rdf_ns}Bag")
-        for tag in sidecar.tags:
+        for tag in flatten(user_tags):
             li = ET.SubElement(bag, f"{rdf_ns}li")
             li.text = tag
 

@@ -190,6 +190,93 @@ async def test_compute_summary_tags_scoped_by_clause(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_compute_summary_tag_facets_per_hierarchy_node(tmp_path: Path) -> None:
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition(
+        "a",
+        [
+            _entry(0, {"tags": ["Places|Europe|France|Paris", "Places|Europe|France|Lyon"]}),
+            _entry(1, {"tags": ["Places|Europe|Italy", "Family"]}),
+            _entry(2, {"tags": ["Family"]}),
+        ],
+        None,
+    )
+    summary = await compute_summary(idx, None)
+    assert summary.tags["counts"] == {
+        "Places": 2,
+        "Places|Europe": 2,
+        # Photo 0 has two paths under France but counts once for it.
+        "Places|Europe|France": 1,
+        "Places|Europe|France|Paris": 1,
+        "Places|Europe|France|Lyon": 1,
+        "Places|Europe|Italy": 1,
+        "Family": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_compute_summary_tag_facets_merge_case(tmp_path: Path) -> None:
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition(
+        "a",
+        [
+            _entry(0, {"tags": ["Paris"]}),
+            _entry(1, {"tags": ["Paris"]}),
+            _entry(2, {"tags": ["paris"]}),
+            # Both spellings on one photo: counts once.
+            _entry(3, {"tags": ["Paris", "PARIS"]}),
+        ],
+        None,
+    )
+    summary = await compute_summary(idx, None)
+    assert summary.tags["counts"] == {"Paris": 4}
+
+
+@pytest.mark.asyncio
+async def test_compute_summary_tag_facet_keys_form_a_tree(tmp_path: Path) -> None:
+    """A child's key reuses its parent's spelling, even when its own most
+    frequent spelling disagrees with it."""
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition(
+        "a",
+        [
+            _entry(0, {"tags": ["Places|Europe"]}),
+            _entry(1, {"tags": ["Places|Europe"]}),
+            _entry(2, {"tags": ["Places|Europe"]}),
+            _entry(3, {"tags": ["places|europe|France"]}),
+        ],
+        None,
+    )
+    summary = await compute_summary(idx, None)
+    assert summary.tags["counts"] == {
+        "Places": 4,
+        "Places|Europe": 4,
+        "Places|Europe|France": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_compute_summary_tag_facet_spelling_tie_is_deterministic(tmp_path: Path) -> None:
+    idx = await LanceIndex.open(
+        LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
+    )
+    await idx.upsert_partition(
+        "a",
+        [_entry(0, {"tags": ["paris"]}), _entry(1, {"tags": ["Paris"]})],
+        None,
+    )
+    summary = await compute_summary(idx, None)
+    # Equal counts: the first spelling in sort order wins ("P" < "p").
+    assert summary.tags["counts"] == {"Paris": 2}
+
+
+@pytest.mark.asyncio
 async def test_compute_summary_no_tags_stat_absent(tmp_path: Path) -> None:
     idx = await LanceIndex.open(
         LocalBackend(root=tmp_path), PHOTO_TABLE_NAME, create_if_missing=True
