@@ -11,6 +11,7 @@ from lancedb.query import AsyncFTSQuery, AsyncQuery
 from .fields import PHOTO_FIELDS, FieldType
 from .lance_index import FtsFilter, LanceIndex
 from .schema import ManifestSummary
+from .tags import TAG_SEPARATOR
 
 # Range field types that contribute MIN/MAX summary stats (gated by summary_range),
 # mapped to their emitted stat type.
@@ -35,23 +36,49 @@ def _bool_fields() -> list[Any]:
 
 # Tag facets per node of the hierarchy: each tag path ("a|b|c") contributes all
 # its ancestors ("a", "a|b", "a|b|c"), and a photo counts once per node even when
-# several of its paths share it (rid = one id per photo row).
+# several of its paths share it (rid = one id per photo row). Spellings that
+# differ only by case are one node, keyed by lower(nfc_normalize(node)) — the SQL
+# twin of tags.fold — and shown with their most frequent spelling.
 _TAG_FACETS_SQL = """
-SELECT node, COUNT(DISTINCT rid) AS cnt
-FROM (
-    SELECT rid, UNNEST(list_transform(
-        range(1, len(parts) + 1), i -> array_to_string(parts[1:i], '|'))) AS node
+WITH nodes AS (
+    SELECT DISTINCT rid, node, lower(nfc_normalize(node)) AS k
     FROM (
-        SELECT rid, string_split(path, '|') AS parts
+        SELECT rid, UNNEST(list_transform(
+            range(1, len(parts) + 1), i -> array_to_string(parts[1:i], '|'))) AS node
         FROM (
-            SELECT rid, UNNEST(tags) AS path
-            FROM (SELECT row_number() OVER () AS rid, tags FROM photos)
+            SELECT rid, string_split(path, '|') AS parts
+            FROM (
+                SELECT rid, UNNEST(tags) AS path
+                FROM (SELECT row_number() OVER () AS rid, tags FROM photos)
+            )
         )
     )
+),
+spellings AS (
+    SELECT k, node, COUNT(*) AS n FROM nodes GROUP BY k, node
 )
-GROUP BY node
-ORDER BY cnt DESC, node
+SELECT c.k, s.spelling, c.cnt
+FROM (SELECT k, COUNT(DISTINCT rid) AS cnt FROM nodes GROUP BY k) c
+JOIN (SELECT k, first(node ORDER BY n DESC, node) AS spelling FROM spellings GROUP BY k) s
+    USING (k)
+ORDER BY c.cnt DESC, s.spelling
 """
+
+
+def _tag_facet_counts(rows: list[tuple[str, str, int]]) -> dict[str, int]:
+    """Facet counts keyed by display path, from (folded key, spelling, count) rows.
+
+    Each node's spelling is chosen on its own, so a parent and its child may
+    disagree (``Places`` but ``places|Europe``). Keys are rebuilt top down — the
+    parent's key plus the node's last level — so that splitting them on ``|``
+    still gives a consistent tree. Every ancestor of a node is itself a row.
+    """
+    display: dict[str, str] = {}
+    for k, spelling, _ in sorted(rows, key=lambda r: r[0].count(TAG_SEPARATOR)):
+        parent, sep, _ = k.rpartition(TAG_SEPARATOR)
+        leaf = spelling.rpartition(TAG_SEPARATOR)[2]
+        display[k] = display[parent] + sep + leaf if sep else spelling
+    return {display[k]: cnt for k, _, cnt in rows}
 
 
 async def compute_summary(
@@ -112,7 +139,7 @@ async def compute_summary(
 
     # DuckDB aggregation is CPU-bound sync — run in a thread pool.
     def _agg() -> tuple[
-        dict[str, Any], list[tuple[str, int]], dict[str, list[Any]], dict[str, dict[Any, int]]
+        dict[str, Any], list[tuple[str, str, int]], dict[str, list[Any]], dict[str, dict[Any, int]]
     ]:
         conn = duckdb.connect()
         conn.register("photos", arrow_tbl)
@@ -168,7 +195,7 @@ async def compute_summary(
         stats["gps"] = {"type": "gps_bbox", "lat": lat_s, "lon": lon_s}
 
     if tag_rows:
-        stats["tags"] = {"type": "tag_facets", "counts": {tag: cnt for tag, cnt in tag_rows}}
+        stats["tags"] = {"type": "tag_facets", "counts": _tag_facet_counts(tag_rows)}
 
     for f in facet_fields:
         rows = facet_rows.get(f.name) or []

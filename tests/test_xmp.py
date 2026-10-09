@@ -835,6 +835,15 @@ def test_excluded_tag_prefixes_custom():
     assert s._excluded_tags == []
 
 
+def test_excluded_tag_prefixes_ignore_case():
+    original = parse_xmp(_tags_xmp(["Darktable|format|jpg", "Family"], None))
+    assert original.tags == ["Family"]
+    assert original._excluded_tags == ["Darktable|format|jpg"]
+    # written back unchanged, with its spelling
+    xml = serialize_xmp(original)
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == ["Family", "Darktable|format|jpg"]
+
+
 def test_dc_subject_only_pipe_term_is_hierarchical():
     s = parse_xmp(_tags_xmp(None, ["Trips|2025|Alps", "Family"]))
     assert s.tags == ["Trips|2025|Alps", "Family"]

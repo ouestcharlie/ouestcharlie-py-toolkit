@@ -152,8 +152,9 @@ def test_row_tags_populated():
 
 def test_row_tag_terms_derived_from_tag_paths():
     row = photo_entry_to_row(_entry(searchable={"tags": ["Places|Europe", "Family"]}), "p", None)
+    # tags keep their spelling; tag_terms are folded for case-insensitive search
     assert row["tags"] == ["Places|Europe", "Family"]
-    assert row["tag_terms"] == ["Places", "Places|Europe", "Europe", "Family"]
+    assert row["tag_terms"] == ["places", "places|europe", "europe", "family"]
 
 
 def test_row_tag_terms_empty_without_tags():
@@ -381,10 +382,11 @@ async def test_search_where_tag_terms_subtree_and_any_level(tmp_path: Path):
         rows, _ = await _collect_search(idx, where)
         return {r["filename"] for r in rows}
 
-    assert await _names("array_has(tag_terms, 'Places|Europe')") == {"paris.jpg"}
-    assert await _names("array_has(tag_terms, 'Paris')") == {"paris.jpg"}
-    assert await _names("array_has(tag_terms, 'Places')") == {"paris.jpg", "tokyo.jpg"}
-    assert await _names("array_has(tag_terms, 'Europe|France')") == set()
+    # tag_terms are folded: callers fold the value too (Wally does)
+    assert await _names("array_has(tag_terms, 'places|europe')") == {"paris.jpg"}
+    assert await _names("array_has(tag_terms, 'paris')") == {"paris.jpg"}
+    assert await _names("array_has(tag_terms, 'places')") == {"paris.jpg", "tokyo.jpg"}
+    assert await _names("array_has(tag_terms, 'europe|france')") == set()
 
 
 # ---------------------------------------------------------------------------
