@@ -935,3 +935,170 @@ async def test_store_read_applies_excluded_tag_prefixes():
         custom_store = XmpStore(LocalBackend(root=tmpdir), ["Lightroom|Internal"])
         s, _ = await custom_store.read("a.jpg")
         assert s.tags == ["darktable|format|jpg", "Family"]
+
+
+# ---------------------------------------------------------------------------
+# darktable interoperability (OEC-63) — fixture 001.darktable.ref.xmp, paired with 001.jpg
+# ---------------------------------------------------------------------------
+
+_DARKTABLE = "http://darktable.sf.net/"
+_XMP_LEGACY = "http://ns.adobe.com/xmp/1.0/"
+
+
+def _darktable_xml() -> str:
+    return (_SAMPLES / "001.darktable.ref.xmp").read_text(encoding="utf-8")
+
+
+def _rating_xmp(ns: str, rating: str) -> str:
+    return (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        f"<rdf:Description rdf:about='' xmlns:xmp='{ns}' xmp:Rating='{rating}'/>"
+        "</rdf:RDF></x:xmpmeta>"
+    )
+
+
+def test_parse_exif_style_date():
+    assert _parse_iso_datetime("2025:08:24 06:03:45.314") == datetime(2025, 8, 24, 6, 3, 45, 314000)
+    assert _parse_iso_datetime("2025:08:24 06:03:45") == datetime(2025, 8, 24, 6, 3, 45)
+
+
+def test_parse_xmp_partial_dates():
+    assert _parse_iso_datetime("2025") == datetime(2025, 1, 1)
+    assert _parse_iso_datetime("2025-08") == datetime(2025, 8, 1)
+    assert _parse_iso_datetime("2025-08-24") == datetime(2025, 8, 24)
+    assert _parse_iso_datetime("2025-08-24T06:03") == datetime(2025, 8, 24, 6, 3)
+
+
+def test_parse_darktable_sidecar():
+    s = parse_xmp(_darktable_xml())
+    assert s.content_hash == "KfAbc123A2nBcR8xYvLm1P"
+    assert s.date_taken == datetime(2026, 2, 21, 13, 3, 10, 140000)
+    assert s.rating == 1
+    assert s.tags == []  # darktable|format|jpg is excluded by default
+
+
+def test_rating_read_from_xap_namespace():
+    s = parse_xmp(_rating_xmp(_XAP, "4"))
+    assert s.rating == 4
+    assert f"{{{_XAP}}}Rating" not in s._extra
+
+
+def test_rating_read_from_legacy_namespace():
+    s = parse_xmp(_rating_xmp(_XMP_LEGACY, "2"))
+    assert s.rating == 2
+    assert f"{{{_XMP_LEGACY}}}Rating" not in s._extra
+
+
+def test_rating_xap_namespace_wins_over_legacy():
+    xml = (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        f"<rdf:Description rdf:about='' xmlns:xmp='{_XAP}' xmlns:old='{_XMP_LEGACY}'"
+        " xmp:Rating='5' old:Rating='2'/>"
+        "</rdf:RDF></x:xmpmeta>"
+    )
+    assert parse_xmp(xml).rating == 5
+
+
+def test_rating_written_in_xap_namespace_only():
+    s = parse_xmp(_rating_xmp(_XMP_LEGACY, "3"))
+    xml = serialize_xmp(s)
+    assert f'xmlns:xmp="{_XAP}"' in xml
+    assert _XMP_LEGACY not in xml
+    assert 'xmp:Rating="3"' in xml
+
+
+def test_xap_extra_fields_share_xmp_prefix_with_rating():
+    """Other XMP Basic fields (Exiv2's xmp:CreateDate) serialize under the same prefix."""
+    s = _ref_xmp()
+    s.rating = 2
+    xml = serialize_xmp(s)
+    assert 'xmp:Rating="2"' in xml
+    assert "xmp:CreateDate=" in xml
+    assert parse_xmp(xml)._extra[f"{{{_XAP}}}CreateDate"] == "2026-02-21T13:03:10.140"
+
+
+def test_gps_read_from_attributes():
+    s = parse_xmp(_darktable_xml())
+    assert s.gps is not None
+    assert s.gps[0] == pytest.approx(48 + 51.396 / 60)
+    assert s.gps[1] == pytest.approx(2 + 21.132 / 60)
+    assert f"{{{_EXIF}}}GPSLatitude" not in s._extra
+    # Rewritten once, as child elements, with no duplicate attribute.
+    xml = serialize_xmp(s)
+    assert xml.count("GPSLatitude") == 2  # opening and closing tag
+    assert parse_xmp(xml).gps == pytest.approx(s.gps)
+
+
+def test_simple_property_read_from_child_element():
+    xml = (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        f"<rdf:Description rdf:about='' xmlns:xmp='{_XAP}' xmlns:exif='{_EXIF}'>"
+        "<xmp:Rating> 4 </xmp:Rating>"
+        "<exif:DateTimeOriginal>2025:08:24 06:03:45</exif:DateTimeOriginal>"
+        "</rdf:Description></rdf:RDF></x:xmpmeta>"
+    )
+    s = parse_xmp(xml)
+    assert s.rating == 4
+    assert s.date_taken == datetime(2025, 8, 24, 6, 3, 45)
+    assert s._extra == {}
+
+
+def test_round_trip_preserves_darktable_history():
+    import xml.etree.ElementTree as ET
+
+    def _canonical(xml: str, local: str) -> str:
+        body = "\n".join(line for line in xml.splitlines() if not line.lstrip().startswith("<?"))
+        desc = ET.fromstring(body).find(f"{{{_RDF}}}RDF/{{{_RDF}}}Description")
+        assert desc is not None
+        elem = desc.find(f"{{{_DARKTABLE}}}{local}")
+        assert elem is not None
+        return ET.canonicalize(ET.tostring(elem, encoding="unicode"), strip_text=True)
+
+    original = _darktable_xml()
+    s = parse_xmp(original)
+    rewritten = serialize_xmp(s)
+
+    for local in ("history", "masks_history"):
+        assert _canonical(rewritten, local) == _canonical(original, local)
+    restored = parse_xmp(rewritten)
+    assert restored._extra[f"{{{_DARKTABLE}}}history_end"] == "1"
+    assert restored._excluded_tags == ["darktable|format|jpg"]
+    assert "xmlns:darktable=" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_naive_sidecar_date_recovers_offset_from_photo_exif():
+    """001.jpg has EXIF 2026:02:21 13:03:10 with OffsetTimeOriginal=+01:00."""
+    from datetime import timedelta, timezone
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        shutil.copy(_SAMPLES / "001.jpg", Path(tmpdir) / "001.jpg")
+        (Path(tmpdir) / "001.jpg.xmp").write_text(_darktable_xml(), encoding="utf-8")
+        store = XmpStore(LocalBackend(root=tmpdir))
+
+        s, _, created = await store.read_or_create_from_picture("001.jpg")
+
+        assert not created
+        assert s.date_taken == datetime(
+            2026, 2, 21, 13, 3, 10, 140000, tzinfo=timezone(timedelta(hours=1))
+        )
+        # Not written back on read.
+        assert "2026:02:21 13:03:10.140" in (Path(tmpdir) / "001.jpg.xmp").read_text()
+
+
+@pytest.mark.asyncio
+async def test_naive_sidecar_date_different_from_exif_stays_naive():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        shutil.copy(_SAMPLES / "001.jpg", Path(tmpdir) / "001.jpg")
+        (Path(tmpdir) / "001.jpg.xmp").write_text(
+            _darktable_xml().replace("2026:02:21 13:03:10.140", "2026:02:20 09:00:00"),
+            encoding="utf-8",
+        )
+        store = XmpStore(LocalBackend(root=tmpdir))
+
+        s, _, _ = await store.read_or_create_from_picture("001.jpg")
+
+        assert s.date_taken == datetime(2026, 2, 20, 9, 0, 0)

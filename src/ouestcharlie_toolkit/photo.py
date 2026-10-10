@@ -354,6 +354,34 @@ class Photo:
             self._content_hash = await self.backend.content_hash(self.path)
         return self._content_hash
 
+    def _read_exif(self, local: Path) -> dict[str, str]:
+        """Read the raw EXIF tags of this photo (at *local*), keyed by pyexiv2 tag name."""
+        if Path(self.path).suffix.lower() in _HEIF_SUFFIXES:
+            return _read_heif_exif(local)
+
+        import pyexiv2  # lazy: native C extension with system library dependency
+
+        pyexiv2.set_log_level(4)  # mute C-level logs: write to stdout, corrupt MCP stdio
+
+        img = pyexiv2.Image(str(local))  # pyexiv2 requires str, not Path
+        exif_data: dict[str, str]
+        try:
+            exif_data = img.read_exif()
+        except UnicodeDecodeError:
+            # Legacy cameras (pre-2005 era) often embed EXIF strings in latin-1/cp1252.
+            # Latin-1 is lossless for all byte values, so this never raises.
+            exif_data = img.read_exif(encoding="latin-1")
+        finally:
+            img.close()
+        return exif_data
+
+    async def exif_datetime(self) -> datetime | None:
+        """Return the EXIF capture date-time, timezone-aware when EXIF has an offset.
+
+        Reads only the EXIF metadata, without hashing the file.
+        """
+        return _parse_exif_datetime(self._read_exif(await self.backend.local_path(self.path)))
+
     async def extract_exif(self) -> XmpSidecar:
         """Extract EXIF metadata from this photo into an XmpSidecar.
 
@@ -367,21 +395,7 @@ class Photo:
         photo_hash = await self.backend.content_hash(self.path)
 
         local = await self.backend.local_path(self.path)
-        if Path(self.path).suffix.lower() in _HEIF_SUFFIXES:
-            exif_data: dict[str, str] = _read_heif_exif(local)
-        else:
-            import pyexiv2  # lazy: native C extension with system library dependency
-
-            pyexiv2.set_log_level(4)  # mute C-level logs: write to stdout, corrupt MCP stdio
-
-            img = pyexiv2.Image(str(local))  # pyexiv2 requires str, not Path
-            try:
-                exif_data = img.read_exif()
-            except UnicodeDecodeError:
-                # Legacy cameras (pre-2005 era) often embed EXIF strings in latin-1/cp1252.
-                # Latin-1 is lossless for all byte values, so this never raises.
-                exif_data = img.read_exif(encoding="latin-1")
-            img.close()
+        exif_data = self._read_exif(local)
 
         self._content_hash = photo_hash
 

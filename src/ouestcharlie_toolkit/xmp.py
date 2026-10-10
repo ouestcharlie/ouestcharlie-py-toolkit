@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .backend import Backend, VersionConflictError, VersionToken
 from .schema import OUESTCHARLIE_NS, SCHEMA_VERSION, XmpSidecar
@@ -21,6 +23,9 @@ from .tags import (
     normalize_paths,
 )
 
+if TYPE_CHECKING:
+    from .photo import Photo
+
 _log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -32,7 +37,9 @@ _NS_X = "adobe:ns:meta/"
 _NS_OC = OUESTCHARLIE_NS
 _NS_EXIF = "http://ns.adobe.com/exif/1.0/"
 _NS_TIFF = "http://ns.adobe.com/tiff/1.0/"
-_NS_XMP = "http://ns.adobe.com/xmp/1.0/"
+_NS_XMP = "http://ns.adobe.com/xap/1.0/"  # XMP Basic: xmp:Rating
+# Wrong XMP Basic URI written by OuEstCharlie before OEC-63: read, never written.
+_NS_XMP_LEGACY = "http://ns.adobe.com/xmp/1.0/"
 _NS_DC = "http://purl.org/dc/elements/1.1/"
 _NS_AUX = "http://ns.adobe.com/exif/1.0/aux/"  # Adobe aux:Lens
 _NS_EXIFEX = "http://cipa.jp/exif/1.0/"  # CIPA exifEX:LensModel
@@ -54,7 +61,7 @@ _FRESH_XMP_SHELL = (
 # Known third-party namespaces → their conventional XMP prefix.
 # Used so that ET serializes them with human-readable prefixes rather than ns0, ns1, …
 _WELL_KNOWN_NS: dict[str, str] = {
-    "http://ns.adobe.com/xmp/1.0/": "xmp",
+    _NS_XMP: "xmp",
     "http://ns.adobe.com/photoshop/1.0/": "photoshop",
     _NS_LR: "lr",
     "http://ns.adobe.com/camera-raw-settings/1.0/": "crs",
@@ -66,10 +73,11 @@ _WELL_KNOWN_NS: dict[str, str] = {
     "http://cipa.jp/exif/1.0/": "exifEX",
 }
 
-# Known rdf:Description attributes — not preserved in _extra.
-_KNOWN_ATTRS: frozenset[str] = frozenset(
+# Known simple properties. XMP allows a simple property either as an attribute
+# of rdf:Description (Exiv2/darktable's form) or as a child element, so they are
+# read in both forms and known in both forms (neither lands in _extra).
+_SIMPLE_PROPS: frozenset[str] = frozenset(
     {
-        f"{{{_NS_RDF}}}about",
         f"{{{_NS_OC}}}contentHash",
         f"{{{_NS_OC}}}schemaVersion",
         f"{{{_NS_OC}}}metadataVersion",
@@ -94,14 +102,19 @@ _KNOWN_ATTRS: frozenset[str] = frozenset(
         f"{{{_NS_EXIF}}}FocalLengthIn35mmFilm",
         f"{{{_NS_AUX}}}Lens",
         f"{{{_NS_EXIFEX}}}LensModel",
+        f"{{{_NS_EXIF}}}GPSLatitude",
+        f"{{{_NS_EXIF}}}GPSLongitude",
+        # Legacy rating: read as a fallback, dropped on write.
+        f"{{{_NS_XMP_LEGACY}}}Rating",
     }
 )
 
+# Known rdf:Description attributes — not preserved in _extra.
+_KNOWN_ATTRS: frozenset[str] = _SIMPLE_PROPS | {f"{{{_NS_RDF}}}about"}
+
 # Known rdf:Description child element tags — not preserved in _extra.
-_KNOWN_CHILDREN: frozenset[str] = frozenset(
+_KNOWN_CHILDREN: frozenset[str] = _SIMPLE_PROPS | frozenset(
     {
-        f"{{{_NS_EXIF}}}GPSLatitude",
-        f"{{{_NS_EXIF}}}GPSLongitude",
         f"{{{_NS_DC}}}subject",
         f"{{{_NS_LR}}}hierarchicalSubject",  # rdf:Bag of "|"-separated tag paths
         f"{{{_NS_DC}}}description",  # LangAlt caption
@@ -175,14 +188,29 @@ def xmp_path_for(photo_path: str, *, with_photo_extension: bool) -> str:
 # ---------------------------------------------------------------------------
 
 
+# EXIF-style date prefix "YYYY:MM:DD " (darktable/Exiv2 write exif:DateTimeOriginal so).
+_EXIF_DATE_PREFIX = re.compile(r"(\d{4}):(\d{2}):(\d{2})[ T]")
+# XMP partial dates that fromisoformat rejects: "YYYY" and "YYYY-MM".
+_XMP_PARTIAL_DATE = re.compile(r"\d{4}(-\d{2})?")
+
+
 def _parse_iso_datetime(s: str | None) -> datetime | None:
-    """Parse an ISO 8601 datetime string, preserving subseconds and timezone.
+    """Parse an XMP datetime string, preserving subseconds and timezone.
+
+    Accepts ISO 8601, the EXIF style ``YYYY:MM:DD HH:MM:SS[.fraction]`` written
+    by darktable, and XMP partial dates (``YYYY``, ``YYYY-MM``, ``YYYY-MM-DD``,
+    ``YYYY-MM-DDTHH:MM``), which are rounded to the start of the period.
 
     Returns a timezone-aware datetime when an offset is present, a naive
     datetime otherwise.  Returns None for empty/invalid input.
     """
     if not s:
         return None
+    s = s.strip()
+    if m := _EXIF_DATE_PREFIX.match(s):
+        s = f"{m[1]}-{m[2]}-{m[3]}T{s[m.end() :]}"
+    elif _XMP_PARTIAL_DATE.fullmatch(s):
+        s = f"{s}-01-01"[:10]
     try:
         return datetime.fromisoformat(s)
     except ValueError:
@@ -259,6 +287,17 @@ def _find_description(root: ET.Element) -> ET.Element | None:
     return rdf.find(f"{{{_NS_RDF}}}Description")
 
 
+def _get_simple(desc: ET.Element, key: str) -> str | None:
+    """Return a simple property, written as an attribute or as a child element."""
+    value = desc.get(key)
+    if value is not None:
+        return value
+    child = desc.find(key)
+    if child is None or child.text is None:
+        return None
+    return child.text.strip()
+
+
 def _read_li_list(elem: ET.Element | None) -> list[str] | None:
     """Return the rdf:li texts of an rdf:Bag/rdf:Seq child, or None when *elem* is absent."""
     if elem is None:
@@ -312,6 +351,29 @@ def _read_tags(
         paths = normalize_paths(subject or [])
     tags, excluded = _split_excluded(paths, excluded_tag_prefixes)
     return leaf_paths(tags), excluded
+
+
+async def _recover_date_offset(sidecar: XmpSidecar, photo: Photo) -> None:
+    """Give a naive sidecar date the UTC offset found in the photo's EXIF.
+
+    darktable rewrites ``exif:DateTimeOriginal`` without its offset. The offset
+    is taken from EXIF only when the EXIF local date-time equals the sidecar's
+    to the second; otherwise the sidecar's date (maybe corrected by the user)
+    stays naive. Not written back: the next write stores it.
+    """
+    date = sidecar.date_taken
+    if date is None or date.tzinfo is not None:
+        return
+    try:
+        exif_date = await photo.exif_datetime()
+    except Exception:
+        # Best effort: an unreadable photo keeps the naive sidecar date.
+        _log.debug("Could not read EXIF date of %r", photo.path, exc_info=True)
+        return
+    if exif_date is None or exif_date.tzinfo is None:
+        return
+    if exif_date.replace(tzinfo=None, microsecond=0) == date.replace(microsecond=0):
+        sidecar.date_taken = date.replace(tzinfo=exif_date.tzinfo)
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +497,9 @@ class XmpStore:
         sidecar is returned unchanged.  If the existing sidecar lacks
         ``ouestcharlie:contentHash`` (e.g. a third-party sidecar written by
         Lightroom), the hash is computed from the media file and stored on the
-        returned sidecar object without writing back.
+        returned sidecar object without writing back. Likewise, a naive date
+        in a photo's sidecar (darktable drops the offset) gets the offset from
+        the photo's EXIF when both dates match.
 
         If no sidecar exists, or ``force=True``, metadata is extracted from the
         media file, a new sidecar is written, and the new sidecar is returned.
@@ -454,6 +518,7 @@ class XmpStore:
 
         # Select the media handler by extension. Both expose create_identity();
         # extraction differs (extract_exif vs extract_metadata).
+        photo: Photo | None = None
         if Path(photo_path).suffix.lower() in VIDEO_SUFFIXES:
             video = Video(self.backend, photo_path)
             extract = video.extract_metadata
@@ -472,6 +537,8 @@ class XmpStore:
             if not existing_sidecar.content_hash:
                 # Third-party sidecar without ouestcharlie:contentHash.
                 existing_sidecar.content_hash = await create_identity()
+            if photo is not None:
+                await _recover_date_offset(existing_sidecar, photo)
             assert existing_version is not None
             return existing_sidecar, existing_version, False
 
@@ -570,27 +637,27 @@ def parse_xmp(
     aux = f"{{{_NS_AUX}}}"
     exifex = f"{{{_NS_EXIFEX}}}"
 
-    content_hash = desc.get(f"{oc}contentHash")
-    schema_ver_s = desc.get(f"{oc}schemaVersion")
-    metadata_ver_s = desc.get(f"{oc}metadataVersion")
-    media_type = desc.get(f"{oc}mediaType") or "photo"
-    duration_s = desc.get(f"{oc}durationSeconds")
-    video_codec = desc.get(f"{oc}videoCodec") or None
-    has_audio_s = desc.get(f"{oc}hasAudio")
-    date_s = desc.get(f"{exif}DateTimeOriginal")
-    make = desc.get(f"{exif}Make") or desc.get(f"{tiff}Make")
-    model = desc.get(f"{exif}Model") or desc.get(f"{tiff}Model")
-    orientation_s = desc.get(f"{tiff}Orientation")
-    rating_s = desc.get(f"{xmp_ns}Rating")
-    width_s = desc.get(f"{exif}PixelXDimension")
-    height_s = desc.get(f"{exif}PixelYDimension")
+    def get(key: str) -> str | None:
+        return _get_simple(desc, key)
 
-    lat_elem = desc.find(f"{exif}GPSLatitude")
-    lon_elem = desc.find(f"{exif}GPSLongitude")
-    gps = _parse_xmp_gps(
-        lat_elem.text if lat_elem is not None else None,
-        lon_elem.text if lon_elem is not None else None,
-    )
+    content_hash = get(f"{oc}contentHash")
+    schema_ver_s = get(f"{oc}schemaVersion")
+    metadata_ver_s = get(f"{oc}metadataVersion")
+    media_type = get(f"{oc}mediaType") or "photo"
+    duration_s = get(f"{oc}durationSeconds")
+    video_codec = get(f"{oc}videoCodec") or None
+    has_audio_s = get(f"{oc}hasAudio")
+    date_s = get(f"{exif}DateTimeOriginal")
+    make = get(f"{exif}Make") or get(f"{tiff}Make")
+    model = get(f"{exif}Model") or get(f"{tiff}Model")
+    orientation_s = get(f"{tiff}Orientation")
+    rating_s = get(f"{xmp_ns}Rating")
+    if rating_s is None:
+        rating_s = get(f"{{{_NS_XMP_LEGACY}}}Rating")
+    width_s = get(f"{exif}PixelXDimension")
+    height_s = get(f"{exif}PixelYDimension")
+
+    gps = _parse_xmp_gps(get(f"{exif}GPSLatitude"), get(f"{exif}GPSLongitude"))
 
     tags, excluded_tags = _read_tags(
         _read_li_list(desc.find(f"{{{_NS_LR}}}hierarchicalSubject")),
@@ -628,11 +695,11 @@ def parse_xmp(
         except ValueError, TypeError:
             return None
 
-    aperture = _rational_or_none(desc.get(f"{exif}FNumber"))
-    exposure_time = _rational_or_none(desc.get(f"{exif}ExposureTime"))
-    focal_length = _rational_or_none(desc.get(f"{exif}FocalLength"))
-    focal_length_35mm = _int_or_none(desc.get(f"{exif}FocalLengthIn35mmFilm"))
-    lens_model = desc.get(f"{exifex}LensModel") or desc.get(f"{aux}Lens") or None
+    aperture = _rational_or_none(get(f"{exif}FNumber"))
+    exposure_time = _rational_or_none(get(f"{exif}ExposureTime"))
+    focal_length = _rational_or_none(get(f"{exif}FocalLength"))
+    focal_length_35mm = _int_or_none(get(f"{exif}FocalLengthIn35mmFilm"))
+    lens_model = get(f"{exifex}LensModel") or get(f"{aux}Lens") or None
 
     # exif:ISOSpeedRatings — rdf:Seq of integers; take first value
     iso_speed: int | None = None

@@ -68,6 +68,16 @@ Unknown fields in `summary.json` are captured in `_extra: dict` and round-trippe
 
 **Namespace registration**: Python 3.13 `ET.register_namespace()` rejects prefixes matching `ns\d+` — use `ext{counter}` as fallback.
 
+### Sharing `NAME.EXT.xmp` with darktable
+
+darktable uses the same sidecar file. It reads it at import, then rewrites it from its database at every sync: it keeps the `ouestcharlie:*` attributes and other unknown fields, but writes dates EXIF-style without offset and adds `darktable:history` and its other data, which OuEstCharlie keeps in `_extra`.
+
+**Simple properties in both forms**: XMP allows a simple property as an attribute of `rdf:Description` (Exiv2/darktable's form, e.g. `exif:GPSLatitude="48,51.396000N"`) or as a child element. `parse_xmp` reads every known simple property (`_SIMPLE_PROPS`) in both forms, and both forms are known, so neither lands in `_extra` and no duplicate is written. `serialize_xmp` keeps its own form (attributes, GPS as child elements).
+
+**Dates**: `_parse_iso_datetime` accepts ISO 8601, darktable's EXIF style `YYYY:MM:DD HH:MM:SS[.fraction]`, and XMP partial dates (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`, rounded to the start of the period). Without an offset the result is naive. `XmpStore.read_or_create_from_picture` then recovers the offset of an existing photo sidecar from the photo's EXIF (`OffsetTimeOriginal`/`OffsetTime`, via `Photo.exif_datetime()`), only when the EXIF local date-time equals the sidecar's to the second; otherwise the sidecar's date, which the user may have corrected, stays naive. The offset is not written back on read: the next write by OuEstCharlie stores it.
+
+**XMP Basic namespace**: `xmp:Rating` is in `http://ns.adobe.com/xap/1.0/`, where darktable, Lightroom and digiKam read it. Before OEC-63 OuEstCharlie wrote it in the wrong `http://ns.adobe.com/xmp/1.0/` (`_NS_XMP_LEGACY`): that one is read as a fallback and dropped on write, so existing sidecars switch namespace at their next write. darktable's default rating of 1 at import is read as a real rating.
+
 ### Hierarchical tags
 
 `tags.py` holds the path helpers. A tag is a `|`-separated path (darktable/Lightroom convention); a flat tag is a one-level path. `XmpSidecar.tags` holds the user's leaf paths: an ancestor also present as its own entry is implied and dropped. Paths are normalized on read (levels trimmed, empty levels dropped, duplicates removed). Stored paths keep their case; search, facets and excluded tag prefixes ignore it.
