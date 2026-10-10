@@ -359,7 +359,8 @@ async def _recover_date_offset(sidecar: XmpSidecar, photo: Photo) -> None:
     darktable rewrites ``exif:DateTimeOriginal`` without its offset. The offset
     is taken from EXIF only when the EXIF local date-time equals the sidecar's
     to the second; otherwise the sidecar's date (maybe corrected by the user)
-    stays naive. Not written back: the next write stores it.
+    stays naive. Never written back: it is recovered again at each index, and
+    darktable would strip it at its next sync anyway.
     """
     date = sidecar.date_taken
     if date is None or date.tzinfo is not None:
