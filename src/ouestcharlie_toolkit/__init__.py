@@ -21,7 +21,7 @@ from .schema import (
 )
 from .server import AgentBase
 from .video import VIDEO_SUFFIXES, Video, video_identity_hash
-from .xmp import XmpStore, xmp_path_for
+from .xmp import XmpStore, sidecar_candidates, xmp_path_for
 
 __version__ = version("ouestcharlie-py-toolkit")
 
@@ -51,5 +51,6 @@ __all__ = [
     # Utilities
     "backend_from_config",
     "setup_logging",
+    "sidecar_candidates",
     "xmp_path_for",
 ]

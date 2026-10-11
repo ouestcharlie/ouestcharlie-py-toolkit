@@ -19,6 +19,7 @@ from ouestcharlie_toolkit.xmp import (
     _xmp_coord_to_decimal,
     parse_xmp,
     serialize_xmp,
+    sidecar_candidates,
     xmp_path_for,
 )
 
@@ -686,6 +687,32 @@ async def test_read_falls_back_to_stripped_extension_sidecar():
         sidecar, _ = await store.read("photo.jpg")
 
     assert sidecar.content_hash == "stripped-hash"
+
+
+def test_sidecar_candidates_order():
+    """Full-extension form first, then the extension-stripped one."""
+    assert sidecar_candidates("2024/IMG_001.cr3") == ("2024/IMG_001.cr3.xmp", "2024/IMG_001.xmp")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "present", [("photo.jpg.xmp",), ("photo.xmp",), ("photo.jpg.xmp", "photo.xmp")]
+)
+async def test_read_resolves_first_existing_candidate(present: tuple[str, ...]):
+    """read() opens the first candidate on disk, so a directory listing can
+    predict which sidecar (and version token) the reader will use."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "photo.jpg").write_bytes(b"data")
+        for name in present:
+            (root / name).write_text(serialize_xmp(XmpSidecar(content_hash=name)))
+        store = XmpStore(LocalBackend(root=tmpdir))
+
+        sidecar, version = await store.read("photo.jpg")
+
+        expected = next(c for c in sidecar_candidates("photo.jpg") if c in present)
+        assert sidecar.content_hash == expected
+        assert version.value == (root / expected).stat().st_mtime_ns
 
 
 @pytest.mark.asyncio
