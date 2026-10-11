@@ -183,6 +183,20 @@ def xmp_path_for(photo_path: str, *, with_photo_extension: bool) -> str:
     return p.with_suffix(".xmp").as_posix()
 
 
+def sidecar_candidates(photo_path: str) -> tuple[str, str]:
+    """Sidecar paths of a media file, in the order the reader tries them.
+
+    The full-extension form (``IMG_001.cr3.xmp``) comes first, then the
+    extension-stripped form (``IMG_001.xmp``). Code that predicts which
+    sidecar ``XmpStore.read`` will pick (e.g. from a directory listing) must
+    use this order.
+    """
+    return (
+        xmp_path_for(photo_path, with_photo_extension=True),
+        xmp_path_for(photo_path, with_photo_extension=False),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Datetime helpers
 # ---------------------------------------------------------------------------
@@ -407,12 +421,9 @@ class XmpStore:
         falls back to the extension-stripped convention (``IMG_001.xmp``).
         Returns None if neither exists.
         """
-        full_ext_path = xmp_path_for(photo_path, with_photo_extension=True)
-        if await self.backend.exists(full_ext_path):
-            return full_ext_path
-        stripped_path = xmp_path_for(photo_path, with_photo_extension=False)
-        if await self.backend.exists(stripped_path):
-            return stripped_path
+        for candidate in sidecar_candidates(photo_path):
+            if await self.backend.exists(candidate):
+                return candidate
         return None
 
     async def read(self, photo_path: str) -> tuple[XmpSidecar, VersionToken]:
