@@ -808,7 +808,7 @@ dev = [
 requires-dist = [
     { name = "av", specifier = ">=13" },
     { name = "blake3", specifier = ">=1.0.8" },
-    { name = "duckdb", specifier = ">=1.0" },
+    { name = "duckdb", specifier = ">=1.3" },
     { name = "lancedb", specifier = ">=0.33" },
     { name = "mcp", specifier = ">=2.0,<3.0.0" },
     { name = "ouestcharlie-imageproc", specifier = "~=2.4.1" },
