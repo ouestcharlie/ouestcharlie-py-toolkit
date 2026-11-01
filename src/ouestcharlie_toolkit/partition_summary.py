@@ -44,7 +44,7 @@ WITH nodes AS (
     SELECT DISTINCT rid, node, lower(nfc_normalize(node)) AS k
     FROM (
         SELECT rid, UNNEST(list_transform(
-            range(1, len(parts) + 1), i -> array_to_string(parts[1:i], '|'))) AS node
+            range(1, len(parts) + 1), lambda i: array_to_string(parts[1:i], '|'))) AS node
         FROM (
             SELECT rid, string_split(path, '|') AS parts
             FROM (
