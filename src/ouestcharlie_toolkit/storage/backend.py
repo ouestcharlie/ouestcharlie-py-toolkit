@@ -35,7 +35,7 @@ class FileInfo:
 class PartitionLockToken:
     """Opaque proof that the caller holds the exclusive partition lock.
 
-    Pass to write_conditional, XmpStore.write, and ManifestStore.write_leaf
+    Pass to write_conditional, XmpStore.write, and SummaryStore.write_leaf
     to skip per-file cross-process lock acquisition for files in this partition.
     """
 
@@ -114,7 +114,7 @@ class Backend(Protocol):
         Root lock (for summary.json): pass partition="" → .ouestcharlie/partition.lock
 
         Callers must hold this lock before calling write_conditional,
-        XmpStore.write(), or ManifestStore.write_leaf().  Store methods
+        XmpStore.write(), or SummaryStore.write_leaf().  Store methods
         that accept a PartitionLockToken skip acquiring the lock themselves;
         without a token they acquire it internally.
         """

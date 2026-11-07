@@ -9,7 +9,7 @@ import lancedb
 import pyarrow as pa
 import pytest
 
-from ouestcharlie_toolkit.lance_index import (
+from ouestcharlie_toolkit.index import (
     PAGE_SIZE,
     PHOTO_SCHEMA,
     PHOTO_TABLE_NAME,

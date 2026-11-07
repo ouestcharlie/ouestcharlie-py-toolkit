@@ -1,4 +1,4 @@
-"""Manifest store for reading and writing the root summary.json."""
+"""Store for the root summary.json: the index schema-version marker."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from ouestcharlie_toolkit.storage.layout import summary_path
 _log = logging.getLogger(__name__)
 
 
-class ManifestStore:
+class SummaryStore:
     """Store for reading and writing the root summary with optimistic concurrency."""
 
     def __init__(self, backend: Backend) -> None:
-        """Initialize the manifest store.
+        """Initialize the summary store.
 
         Args:
             backend: Backend instance for storage operations.

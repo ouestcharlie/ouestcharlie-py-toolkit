@@ -8,7 +8,8 @@ from typing import Any
 import duckdb
 from lancedb.query import AsyncFTSQuery, AsyncQuery
 
-from ouestcharlie_toolkit.lance_index import FtsFilter, LanceIndex
+from ouestcharlie_toolkit.index.lance_index import LanceIndex
+from ouestcharlie_toolkit.index.query import FtsFilter
 from ouestcharlie_toolkit.model.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.model.summary import ManifestSummary
 from ouestcharlie_toolkit.model.tags import TAG_SEPARATOR

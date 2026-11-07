@@ -7,9 +7,9 @@ import logging
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from ouestcharlie_toolkit.media.photo import Photo
+from ouestcharlie_toolkit.media.photo.photo import Photo
 from ouestcharlie_toolkit.media.suffixes import VIDEO_SUFFIXES
-from ouestcharlie_toolkit.media.video import Video
+from ouestcharlie_toolkit.media.video.video import Video
 from ouestcharlie_toolkit.model.entries import XmpSidecar
 from ouestcharlie_toolkit.model.tags import DEFAULT_EXCLUDED_TAG_PREFIXES
 from ouestcharlie_toolkit.storage.backend import Backend, VersionConflictError, VersionToken

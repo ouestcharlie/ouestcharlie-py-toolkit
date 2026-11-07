@@ -2,8 +2,8 @@
 
 from importlib.metadata import version
 
+from ouestcharlie_toolkit.index import SummaryStore
 from ouestcharlie_toolkit.logging import setup_logging
-from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.media.photo import Photo
 from ouestcharlie_toolkit.media.suffixes import PHOTO_SUFFIXES, VIDEO_SUFFIXES
 from ouestcharlie_toolkit.media.video import Video, video_identity_hash
@@ -27,7 +27,7 @@ __all__ = [
     # Core classes
     "AgentBase",
     "Backend",
-    "ManifestStore",
+    "SummaryStore",
     "Photo",
     "Video",
     "XmpStore",

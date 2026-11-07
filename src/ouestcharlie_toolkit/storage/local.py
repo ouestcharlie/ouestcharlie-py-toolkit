@@ -245,7 +245,7 @@ class LocalBackend:
 
         Holds ``_CrossProcessLock`` on that file for the lifetime of the
         context.  Pass the yielded ``PartitionLockToken`` to
-        ``XmpStore.write()`` and ``ManifestStore.write_leaf()`` to prevent
+        ``XmpStore.write()`` and ``SummaryStore.write_leaf()`` to prevent
         them from acquiring the lock a second time.
         """
         lock_path = self._resolve(str(Path(METADATA_DIR) / partition / "partition.lock"))

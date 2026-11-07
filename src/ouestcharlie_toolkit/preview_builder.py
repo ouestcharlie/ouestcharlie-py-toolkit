@@ -18,7 +18,7 @@ from pathlib import Path
 from ouestcharlie_imageproc.image_proc import PersistentImageProc
 
 from ouestcharlie_toolkit.media.suffixes import VIDEO_SUFFIXES
-from ouestcharlie_toolkit.media.video import Video
+from ouestcharlie_toolkit.media.video.video import Video
 from ouestcharlie_toolkit.model.entries import PhotoEntry
 from ouestcharlie_toolkit.storage.backend import Backend
 from ouestcharlie_toolkit.storage.layout import preview_jpeg_path

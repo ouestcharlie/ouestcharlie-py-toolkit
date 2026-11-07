@@ -13,10 +13,10 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 
-from ouestcharlie_toolkit.manifest import ManifestStore
+from ouestcharlie_toolkit.index.summary_store import SummaryStore
 from ouestcharlie_toolkit.model.tags import DEFAULT_EXCLUDED_TAG_PREFIXES, normalize_paths
 from ouestcharlie_toolkit.storage.backend import Backend, ConfigurationError, backend_from_config
-from ouestcharlie_toolkit.xmp import XmpStore
+from ouestcharlie_toolkit.xmp.store import XmpStore
 
 _log = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class AgentBase:
 
         # Initialize backend
         self.backend: Backend = backend_from_config(self.backend_config)
-        self.manifest_store = ManifestStore(self.backend)
+        self.manifest_store = SummaryStore(self.backend)
         self.xmp_store = XmpStore(self.backend, self.excluded_tag_prefixes)
 
     def _parse_backend_config(self) -> dict[str, Any]:
