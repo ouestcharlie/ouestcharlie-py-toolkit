@@ -13,7 +13,7 @@ from .backend import (
 from .fields import PHOTO_FIELDS, FieldDef, FieldType
 from .logging import setup_logging
 from .manifest import ManifestStore
-from .photo import Photo
+from .photo import PHOTO_SUFFIXES, Photo
 from .schema import (
     ManifestSummary,
     PhotoEntry,
@@ -33,6 +33,7 @@ __all__ = [
     "Photo",
     "Video",
     "XmpStore",
+    "PHOTO_SUFFIXES",
     "VIDEO_SUFFIXES",
     "video_identity_hash",
     # Data models
