@@ -7,11 +7,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from PIL import Image
 
+from ouestcharlie_toolkit import Photo
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.hashing import content_hash as _content_hash
 from ouestcharlie_toolkit.schema import (
     METADATA_DIR,
+    PhotoEntry,
     ThumbnailChunk,
     ThumbnailGridLayout,
     thumbnail_avif_path,
@@ -23,6 +26,8 @@ from ouestcharlie_toolkit.thumbnail_builder import (
     delete_partition_thumbnails,
     generate_partition_thumbnails,
 )
+
+from .format_samples import SAMPLES, write_sample
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -544,3 +549,27 @@ async def test_delete_partition_thumbnails_subdirectory_partition(tmp_path: Path
     await delete_partition_thumbnails(backend, "2024/July")
 
     assert not thumb.exists()
+
+
+# ---------------------------------------------------------------------------
+# Format coverage (OEC-69): real image-proc, one sample per format family
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_partition_thumbnails_all_formats(tmp_path: Path) -> None:
+    """One partition with a photo of every format family builds a single grid."""
+    backend = LocalBackend(root=str(tmp_path))
+    entries = []
+    for key in SAMPLES:
+        path = write_sample(tmp_path, key)
+        sidecar = await Photo(backend, path.name).extract_exif()
+        entries.append(PhotoEntry.from_sidecar(path.name, sidecar, sidecar.content_hash, ""))
+
+    chunks = await generate_partition_thumbnails(backend, "", entries)
+
+    assert len(chunks) == 1
+    assert sorted(chunks[0].grid.photo_order) == sorted(e.content_hash for e in entries)
+    avif = tmp_path / thumbnail_avif_path("", chunks[0].avif_hash)
+    with Image.open(avif) as grid:
+        assert grid.size[0] == 8 * chunks[0].grid.tile_size

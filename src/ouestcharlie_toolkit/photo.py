@@ -310,13 +310,206 @@ def _parse_exif_gps(exif: dict[str, str]) -> tuple[float, float] | None:
 
 
 # ---------------------------------------------------------------------------
+# AVIF and JPEG XL: display size and orientation
+# ---------------------------------------------------------------------------
+
+# pyexiv2 reads the EXIF of both formats, but their decoders in image-proc
+# (libheif, jxl-oxide) apply the rotation stored in the file itself (AVIF
+# irot/imir boxes, JXL codestream header), not the EXIF orientation. These
+# helpers read that rotation so the sidecar follows the upright convention, like
+# HEIC: orientation 1 and display width/height.
+
+
+def _avif_display_size(path: Path) -> tuple[int, int]:
+    """Return the display (width, height) of an AVIF file.
+
+    Pillow returns the stored pixels and reports the irot/imir transform as the
+    EXIF orientation (it overrides any orientation tag in the EXIF block).
+    """
+    from PIL import Image
+
+    with Image.open(path) as img:
+        width, height = img.size
+        if img.getexif().get(274) in (5, 6, 7, 8):
+            width, height = height, width
+    return width, height
+
+
+_JXL_CODESTREAM_SIGNATURE = b"\xff\x0a"
+_JXL_CONTAINER_SIGNATURE = b"\x00\x00\x00\x0cJXL \r\n\x87\n"
+# SizeHeader aspect ratios (width / height), indexed by the 3-bit ratio field.
+_JXL_RATIOS: dict[int, tuple[int, int]] = {
+    1: (1, 1),
+    2: (12, 10),
+    3: (4, 3),
+    4: (3, 2),
+    5: (16, 9),
+    6: (5, 4),
+    7: (2, 1),
+}
+
+
+def _jxl_codestream_start(path: Path, length: int = 32) -> bytes:
+    """Return the first bytes of the JPEG XL codestream, bare or inside a container."""
+    with path.open("rb") as f:
+        head = f.read(len(_JXL_CONTAINER_SIGNATURE))
+        if head.startswith(_JXL_CODESTREAM_SIGNATURE):
+            return head + f.read(length)
+        if head != _JXL_CONTAINER_SIGNATURE:
+            raise ValueError("not a JPEG XL file")
+        # ISO BMFF boxes: walk to the codestream box (jxlc, or the first jxlp part).
+        while len(box := f.read(8)) == 8:
+            size, box_type = int.from_bytes(box[:4], "big"), box[4:]
+            header = 8
+            if size == 1:
+                size, header = int.from_bytes(f.read(8), "big"), 16
+            if box_type == b"jxlc":
+                return f.read(length)
+            if box_type == b"jxlp":
+                f.read(4)  # part index
+                return f.read(length)
+            if size < header:
+                break
+            f.seek(size - header, 1)
+    raise ValueError("JPEG XL container has no codestream")
+
+
+def _jxl_display_size(path: Path) -> tuple[int, int]:
+    """Return the display (width, height) of a JPEG XL file, from its codestream header.
+
+    Pillow cannot open JPEG XL, so the SizeHeader and the orientation field of
+    ImageMetadata are parsed here (JPEG XL spec, ISO/IEC 18181-1, section A).
+    """
+    stream = _jxl_codestream_start(path)
+    if not stream.startswith(_JXL_CODESTREAM_SIGNATURE):
+        raise ValueError("invalid JPEG XL codestream")
+    data = stream[len(_JXL_CODESTREAM_SIGNATURE) :]
+    pos = 0
+
+    def bits(n: int) -> int:
+        nonlocal pos
+        value = 0
+        for i in range(n):
+            if pos >> 3 >= len(data):
+                raise ValueError("truncated JPEG XL header")
+            value |= ((data[pos >> 3] >> (pos & 7)) & 1) << i
+            pos += 1
+        return value
+
+    def dimension(small: int) -> int:
+        if small:
+            return (bits(5) + 1) * 8
+        return bits((9, 13, 18, 30)[bits(2)]) + 1
+
+    small = bits(1)
+    height = dimension(small)
+    ratio = bits(3)
+    if ratio:
+        num, den = _JXL_RATIOS[ratio]
+        width = height * num // den
+    else:
+        width = dimension(small)
+
+    orientation = 1
+    all_default = bits(1)
+    if not all_default and bits(1):  # extra_fields
+        orientation = bits(3) + 1
+    if orientation in (5, 6, 7, 8):
+        width, height = height, width
+    return width, height
+
+
+# ---------------------------------------------------------------------------
+# RAW: size of the main image
+# ---------------------------------------------------------------------------
+
+# RAW extensions decoded by image-proc (rawler). Formats rawler cannot decode
+# reliably are left out on purpose (imageproc_LLD.md, "RAW decoding").
+_RAW_SUFFIXES: frozenset[str] = frozenset(
+    {
+        # Current camera makers
+        ".cr2",
+        ".cr3",
+        ".crw",
+        ".nef",
+        ".nrw",
+        ".arw",
+        ".srf",
+        ".sr2",
+        ".dng",
+        ".raf",
+        ".orf",
+        ".rw2",
+        ".rwl",
+        ".pef",
+        ".srw",
+        ".erf",
+        # Medium format
+        ".3fr",
+        ".fff",
+        ".iiq",
+        ".mos",
+    }
+)
+
+
+def _raw_size(img: Any, exif: dict[str, str]) -> tuple[int, int] | None:
+    """Return the (width, height) of a RAW file's main image, as stored.
+
+    The plain EXIF dimension tags of a RAW file often describe an embedded
+    preview (a 160x120 thumbnail in NEF IFD0, a 1920 px JPEG in RAF). libexiv2
+    knows where each format keeps the main image (``get_pixel_width``), which
+    may include a few sensor border pixels; a DNG ``DefaultCropSize`` gives the
+    exact size when present. CR3 is a known gap: libexiv2 reports the preview.
+    """
+    for key, value in exif.items():
+        if key.endswith(".DefaultCropSize"):
+            try:
+                width, height = (round(_exif_rational_to_float(v)) for v in value.split())
+            except ValueError, ZeroDivisionError:
+                continue
+            if width > 0 and height > 0:
+                return width, height
+    width, height = img.get_pixel_width(), img.get_pixel_height()
+    return (width, height) if width > 0 and height > 0 else None
+
+
+# ---------------------------------------------------------------------------
 # Photo class
 # ---------------------------------------------------------------------------
 
+# Photo extensions handled by the pipeline (lowercase, with the dot): the files
+# Whitebeard indexes. Each one is decoded by image-proc, see its
+# supported_extensions().
+PHOTO_SUFFIXES: frozenset[str] = (
+    frozenset(
+        {
+            # Standard formats
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".tif",
+            ".tiff",
+            ".webp",
+            ".gif",
+            ".bmp",
+            ".jxl",
+            # HEIF container (HEVC or AV1)
+            ".heic",
+            ".heif",
+            ".hif",
+            ".avif",
+        }
+    )
+    | _RAW_SUFFIXES
+)
 
 # pyexiv2's bundled libexiv2 lacks libheif support; these suffixes are read
 # via pillow-heif + Pillow instead (see _read_heif_exif).
 _HEIF_SUFFIXES: frozenset[str] = frozenset({".heic", ".heif", ".hif"})
+
+# EXIF read by pyexiv2, display size and orientation read from the file itself.
+_UPRIGHT_DISPLAY_SIZE = {".avif": _avif_display_size, ".jxl": _jxl_display_size}
 
 
 class Photo:
@@ -356,23 +549,45 @@ class Photo:
 
     def _read_exif(self, local: Path) -> dict[str, str]:
         """Read the raw EXIF tags of this photo (at *local*), keyed by pyexiv2 tag name."""
-        if Path(self.path).suffix.lower() in _HEIF_SUFFIXES:
+        suffix = Path(self.path).suffix.lower()
+        if suffix in _HEIF_SUFFIXES:
             return _read_heif_exif(local)
 
         import pyexiv2  # lazy: native C extension with system library dependency
 
         pyexiv2.set_log_level(4)  # mute C-level logs: write to stdout, corrupt MCP stdio
 
-        img = pyexiv2.Image(str(local))  # pyexiv2 requires str, not Path
         exif_data: dict[str, str]
         try:
-            exif_data = img.read_exif()
-        except UnicodeDecodeError:
-            # Legacy cameras (pre-2005 era) often embed EXIF strings in latin-1/cp1252.
-            # Latin-1 is lossless for all byte values, so this never raises.
-            exif_data = img.read_exif(encoding="latin-1")
-        finally:
-            img.close()
+            img = pyexiv2.Image(str(local))  # pyexiv2 requires str, not Path
+        except RuntimeError:
+            # libexiv2 only reads JPEG XL in its ISO BMFF container. A bare
+            # codestream (cjxl's output when there is no metadata) has no EXIF.
+            if suffix != ".jxl":
+                raise
+            exif_data = {}
+        else:
+            try:
+                try:
+                    exif_data = img.read_exif()
+                except UnicodeDecodeError:
+                    # Legacy cameras (pre-2005 era) often embed EXIF strings in
+                    # latin-1/cp1252. Latin-1 is lossless for all byte values.
+                    exif_data = img.read_exif(encoding="latin-1")
+                if suffix in _RAW_SUFFIXES and (size := _raw_size(img, exif_data)):
+                    exif_data["Exif.Photo.PixelXDimension"] = str(size[0])
+                    exif_data["Exif.Photo.PixelYDimension"] = str(size[1])
+            finally:
+                img.close()
+
+        display_size = _UPRIGHT_DISPLAY_SIZE.get(suffix)
+        if display_size is not None:
+            # Upright convention, as for HEIC: the decoder applies the file's own
+            # rotation, so store orientation 1 and the display dimensions.
+            width, height = display_size(local)
+            exif_data["Exif.Image.Orientation"] = "1"
+            exif_data["Exif.Photo.PixelXDimension"] = str(width)
+            exif_data["Exif.Photo.PixelYDimension"] = str(height)
         return exif_data
 
     async def exif_datetime(self) -> datetime | None:

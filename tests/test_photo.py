@@ -9,19 +9,24 @@ from pathlib import Path
 
 import pyexiv2
 import pytest
+from ouestcharlie_imageproc import supported_extensions
 from PIL import Image as PILImage
 from PIL.TiffImagePlugin import IFDRational
 
-from ouestcharlie_toolkit import Photo
+from ouestcharlie_toolkit import PHOTO_SUFFIXES, VIDEO_SUFFIXES, Photo
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.photo import (
     _decode_undefined_ascii,
+    _jxl_display_size,
     _map_exif_extra,
     _parse_exif_datetime,
     _parse_exif_gps,
+    _raw_size,
 )
 from ouestcharlie_toolkit.schema import XmpSidecar
 from ouestcharlie_toolkit.xmp import _parse_iso_datetime, parse_xmp
+
+from .format_samples import SAMPLES, write_sample
 
 _SAMPLES = Path(__file__).parent / "sample-images"
 
@@ -754,3 +759,110 @@ def test_parse_exif_gps_invalid_logs_debug(caplog):
         result = _parse_exif_gps(bad_exif)
     assert result is None
     assert any("Could not parse EXIF GPS" in msg for msg in caplog.messages)
+
+
+# ---------------------------------------------------------------------------
+# Format coverage (OEC-69): one sample per format family
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", list(SAMPLES))
+async def test_extract_exif_per_format(tmp_path: Path, key: str) -> None:
+    sample = SAMPLES[key]
+    path = write_sample(tmp_path, key)
+    sidecar = await Photo(LocalBackend(root=str(tmp_path)), path.name).extract_exif()
+
+    assert sidecar.camera_make == sample.make
+    assert (sidecar.date_taken.isoformat() if sidecar.date_taken else None) == sample.date
+    assert sidecar.orientation == sample.orientation
+    assert (sidecar.width, sidecar.height) == (sample.width, sample.height)
+
+
+def test_photo_suffixes_are_decoded_by_image_proc() -> None:
+    """Every indexed extension must have a decoder, or its thumbnail would fail."""
+    assert PHOTO_SUFFIXES.issubset(supported_extensions())
+
+
+def test_photo_suffixes_are_lowercase_with_dot() -> None:
+    assert all(s.startswith(".") and s == s.lower() for s in PHOTO_SUFFIXES)
+    assert not PHOTO_SUFFIXES & VIDEO_SUFFIXES
+
+
+def _jxl_header(height: int, width: int, orientation: int) -> bytes:
+    """Build the start of a bare JPEG XL codestream: SizeHeader + ImageMetadata
+    with the orientation field. Nothing after it is valid, but only these fields
+    are read."""
+    bits: list[int] = []
+
+    def put(value: int, n: int) -> None:
+        bits.extend((value >> i) & 1 for i in range(n))
+
+    put(0, 1)  # not small
+    put(3, 2)  # 30-bit height
+    put(height - 1, 30)
+    put(0, 3)  # no ratio
+    put(3, 2)
+    put(width - 1, 30)
+    put(0, 1)  # all_default: no
+    put(1, 1)  # extra_fields
+    put(orientation - 1, 3)
+    data = bytearray((len(bits) + 7) // 8)
+    for i, bit in enumerate(bits):
+        data[i >> 3] |= bit << (i & 7)
+    return b"\xff\x0a" + bytes(data)
+
+
+@pytest.mark.parametrize(
+    ("orientation", "expected"),
+    [(1, (300, 200)), (3, (300, 200)), (6, (200, 300)), (8, (200, 300))],
+)
+def test_jxl_display_size_applies_codestream_orientation(
+    tmp_path: Path, orientation: int, expected: tuple[int, int]
+) -> None:
+    path = tmp_path / "photo.jxl"
+    path.write_bytes(_jxl_header(height=200, width=300, orientation=orientation))
+    assert _jxl_display_size(path) == expected
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_corrupt_jxl_raises(tmp_path: Path) -> None:
+    """A file that is not JPEG XL is an indexing error, not an empty sidecar."""
+    (tmp_path / "photo.jxl").write_bytes(b"not a jpeg xl file")
+    with pytest.raises(ValueError):
+        await Photo(LocalBackend(root=str(tmp_path)), "photo.jxl").extract_exif()
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_truncated_jxl_raises(tmp_path: Path) -> None:
+    (tmp_path / "photo.jxl").write_bytes(_jxl_header(200, 300, 1)[:4])
+    with pytest.raises(ValueError):
+        await Photo(LocalBackend(root=str(tmp_path)), "photo.jxl").extract_exif()
+
+
+class _FakeRawImage:
+    """Stands in for pyexiv2.Image: only the pixel size API is used."""
+
+    def __init__(self, width: int, height: int) -> None:
+        self.width, self.height = width, height
+
+    def get_pixel_width(self) -> int:
+        return self.width
+
+    def get_pixel_height(self) -> int:
+        return self.height
+
+
+def test_raw_size_prefers_default_crop_size() -> None:
+    exif = {"Exif.SubImage1.DefaultCropSize": "3684/1 2758/1"}
+    assert _raw_size(_FakeRawImage(3700, 2774), exif) == (3684, 2758)
+
+
+def test_raw_size_ignores_preview_dimension_tags() -> None:
+    """NEF IFD0 holds a 160x120 thumbnail: libexiv2's main image size wins."""
+    exif = {"Exif.Image.ImageWidth": "160", "Exif.Image.ImageLength": "120"}
+    assert _raw_size(_FakeRawImage(4548, 3030), exif) == (4548, 3030)
+
+
+def test_raw_size_unknown_returns_none() -> None:
+    assert _raw_size(_FakeRawImage(0, 0), {"Exif.Image.DefaultCropSize": "bad"}) is None

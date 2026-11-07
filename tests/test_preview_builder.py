@@ -7,10 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from ouestcharlie_imageproc.image_proc import PersistentImageProc
+from PIL import Image
 
+from ouestcharlie_toolkit import Photo
 from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.preview_builder import generate_preview_jpeg
-from ouestcharlie_toolkit.schema import preview_jpeg_path
+from ouestcharlie_toolkit.preview_builder import PREVIEW_JPEG_MAX_LONG_EDGE, generate_preview_jpeg
+from ouestcharlie_toolkit.schema import PhotoEntry, preview_jpeg_path
+
+from .format_samples import SAMPLES, write_sample
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -115,3 +119,30 @@ async def test_generate_preview_jpeg_skips_generation_when_cached(tmp_path: Path
 
     assert result == cache_path
     image_proc.request.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Format coverage (OEC-69): real image-proc, one sample per format family
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", list(SAMPLES))
+async def test_generate_preview_jpeg_per_format_is_upright(tmp_path: Path, key: str) -> None:
+    """The sidecar (EXIF orientation, dimensions) and image-proc agree: the preview
+    has the photo's display size, scaled down to the preview long edge."""
+    sample = SAMPLES[key]
+    path = write_sample(tmp_path, key)
+    backend = LocalBackend(root=str(tmp_path))
+    sidecar = await Photo(backend, path.name).extract_exif()
+    entry = PhotoEntry.from_sidecar(path.name, sidecar, sidecar.content_hash, "")
+
+    async with PersistentImageProc() as proc:
+        cache_path = await generate_preview_jpeg(proc, backend, "", entry)
+
+    with Image.open(tmp_path / cache_path) as jpeg:
+        size = jpeg.size
+    width, height = sample.display
+    scale = min(1.0, PREVIEW_JPEG_MAX_LONG_EDGE / max(width, height))
+    assert size[0] == pytest.approx(width * scale, abs=1)
+    assert size[1] == pytest.approx(height * scale, abs=1)
