@@ -16,7 +16,8 @@ from pathlib import Path
 
 from PIL import Image
 
-FORMATS_DIR = Path(__file__).parent / "sample-images" / "formats"
+SAMPLES_DIR = Path(__file__).parent / "sample-images"
+FORMATS_DIR = SAMPLES_DIR / "formats"
 
 MAKE = "TestMake"
 MODEL = "TestModel"

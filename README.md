@@ -7,28 +7,28 @@ Shared Python library for building OuEstCharlie photo management agents.
 This toolkit provides four core capabilities:
 
 1. **MCP integration** — MCP server lifecycle, tool registration, progress reporting, and logging
-2. **Manifest read-edit with consistency** — hierarchical manifest traversal, atomic read-modify-write with optimistic concurrency
+2. **LanceDB index** — per-photo columnar index, summaries, and the `summary.json` schema-version marker
 3. **XMP read-edit with consistency** — sidecar read-modify-write with optimistic concurrency and field-level semantics
 4. **Image processing** — thumbnail AVIF grid assembly and on-demand JPEG preview generation, delegated to [`ouestcharlie-imageproc`](https://github.com/ouestcharlie/outestcharlie-imageproc)
 
 ## Package Structure
 
+Sub-packages, lowest layer first. A module imports only from its own layer or a lower one
+(enforced by `tests/test_architecture.py`):
+
 ```
-ouestcharlie-toolkit/
-├── pyproject.toml
-└── src/
-    └── ouestcharlie_toolkit/
-        ├── schema.py             # Data models, exceptions, constants
-        ├── backend.py            # Backend protocol
-        ├── backends/
-        │   └── local.py          # Local filesystem backend
-        ├── manifest.py           # ManifestStore for manifest operations
-        ├── xmp.py                # XmpStore for XMP sidecar operations
-        ├── thumbnail_builder.py  # Thumbnail generation (delegates to ouestcharlie-imageproc)
-        ├── preview_builder.py    # On-demand JPEG preview (delegates to ouestcharlie-imageproc)
-        ├── progress.py           # ProgressReporter for MCP progress
-        └── server.py             # AgentBase for MCP server lifecycle
+src/ouestcharlie_toolkit/
+├── storage/      # Backend protocol, local and cloud-mount backends, .ouestcharlie/ layout, content hash
+├── model/        # Searchable fields, tags, PhotoEntry / XmpSidecar, summaries, schema version
+├── media/        # Photo (EXIF, HEIF, AVIF/JXL/RAW size) and Video (MP4/MOV, capture time)
+├── xmp/          # Sidecar naming, parsing, serialization, XmpStore
+├── index/        # LanceIndex, Lance schema, queries, compute_summary, SummaryStore
+├── renditions/   # Thumbnails and previews: the only user of ouestcharlie-imageproc
+└── agent/        # AgentBase (MCP server) and logging
 ```
+
+Agents import from a sub-package (`from ouestcharlie_toolkit.index import LanceIndex`),
+never from a leaf module or a `_private` name. Tests mirror the same layout under `tests/`.
 
 ## Installation
 
@@ -64,7 +64,7 @@ uv sync
 .venv/bin/python -m pytest tests/ -v
 
 # Run a specific file
-.venv/bin/python -m pytest tests/test_photo.py -v --tb=short
+.venv/bin/python -m pytest tests/media/photo/test_photo.py -v --tb=short
 ```
 
 Integration tests (real image-proc binary) are in `ouestcharlie-imageproc/tests_integration/`.
@@ -102,7 +102,7 @@ class HousekeepingAgent(AgentBase):
 
         @self.mcp.tool()
         async def rebuild_partition(backend: str, partition: str, mode: str = "lazy"):
-            """Rebuild partition manifest and thumbnails."""
+            """Rebuild partition thumbnails."""
             photos = await self.backend.list_files(partition, suffix=".jpg")
             progress = self.progress(total=len(photos))
 
@@ -148,7 +148,7 @@ See [py_toolkit_LLD.md](py_toolkit_LLD.md) for the design and [agent_LLD_rationa
 
 Key design principles:
 
-- **Optimistic concurrency** — All manifest and XMP writes use version tokens to detect conflicts
+- **Optimistic concurrency** — All `summary.json` and XMP writes use version tokens to detect conflicts
 - **Unknown field preservation** — Schema evolution via `_extra` dict in dataclasses
 - **Async throughout** — All I/O operations are async
 - **Backend abstraction** — Swappable storage backends (local, S3, GCS, etc.)

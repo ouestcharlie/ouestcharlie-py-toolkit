@@ -1,0 +1,709 @@
+"""Tests for the Photo domain class."""
+
+import io
+import tempfile
+from collections.abc import Mapping
+from datetime import datetime
+from pathlib import Path
+
+import pyexiv2
+import pytest
+from ouestcharlie_imageproc import supported_extensions
+from PIL import Image as PILImage
+from PIL.TiffImagePlugin import IFDRational
+
+from ouestcharlie_toolkit import PHOTO_SUFFIXES, VIDEO_SUFFIXES, Photo
+from ouestcharlie_toolkit.model.entries import XmpSidecar
+from ouestcharlie_toolkit.storage.local import LocalBackend
+from ouestcharlie_toolkit.xmp import parse_xmp
+from ouestcharlie_toolkit.xmp.values import parse_iso_datetime
+from tests.format_samples import SAMPLES, SAMPLES_DIR, write_sample
+
+_SAMPLES = SAMPLES_DIR
+
+# Minimal valid JPEG (SOI + JFIF APP0 + EOI) — no EXIF data.
+_MINIMAL_JPEG = (
+    b"\xff\xd8"  # SOI
+    b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"  # APP0
+    b"\xff\xd9"  # EOI
+)
+
+
+# ---------------------------------------------------------------------------
+# create_identity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_identity_returns_22_char_string():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(b"data")
+        photo = Photo(LocalBackend(root=tmpdir), "photo.jpg")
+        identity = await photo.create_identity()
+    assert len(identity) == 22
+    # base64url alphabet only
+    assert all(
+        c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for c in identity
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_identity_correct_hash():
+    data = b"Hello, OuEstCharlie!"
+    expected = "1CoKIhOfUIpuFUjm7_XfAA"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(data)
+        identity = await Photo(LocalBackend(root=tmpdir), "photo.jpg").create_identity()
+    assert identity == expected
+
+
+@pytest.mark.asyncio
+async def test_create_identity_cached():
+    """Second call returns cached hash without re-reading the file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(b"data")
+        backend = LocalBackend(root=tmpdir)
+        photo = Photo(backend, "photo.jpg")
+
+        hash1 = await photo.create_identity()
+        hash2 = await photo.create_identity()
+
+    assert hash1 == hash2
+    assert photo._content_hash == hash1
+
+
+@pytest.mark.asyncio
+async def test_create_identity_empty_file_raises():
+    """create_identity raises ValueError for a 0-byte file (delegates to backend.content_hash)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "empty.jpg").write_bytes(b"")
+        with pytest.raises(ValueError, match="empty"):
+            await Photo(LocalBackend(root=tmpdir), "empty.jpg").create_identity()
+
+
+# ---------------------------------------------------------------------------
+# extract_exif
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_returns_sidecar():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+    assert isinstance(sidecar, XmpSidecar)
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_sets_content_hash():
+    from ouestcharlie_toolkit.storage.hashing import content_hash
+
+    expected = content_hash(_MINIMAL_JPEG)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+    assert sidecar.content_hash == expected
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_no_exif_fields_are_none():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+    assert sidecar.date_taken is None
+    assert sidecar.camera_make is None
+    assert sidecar.camera_model is None
+    assert sidecar.gps is None
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_date_taken_from_filename_when_no_exif():
+    # No EXIF datetime, but the filename carries a full local wall-clock.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "IMG_20240501_120000.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "IMG_20240501_120000.jpg").extract_exif()
+    assert sidecar.date_taken == datetime(2024, 5, 1, 12, 0, 0)
+    assert sidecar.date_taken.tzinfo is None  # naive local, offset unknown
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_date_only_from_filename_when_no_exif():
+    # No EXIF datetime and only a date in the name -> midnight local.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "scan-20240501.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "scan-20240501.jpg").extract_exif()
+    assert sidecar.date_taken == datetime(2024, 5, 1, 0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_raises_for_empty_file():
+    """extract_exif raises ValueError for a 0-byte file (e.g. not yet downloaded from cloud)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "placeholder.jpg").write_bytes(b"")
+        with pytest.raises(ValueError, match="empty"):
+            await Photo(LocalBackend(root=tmpdir), "placeholder.jpg").extract_exif()
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_latin1_exif():
+    """Pre-2005 cameras sometimes write EXIF strings in latin-1, not UTF-8.
+
+    Byte 0x82 is valid latin-1 but invalid UTF-8; extract_exif() must not raise.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "legacy.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.Make": "Canon\x82test"}, encoding="latin-1")
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "legacy.jpg").extract_exif()
+
+    assert sidecar.camera_make is not None
+    assert "Canon" in sidecar.camera_make
+
+
+# ---------------------------------------------------------------------------
+# XPKeywords tag bootstrap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpkeywords_populates_tags():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPKeywords": "beach;vacation; france "})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.tags == ["beach", "vacation", "france"]
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpkeywords_strips_trailing_nul():
+    """XPKeywords is a null-terminated UTF-16LE field; pyexiv2 keeps the trailing NUL."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPKeywords": "beach;vacation;france\x00"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.tags == ["beach", "vacation", "france"]
+    assert all("\x00" not in t for t in sidecar.tags)
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_no_xpkeywords_empty_tags():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+    assert sidecar.tags == []
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_malformed_xpkeywords_yields_empty_tags():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPKeywords": ";;;"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.tags == []
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpkeywords_not_duplicated_in_extra():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPKeywords": "beach;vacation"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert not any("XPKeywords" in k for k in sidecar._extra)
+
+
+# ---------------------------------------------------------------------------
+# ImageDescription / XPSubject description bootstrap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_image_description_populates_description():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.ImageDescription": "Beach day"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description == "Beach day"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_image_description_wins_over_xpsubject():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif(
+            {
+                "Exif.Image.ImageDescription": "Beach day",
+                "Exif.Image.XPSubject": "Vacation",
+            }
+        )
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description == "Beach day"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpsubject_fallback_when_no_image_description():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPSubject": "Vacation"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description == "Vacation"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_xpsubject_strips_trailing_nul():
+    """XPSubject is a null-terminated UTF-16LE field; pyexiv2 keeps the trailing NUL."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.XPSubject": "Vacation\x00"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description == "Vacation"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_no_description_fields_description_none():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+    assert sidecar.description is None
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_empty_description_fields_yield_none():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.ImageDescription": "  ", "Exif.Image.XPSubject": "\x00"})
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.description is None
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_description_not_duplicated_in_extra():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        path.write_bytes(_MINIMAL_JPEG)
+        img = pyexiv2.Image(str(path))
+        img.modify_exif(
+            {
+                "Exif.Image.ImageDescription": "Beach day",
+                "Exif.Image.XPSubject": "Vacation",
+            }
+        )
+        img.close()
+
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert not any("ImageDescription" in k for k in sidecar._extra)
+    assert not any("XPSubject" in k for k in sidecar._extra)
+
+
+# ---------------------------------------------------------------------------
+# Interaction between the two methods
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_caches_hash_for_create_identity():
+    """extract_exif() caches the hash so create_identity() is free."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        backend = LocalBackend(root=tmpdir)
+        photo = Photo(backend, "photo.jpg")
+
+        sidecar = await photo.extract_exif()
+        # Hash must be cached at this point
+        assert photo._content_hash is not None
+        identity = await photo.create_identity()
+
+    assert identity == sidecar.content_hash
+
+
+# ---------------------------------------------------------------------------
+# Real-image EXIF extraction vs reference XMP
+# ---------------------------------------------------------------------------
+
+_XMP_CREATE_DATE = "{http://ns.adobe.com/xap/1.0/}CreateDate"
+
+
+def _sample_pairs():
+    """Yield pytest.param(image_path, ref_xmp_path) for each *.ref.xmp with a matching image."""
+    pairs = []
+    for ref in sorted(_SAMPLES.glob("*.ref.xmp")):
+        stem = ref.name[: -len(".ref.xmp")]
+        candidates = [
+            p for p in _SAMPLES.glob(f"{stem}.*") if p.suffix.lower() not in (".xmp",) and p != ref
+        ]
+        if candidates:
+            pairs.append(pytest.param(candidates[0], ref, id=stem))
+    return pairs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_path,ref_xmp_path", _sample_pairs())
+async def test_extract_exif_matches_ref(image_path, ref_xmp_path):
+    """Extract EXIF from a real image and compare typed fields to the reference XMP.
+
+    *.ref.xmp files are produced by Exiv2 and represent the ground truth for
+    what metadata is in each image.  Our parser reads make/model/orientation
+    from tiff:* attributes.  The date is stored as xmp:CreateDate (not
+    exif:DateTimeOriginal) in the ref, so it lands in _extra; we parse it from
+    there to keep the expected value fully ref-driven.
+
+    The wall-clock portion of date_taken is compared against ref_date.  Some
+    images carry OffsetTimeOriginal so extract_exif() will attach a timezone;
+    others will not — we do not assert tzinfo presence here.
+    """
+    ref_sidecar = parse_xmp(ref_xmp_path.read_text(encoding="utf-8"))
+    ref_date = parse_iso_datetime(ref_sidecar._extra.get(_XMP_CREATE_DATE))
+
+    sidecar = await Photo(LocalBackend(root=str(_SAMPLES)), image_path.name).extract_exif()
+
+    assert sidecar.content_hash is not None
+    assert len(sidecar.content_hash) == 22
+    assert sidecar.camera_make == ref_sidecar.camera_make
+    assert sidecar.camera_model == ref_sidecar.camera_model
+    assert sidecar.orientation == ref_sidecar.orientation
+    assert sidecar.gps == ref_sidecar.gps
+
+    if ref_date is not None:
+        assert sidecar.date_taken is not None
+        assert sidecar.date_taken.replace(tzinfo=None) == ref_date
+
+    # Cross-check _extra: compare simple scalar attributes present in both.
+    # Skip ref entries whose value begins with "<" — those are complex XMP
+    # child elements (rdf:Seq, structs) that Exiv2 serializes differently from
+    # raw EXIF strings.  Also skip keys absent from sidecar._extra (Exiv2 may
+    # emit XMP-only attributes that have no direct EXIF counterpart).
+    mismatches = {}
+    for key, ref_val in ref_sidecar._extra.items():
+        if ref_val.startswith("<"):
+            continue  # complex element — format differs
+        our_val = sidecar._extra.get(key)
+        if our_val is None:
+            continue  # key only in ref (XMP-only field)
+        if our_val != ref_val:
+            mismatches[key] = (our_val, ref_val)
+    assert mismatches == {}, f"_extra value mismatches: {mismatches}"
+
+
+# ---------------------------------------------------------------------------
+# HEIC/HEIF EXIF extraction (pillow-heif path)
+# ---------------------------------------------------------------------------
+
+
+def _make_heic_bytes(
+    exif_tags: dict[int, object], gps_ifd: Mapping[int, object] | None = None
+) -> bytes:
+    """Build a minimal in-memory HEIC file with the given numeric EXIF tags.
+
+    Generated fresh per test (rather than a committed binary fixture) so the
+    exact tag values under test are visible at the call site.
+    """
+    import pillow_heif
+
+    pil_img = PILImage.new("RGB", (16, 12), color=(200, 50, 50))
+    exif = PILImage.Exif()
+    for tag_id, value in exif_tags.items():
+        exif[tag_id] = value
+    if gps_ifd is not None:
+        exif[34853] = gps_ifd  # GPSInfo IFD pointer tag
+
+    heif_file = pillow_heif.from_pillow(pil_img)
+    buf = io.BytesIO()
+    heif_file.save(buf, format="HEIF", exif=exif, quality=50)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_returns_sidecar():
+    heic_bytes = _make_heic_bytes(
+        {
+            271: "Acme",
+            272: "Widget9000",
+            36867: "2026:02:21 13:03:10",
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert isinstance(sidecar, XmpSidecar)
+    assert sidecar.camera_make == "Acme"
+    assert sidecar.camera_model == "Widget9000"
+    assert sidecar.date_taken is not None
+    assert sidecar.date_taken.replace(tzinfo=None).isoformat() == "2026-02-21T13:03:10"
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_gps():
+    gps_ifd = {
+        1: "N",
+        2: (IFDRational(48, 1), IFDRational(52, 1), IFDRational(1234, 100)),
+        3: "E",
+        4: (IFDRational(2, 1), IFDRational(21, 1), IFDRational(345, 100)),
+    }
+    heic_bytes = _make_heic_bytes({271: "Acme"}, gps_ifd=gps_ifd)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.gps is not None
+    lat, lon = sidecar.gps
+    assert lat == pytest.approx(48.0 + 52 / 60 + 12.34 / 3600, abs=1e-6)
+    assert lon == pytest.approx(2.0 + 21 / 60 + 3.45 / 3600, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_offset_time_not_swapped():
+    """Regression test: 36880 is OffsetTime, 36881 is OffsetTimeOriginal — an earlier
+    draft of _HEIF_TAG_MAP had these two tag IDs swapped."""
+    heic_bytes = _make_heic_bytes(
+        {
+            36867: "2026:02:21 13:03:10",
+            36881: "+02:00",  # OffsetTimeOriginal — must be picked up, not OffsetTime
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.date_taken is not None
+    offset = sidecar.date_taken.utcoffset()
+    assert offset is not None
+    assert offset.total_seconds() == 2 * 3600
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_description_and_keywords():
+    """ImageDescription/XPKeywords/XPSubject are read directly by extract_exif(), not
+    through map_exif_extra — a field missing from _HEIF_TAG_MAP would silently drop
+    description/tags for every HEIC photo."""
+    xp_keywords = "beach;sunset;".encode("utf-16-le") + b"\x00\x00"
+    heic_bytes = _make_heic_bytes(
+        {
+            270: "A day at the beach",
+            40094: xp_keywords,
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.description == "A day at the beach"
+    assert sidecar.tags == ["beach", "sunset"]
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_dimensions_from_image_when_no_exif_tags():
+    """HEIC files often carry no PixelXDimension/ImageWidth EXIF tags, so width/height
+    must come from the decoded image size, not EXIF alone."""
+    heic_bytes = _make_heic_bytes({271: "Acme"})  # no dimension tags
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.width == 16
+    assert sidecar.height == 12
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_dimensions_use_image_size_over_exif_tags():
+    """Regression: the decoded img.size must win over any PixelXDimension/ImageWidth
+    EXIF tag. PIL returns SHORT-type tags as raw bytes, so a present-but-mangled EXIF
+    dimension used to overwrite the correct size with a non-numeric string → null."""
+    heic_bytes = _make_heic_bytes(
+        {
+            40962: 9999,  # PixelXDimension — bogus, must not win over real 16x12
+            40963: 8888,  # PixelYDimension
+            256: 7777,  # ImageWidth
+            257: 6666,  # ImageLength
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    assert sidecar.width == 16
+    assert sidecar.height == 12
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_dimensions_account_for_orientation():
+    """pillow-heif renders HEIC upright and resets EXIF orientation to 1, so width/height
+    must be swapped to the display dimensions when the original orientation is a 90°/270°
+    rotation. Base image is 16x12 landscape; orientation 6 → displayed as 12x16 portrait."""
+    heic_bytes = _make_heic_bytes({274: 6})  # Orientation=6 (rotate 90° CW)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.heic").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.heic").extract_exif()
+
+    # Orientation stays 1 (already applied by the decoder), dims are display-oriented.
+    assert sidecar.orientation in (None, 1)
+    assert sidecar.width == 12
+    assert sidecar.height == 16
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_heic_unrecognized_suffix_case_insensitive():
+    heic_bytes = _make_heic_bytes({271: "Acme"})
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "photo.HEIC").write_bytes(heic_bytes)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.HEIC").extract_exif()
+
+    assert sidecar.camera_make == "Acme"
+
+
+# ---------------------------------------------------------------------------
+# Dimension fallback via PIL when EXIF has no dimension tags
+# ---------------------------------------------------------------------------
+
+
+def _write_image(path: Path, size: tuple[int, int], fmt: str) -> None:
+    """Write a real (decodable) image of the given pixel size and format."""
+    PILImage.new("RGB", size, color=(120, 160, 200)).save(path, format=fmt)
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_from_exif_tags_win_over_pil():
+    """When EXIF carries dimension tags, they are used verbatim and the PIL fallback
+    is not triggered — even if they disagree with the actual pixels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        _write_image(path, (20, 10), "JPEG")  # real pixels are 20x10
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Photo.PixelXDimension": "1234", "Exif.Photo.PixelYDimension": "567"})
+        img.close()
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.width == 1234
+    assert sidecar.height == 567
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_pil_fallback_jpeg_no_tags():
+    """A JPEG stripped of PixelXDimension/ImageWidth still yields width/height from
+    the decoded pixels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        _write_image(path, (20, 10), "JPEG")
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.width == 20
+    assert sidecar.height == 10
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_pil_fallback_png():
+    """PNG files carry no EXIF dimension tags; width/height come from the pixels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.png"
+        _write_image(path, (24, 8), "PNG")
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.png").extract_exif()
+
+    assert sidecar.width == 24
+    assert sidecar.height == 8
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_unreadable_stay_none():
+    """A file PIL cannot decode leaves width/height null rather than raising."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Valid JFIF header but no SOF marker: pyexiv2 reads it, PIL cannot size it.
+        (Path(tmpdir) / "photo.jpg").write_bytes(_MINIMAL_JPEG)
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.width is None
+    assert sidecar.height is None
+
+
+@pytest.mark.asyncio
+async def test_extract_exif_dimensions_pil_fallback_keeps_stored_orientation():
+    """Stored-orientation convention: a rotated JPEG with no dimension tags reports the
+    *stored* (pre-rotation) size and preserves the EXIF orientation — no axis swap
+    (unlike the HEIC path, which decodes upright). See HLD 'Orientation and stored
+    dimensions'."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "photo.jpg"
+        _write_image(path, (20, 10), "JPEG")  # stored landscape buffer
+        img = pyexiv2.Image(str(path))
+        img.modify_exif({"Exif.Image.Orientation": "6"})  # rotate 90° CW on display
+        img.close()
+        sidecar = await Photo(LocalBackend(root=tmpdir), "photo.jpg").extract_exif()
+
+    assert sidecar.orientation == 6
+    assert sidecar.width == 20  # stored dims, not swapped
+    assert sidecar.height == 10
+
+
+# ---------------------------------------------------------------------------
+# Format coverage (OEC-69): one sample per format family
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", list(SAMPLES))
+async def test_extract_exif_per_format(tmp_path: Path, key: str) -> None:
+    sample = SAMPLES[key]
+    path = write_sample(tmp_path, key)
+    sidecar = await Photo(LocalBackend(root=str(tmp_path)), path.name).extract_exif()
+
+    assert sidecar.camera_make == sample.make
+    assert (sidecar.date_taken.isoformat() if sidecar.date_taken else None) == sample.date
+    assert sidecar.orientation == sample.orientation
+    assert (sidecar.width, sidecar.height) == (sample.width, sample.height)
+
+
+def test_photo_suffixes_are_decoded_by_image_proc() -> None:
+    """Every indexed extension must have a decoder, or its thumbnail would fail."""
+    assert PHOTO_SUFFIXES.issubset(supported_extensions())
+
+
+def test_photo_suffixes_are_lowercase_with_dot() -> None:
+    assert all(s.startswith(".") and s == s.lower() for s in PHOTO_SUFFIXES)
+    assert not PHOTO_SUFFIXES & VIDEO_SUFFIXES

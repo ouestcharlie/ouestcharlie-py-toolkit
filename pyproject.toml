@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ouestcharlie-py-toolkit"
-version = "0.16.0"
+version = "0.17.0"
 description = "Shared Python toolkit for OuEstCharlie agents"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -35,7 +35,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "mypy>=1.0",
+    "mypy>=2.3",
     "pre-commit>=4.5.1",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -57,7 +57,11 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "TID"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Absolute imports only: modules move between sub-packages without relative-path churn.
+ban-relative-imports = "all"
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

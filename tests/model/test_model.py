@@ -1,0 +1,287 @@
+"""Test package schema and data models."""
+
+from datetime import datetime
+
+from ouestcharlie_toolkit.model.entries import PhotoEntry, XmpSidecar
+from ouestcharlie_toolkit.model.summary import ManifestSummary
+from ouestcharlie_toolkit.model.version import SCHEMA_VERSION
+
+# ---------------------------------------------------------------------------
+# Photo entries
+# ---------------------------------------------------------------------------
+
+
+def test_photo_entry_minimal():
+    """Test PhotoEntry with minimal required fields."""
+    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbc123A2nBcR8xYvLm1P")
+    assert photo.filename == "test.jpg"
+    assert photo.content_hash == "KfAbc123A2nBcR8xYvLm1P"
+    assert photo.searchable == {}
+    assert photo.searchable.get("date_taken") is None
+    assert photo.searchable.get("make") is None
+    assert photo.searchable.get("tags") is None
+
+
+def test_photo_entry_with_metadata():
+    """Test PhotoEntry with full metadata, queryable fields."""
+    date = datetime(2024, 7, 15, 14, 30, 0)
+    photo = PhotoEntry(
+        filename="IMG_001.jpg",
+        content_hash="KfDef456A2nBcR8xYvLm1P",
+        metadata_version=2,
+        searchable={
+            "date_taken": date,
+            "make": "Canon",
+            "model": "EOS R5",
+            "gps": (48.8566, 2.3522),
+            "orientation": 1,
+            "tags": ["paris", "vacation"],
+            "rating": 4,
+            "width": 6000,
+            "height": 4000,
+        },
+    )
+
+    assert photo.filename == "IMG_001.jpg"
+    assert photo.searchable["date_taken"] == date
+    assert photo.searchable["make"] == "Canon"
+    assert photo.searchable["model"] == "EOS R5"
+    assert photo.searchable["gps"] == (48.8566, 2.3522)
+    assert photo.searchable["orientation"] == 1
+    assert photo.searchable["tags"] == ["paris", "vacation"]
+    assert photo.searchable["rating"] == 4
+    assert photo.searchable["width"] == 6000
+    assert photo.searchable["height"] == 4000
+    assert photo.metadata_version == 2
+
+
+def test_photo_entry_optional_fields_default_none():
+    """rating, width, height default to None (absent from searchable)."""
+    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbcZzA2nBcR8xYvLm1Pw")
+    assert photo.searchable.get("rating") is None
+    assert photo.searchable.get("width") is None
+    assert photo.searchable.get("height") is None
+
+
+def test_photo_entry_extra_fields():
+    """Test PhotoEntry preserves unknown fields via _extra."""
+    photo = PhotoEntry(filename="test.jpg", content_hash="KfAbcZzA2nBcR8xYvLm1Pw")
+    photo._extra["customField"] = "custom value"
+    assert photo._extra["customField"] == "custom value"
+
+
+# ---------------------------------------------------------------------------
+# PhotoEntry.from_sidecar
+# ---------------------------------------------------------------------------
+
+
+def test_from_sidecar_basic_fields():
+    """filename, content_hash, metadata_version and xmp_version_token are transferred."""
+    sidecar = XmpSidecar(content_hash="KfAbcZzA2nBcR8xYvLm1Pw", metadata_version=3)
+    entry = PhotoEntry.from_sidecar("photo.jpg", sidecar, "KfAbcZzA2nBcR8xYvLm1Pw", "tok1")
+    assert entry.filename == "photo.jpg"
+    assert entry.content_hash == "KfAbcZzA2nBcR8xYvLm1Pw"
+    assert entry.metadata_version == 3
+    assert entry.xmp_version_token == "tok1"
+
+
+def test_from_sidecar_searchable_fields():
+    """Scalar searchable fields (make, model, rating, width, height) are populated."""
+    sidecar = XmpSidecar(
+        content_hash="KfXZzA2nBcR8xYvLm1P9wx",
+        camera_make="Canon",
+        camera_model="EOS R5",
+        rating=4,
+        width=6000,
+        height=4000,
+    )
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
+    assert entry.searchable["make"] == "Canon"
+    assert entry.searchable["model"] == "EOS R5"
+    assert entry.searchable["rating"] == 4
+    assert entry.searchable["width"] == 6000
+    assert entry.searchable["height"] == 4000
+
+
+def test_from_sidecar_date_taken():
+    """date_taken is placed in searchable under the correct key."""
+    dt = datetime(2024, 7, 15, 10, 30)
+    sidecar = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx", date_taken=dt)
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
+    assert entry.searchable["date_taken"] == dt
+
+
+def test_from_sidecar_gps():
+    """GPS tuple is placed in searchable."""
+    sidecar = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx", gps=(48.8566, 2.3522))
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
+    assert entry.searchable["gps"] == (48.8566, 2.3522)
+
+
+def test_from_sidecar_tags_defensive_copy():
+    """tags list is copied so mutations do not affect the sidecar."""
+    sidecar = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx", tags=["a", "b"])
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
+    entry.searchable["tags"].append("c")
+    assert sidecar.tags == ["a", "b"]
+
+
+def test_from_sidecar_none_fields_present():
+    """Fields absent on the sidecar produce None values in searchable (not missing keys)."""
+    sidecar = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx")
+    entry = PhotoEntry.from_sidecar("img.jpg", sidecar, "KfXZzA2nBcR8xYvLm1P9wx", "v1")
+    # All sidecar-mapped fields appear as None rather than being absent
+    assert "rating" in entry.searchable
+    assert entry.searchable["rating"] is None
+
+
+# ---------------------------------------------------------------------------
+# Partition summaries
+# ---------------------------------------------------------------------------
+
+
+def test_partition_summary():
+    """Test ManifestSummary creation with date and rating ranges."""
+    summary = ManifestSummary(
+        media_count=42,
+        _stats={
+            "dateTaken": {
+                "type": "date_range",
+                "min": datetime(2024, 7, 1),
+                "max": datetime(2024, 7, 31),
+            },
+            "rating": {"type": "int_range", "min": 2, "max": 5},
+        },
+    )
+
+    assert summary.media_count == 42
+    assert summary.dateTaken["min"] == datetime(2024, 7, 1)
+    assert summary.dateTaken["max"] == datetime(2024, 7, 31)
+    assert summary.rating["min"] == 2
+    assert summary.rating["max"] == 5
+
+
+def test_partition_summary_rating_defaults_none():
+    """rating stat is absent (None) when not provided."""
+    summary = ManifestSummary(media_count=10)
+    assert summary.rating is None
+
+
+def test_partition_summary_rating_round_trip():
+    """rating and date survive serialize → deserialize with nested stat format."""
+    summary = ManifestSummary(
+        media_count=3,
+        _stats={
+            "dateTaken": {
+                "type": "date_range",
+                "min": datetime(2024, 1, 1),
+                "max": datetime(2024, 12, 31),
+            },
+            "rating": {"type": "int_range", "min": 1, "max": 5},
+        },
+    )
+    from ouestcharlie_toolkit.model.summary import summary_from_dict, summary_to_dict
+
+    d = summary_to_dict(summary)
+    # Verify nested format
+    assert d["dateTaken"] == {
+        "type": "date_range",
+        "min": "2024-01-01T00:00:00",
+        "max": "2024-12-31T00:00:00",
+    }
+    assert d["rating"] == {"type": "int_range", "min": 1, "max": 5}
+    assert "dateMin" not in d and "ratingMin" not in d
+    # Verify round-trip
+    restored = summary_from_dict(d)
+    assert restored.rating["min"] == 1
+    assert restored.rating["max"] == 5
+    assert restored.dateTaken["min"] == datetime(2024, 1, 1)
+    assert restored.dateTaken["max"] == datetime(2024, 12, 31)
+
+
+def test_partition_summary_video_stats_round_trip():
+    """Video stats (float_range, string_facets, bool_counts) survive round-trip."""
+    from ouestcharlie_toolkit.model.summary import summary_from_dict, summary_to_dict
+
+    summary = ManifestSummary(
+        media_count=4,
+        _stats={
+            "durationSeconds": {"type": "float_range", "min": 12.5, "max": 48.0, "missing": 1},
+            "mediaType": {"type": "string_facets", "counts": {"photo": 3, "video": 1}},
+            "videoCodec": {"type": "string_facets", "counts": {"h264": 1}},
+            "hasAudio": {"type": "bool_counts", "true": 1, "false": 0},
+        },
+    )
+    d = summary_to_dict(summary)
+    assert d["durationSeconds"] == {"type": "float_range", "min": 12.5, "max": 48.0, "missing": 1}
+    assert d["mediaType"] == {"type": "string_facets", "counts": {"photo": 3, "video": 1}}
+    assert d["hasAudio"] == {"type": "bool_counts", "true": 1, "false": 0}
+
+    restored = summary_from_dict(d)
+    assert restored.durationSeconds == summary.durationSeconds
+    assert restored.mediaType == summary.mediaType
+    assert restored.videoCodec == summary.videoCodec
+    assert restored.hasAudio == summary.hasAudio
+
+
+def test_partition_summary_gps_bbox_round_trip():
+    """gps_bbox stat survives serialize → deserialize (was silently dropped)."""
+    from ouestcharlie_toolkit.model.summary import summary_from_dict, summary_to_dict
+
+    summary = ManifestSummary(
+        media_count=5,
+        _stats={
+            "gps": {
+                "type": "gps_bbox",
+                "lat": {"min": 48.8, "max": 51.5, "missing": 2},
+                "lon": {"min": -0.1, "max": 2.4},
+            },
+        },
+    )
+    d = summary_to_dict(summary)
+    # The bounding box must reach the serialized dict, not be dropped.
+    assert d["gps"] == {
+        "type": "gps_bbox",
+        "lat": {"min": 48.8, "max": 51.5, "missing": 2},
+        "lon": {"min": -0.1, "max": 2.4},
+    }
+
+    restored = summary_from_dict(d)
+    assert restored.gps == summary.gps
+
+
+# ---------------------------------------------------------------------------
+# XMP sidecars
+# ---------------------------------------------------------------------------
+
+
+def test_xmp_sidecar_creation():
+    """Test XmpSidecar creation including queryable fields."""
+    xmp = XmpSidecar(
+        content_hash="KfXyz789A2nBcR8xYvLm1P",
+        date_taken=datetime(2024, 7, 15),
+        camera_make="Canon",
+        camera_model="EOS R5",
+        tags=["vacation", "paris"],
+        rating=4,
+        width=6000,
+        height=4000,
+    )
+
+    assert xmp.content_hash == "KfXyz789A2nBcR8xYvLm1P"
+    assert xmp.date_taken == datetime(2024, 7, 15)
+    assert xmp.camera_make == "Canon"
+    assert xmp.camera_model == "EOS R5"
+    assert xmp.tags == ["vacation", "paris"]
+    assert xmp.schema_version == SCHEMA_VERSION
+    assert xmp.rating == 4
+    assert xmp.width == 6000
+    assert xmp.height == 4000
+
+
+def test_xmp_sidecar_optional_fields_default_none():
+    """rating, width, height default to None on XmpSidecar."""
+    xmp = XmpSidecar()
+    assert xmp.rating is None
+    assert xmp.width is None
+    assert xmp.height is None

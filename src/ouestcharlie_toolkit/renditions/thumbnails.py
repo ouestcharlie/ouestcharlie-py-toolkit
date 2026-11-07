@@ -1,0 +1,221 @@
+"""Thumbnail generation — decode, fit, and assemble photos into AVIF grids.
+
+Pipeline per partition (avif_grid command):
+  1. Sort photos by content_hash for stable tile indices
+  2. Stage original photo bytes once to a shared local temp directory
+  3. Call the image-proc Rust CLI for the requested tier, which decodes +
+     resizes + fits + assembles using the staged files
+  4. Write the resulting AVIF to the backend
+  5. Return (ThumbnailGridLayout, content_hash) for manifest update
+
+For individual JPEG preview generation see ``preview_builder``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import os
+import tempfile
+from pathlib import Path
+
+from ouestcharlie_imageproc.image_proc import OneTimeImageProc
+
+from ouestcharlie_toolkit.media.suffixes import VIDEO_SUFFIXES
+from ouestcharlie_toolkit.media.video.video import Video
+from ouestcharlie_toolkit.model.entries import PhotoEntry
+from ouestcharlie_toolkit.model.thumbnails import ThumbnailChunk, ThumbnailGridLayout
+from ouestcharlie_toolkit.storage.backend import Backend
+from ouestcharlie_toolkit.storage.hashing import content_hash as _hash
+from ouestcharlie_toolkit.storage.layout import METADATA_DIR, thumbnail_avif_path
+
+_log = logging.getLogger(__name__)
+
+# AVIF encoding quality per tier.
+AVIF_QUALITY: dict[str, int] = {"thumbnail": 55, "preview": 60}
+
+# Short-edge pixel sizes per tier.
+TILE_SIZES: dict[str, int] = {"thumbnail": 256, "preview": 1440}
+
+# How to fit a non-square photo into a square tile:
+#   "crop" — center-crop (natural for small thumbnails)
+#   "pad"  — letterbox/pillarbox with black (preserves all content)
+TILE_FIT: dict[str, str] = {"thumbnail": "crop", "preview": "pad"}
+
+# Maximum photos per thumbnail AVIF grid chunk (8×8 = 64).
+GRID_MAX_PHOTOS: int = 64
+
+
+async def _stage_photos(
+    backend: Backend,
+    partition: str,
+    photo_entries: list[PhotoEntry],
+    tmpdir: str,
+) -> list[dict[str, object]]:
+    """Build the image-proc ``photos`` payload for a chunk.
+
+    Photos reference their backend-local path directly. Videos cannot be decoded
+    by image-proc, so their cover frame is decoded here and written as a JPEG
+    into ``tmpdir``; the payload then points at that JPEG. The video's cover
+    frame flows through the AVIF grid exactly like a photo from that point on.
+
+    Returns the image-proc ``photos`` payload (list of dicts with path, ext,
+    orientation, content_hash).  ``photo_entries`` must already be sorted by
+    content_hash (caller's responsibility).
+    """
+    prefix = partition.rstrip("/") + "/" if partition else ""
+    photos_payload: list[dict[str, object]] = []
+    for entry in photo_entries:
+        photo_path = f"{prefix}{entry.filename}"
+        ext = os.path.splitext(entry.filename)[1]
+        local = await backend.local_path(photo_path)
+        if ext.lower() in VIDEO_SUFFIXES:
+            # Decode the cover frame to a JPEG upright (frames are already
+            # display-oriented), so no EXIF orientation applies downstream.
+            jpeg_path = await asyncio.to_thread(
+                _stage_video_cover, backend, photo_path, local, entry.content_hash, tmpdir
+            )
+            photos_payload.append(
+                {
+                    "path": jpeg_path,
+                    "ext": ".jpg",
+                    "orientation": None,
+                    "content_hash": entry.content_hash,
+                }
+            )
+        else:
+            photos_payload.append(
+                {
+                    "path": str(local),
+                    "ext": ext,
+                    "orientation": entry.searchable.get("orientation"),
+                    "content_hash": entry.content_hash,
+                }
+            )
+    return photos_payload
+
+
+def _stage_video_cover(
+    backend: Backend,
+    video_path: str,
+    local: Path,
+    content_hash: str,
+    tmpdir: str,
+) -> str:
+    """Decode a video's cover frame and write it as a JPEG in ``tmpdir``.
+
+    Returns the JPEG path. Runs synchronously (PyAV decode + PIL encode); call
+    via ``asyncio.to_thread`` from async code.
+    """
+    cover = Video(backend, video_path).extract_cover_frame(local)
+    jpeg_path = os.path.join(tmpdir, f"{content_hash}.jpg")
+    cover.save(jpeg_path, "JPEG", quality=90)
+    return jpeg_path
+
+
+async def _call_image_proc(
+    staged_photos: list[dict[str, object]],
+    tile_size: int,
+    fit: str,
+    quality: int,
+    tmpdir: str,
+) -> tuple[ThumbnailGridLayout, bytes]:
+    """Call image-proc (avif_grid command) with pre-staged photos.
+
+    Returns (ThumbnailGridLayout, avif_bytes).  The caller is responsible for
+    hashing the bytes, naming the output file, and writing to the backend.
+    """
+    tmp_output = os.path.join(tmpdir, f"output_{tile_size}.avif")
+    grid_info = await OneTimeImageProc().request(
+        {
+            "photos": staged_photos,
+            "tile_size": tile_size,
+            "fit": fit,
+            "quality": quality,
+            "output": tmp_output,
+        }
+    )
+    avif_bytes = Path(tmp_output).read_bytes()
+    grid = ThumbnailGridLayout(
+        rows=grid_info["rows"],
+        tile_size=grid_info["tileSize"],
+        photo_order=grid_info["photoOrder"],
+    )
+    return grid, avif_bytes
+
+
+async def generate_partition_thumbnails(
+    backend: Backend,
+    partition: str,
+    photo_entries: list[PhotoEntry],
+    tier: str = "thumbnail",
+) -> list[ThumbnailChunk]:
+    """Generate AVIF thumbnail chunks for a partition.
+
+    Photos are sorted by ``content_hash`` for stable tile indices, then split
+    into chunks of at most ``GRID_MAX_PHOTOS`` (64) entries each, producing a
+    maximum 8×8 grid per AVIF file.  Chunks are encoded in parallel.
+
+    Each AVIF file is named ``thumbnails-{avif_hash}.avif`` (or
+    ``previews-{avif_hash}.avif`` for the preview tier), where ``avif_hash``
+    is the 22-char BLAKE3 hash of the file's content.
+
+    Args:
+        tier: ``"thumbnail"`` (256 px, crop) or ``"preview"`` (1440 px, pad).
+
+    Returns:
+        List of ``ThumbnailChunk`` in chunk order (sorted by first photo hash).
+    """
+    ordered = sorted(photo_entries, key=lambda e: e.content_hash)
+    chunks = [ordered[i : i + GRID_MAX_PHOTOS] for i in range(0, len(ordered), GRID_MAX_PHOTOS)]
+
+    async def _generate_chunk(chunk_entries: list[PhotoEntry]) -> ThumbnailChunk:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            staged = await _stage_photos(backend, partition, chunk_entries, tmpdir)
+            grid, avif_bytes = await _call_image_proc(
+                staged_photos=staged,
+                tile_size=TILE_SIZES[tier],
+                fit=TILE_FIT[tier],
+                quality=AVIF_QUALITY[tier],
+                tmpdir=tmpdir,
+            )
+        avif_hash = _hash(avif_bytes)
+        avif_path = thumbnail_avif_path(partition, avif_hash, tier)
+        with contextlib.suppress(FileExistsError):
+            await backend.write_new(avif_path, avif_bytes)
+        _log.debug(
+            "AVIF chunk written: %s (%d bytes, %d rows (8 column grid), %d photos)",
+            avif_path,
+            len(avif_bytes),
+            grid.rows,
+            len(chunk_entries),
+        )
+        return ThumbnailChunk(avif_hash=avif_hash, grid=grid)
+
+    return list(await asyncio.gather(*[_generate_chunk(c) for c in chunks]))
+
+
+async def delete_partition_thumbnails(backend: Backend, partition: str) -> None:
+    """Delete all ``thumbnails-*.avif`` files in a partition's metadata directory.
+
+    Missing directory or individual files are silently ignored; other errors
+    are logged as warnings and do not propagate.
+    """
+    prefix = partition.rstrip("/") + "/" if partition else ""
+    meta_dir = f"{METADATA_DIR}/{prefix}".rstrip("/")
+    try:
+        avif_files = await backend.list_files(meta_dir, frozenset({".avif"}))
+    except Exception as exc:
+        _log.warning("delete_partition_thumbnails — could not list %s: %s", meta_dir, exc)
+        return
+    for f in avif_files:
+        if not Path(f.path).name.startswith("thumbnails-"):
+            continue
+        try:
+            await backend.delete(f.path)
+            _log.debug("delete_partition_thumbnails — deleted: %s", f.path)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            _log.warning("delete_partition_thumbnails — could not delete %s: %s", f.path, exc)

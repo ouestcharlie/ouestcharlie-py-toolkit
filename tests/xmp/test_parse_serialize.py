@@ -1,0 +1,829 @@
+"""Tests for XMP parsing and serialization, tags and darktable interop."""
+
+import codecs
+import logging
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+from ouestcharlie_toolkit.model.entries import XmpSidecar
+from ouestcharlie_toolkit.storage.local import LocalBackend
+from ouestcharlie_toolkit.xmp import (
+    XmpStore,
+    parse_xmp,
+    serialize_xmp,
+)
+from ouestcharlie_toolkit.xmp.values import (
+    parse_iso_datetime,
+    parse_xmp_gps,
+)
+from tests.format_samples import SAMPLES_DIR
+
+_SAMPLES = SAMPLES_DIR
+
+
+# ---------------------------------------------------------------------------
+# parse_xmp
+# ---------------------------------------------------------------------------
+
+
+_SAMPLE_XMP = """\
+<?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+  <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+    <rdf:Description rdf:about=''
+      xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'
+      xmlns:exif='http://ns.adobe.com/exif/1.0/'
+      xmlns:tiff='http://ns.adobe.com/tiff/1.0/'
+      xmlns:dc='http://purl.org/dc/elements/1.1/'
+      ouestcharlie:contentHash='KfAbc123A2nBcR8xYvLm1P'
+      ouestcharlie:schemaVersion='1'
+      ouestcharlie:metadataVersion='2'
+      exif:DateTimeOriginal='2024-07-15T14:30:00'
+      exif:Make='Canon'
+      exif:Model='EOS R5'
+      tiff:Orientation='1'>
+      <exif:GPSLatitude>48,51.396000N</exif:GPSLatitude>
+      <exif:GPSLongitude>2,21.132000E</exif:GPSLongitude>
+      <dc:subject>
+        <rdf:Bag>
+          <rdf:li>vacation</rdf:li>
+          <rdf:li>paris</rdf:li>
+        </rdf:Bag>
+      </dc:subject>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>"""
+
+
+def test_parse_xmp_content_hash():
+    s = parse_xmp(_SAMPLE_XMP)
+    assert s.content_hash == "KfAbc123A2nBcR8xYvLm1P"
+
+
+def test_parse_xmp_schema_metadata_version():
+    s = parse_xmp(_SAMPLE_XMP)
+    assert s.schema_version == 1
+    assert s.metadata_version == 2
+
+
+def test_parse_xmp_date():
+    s = parse_xmp(_SAMPLE_XMP)
+    assert s.date_taken == datetime(2024, 7, 15, 14, 30, 0)
+
+
+def test_parse_xmp_camera():
+    s = parse_xmp(_SAMPLE_XMP)
+    assert s.camera_make == "Canon"
+    assert s.camera_model == "EOS R5"
+
+
+def test_parse_xmp_orientation():
+    s = parse_xmp(_SAMPLE_XMP)
+    assert s.orientation == 1
+
+
+def test_parse_xmp_gps():
+    s = parse_xmp(_SAMPLE_XMP)
+    assert s.gps is not None
+    lat, lon = s.gps
+    assert abs(lat - 48.856) < 0.01
+    assert abs(lon - 2.352) < 0.01
+
+
+def test_parse_xmp_tags():
+    s = parse_xmp(_SAMPLE_XMP)
+    assert s.tags == ["vacation", "paris"]
+
+
+def test_parse_xmp_known_fields_not_in_extra():
+    """All fields in the sample XMP are known — _extra should be empty."""
+    s = parse_xmp(_SAMPLE_XMP)
+    assert s._extra == {}
+
+
+_SAMPLE_XMP_WITH_RATING_AND_DIMS = """\
+<?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+  <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+    <rdf:Description rdf:about=''
+      xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'
+      xmlns:xmp='http://ns.adobe.com/xmp/1.0/'
+      xmlns:exif='http://ns.adobe.com/exif/1.0/'
+      ouestcharlie:contentHash='abc'
+      ouestcharlie:schemaVersion='1'
+      ouestcharlie:metadataVersion='1'
+      xmp:Rating='3'
+      exif:PixelXDimension='6000'
+      exif:PixelYDimension='4000'/>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>"""
+
+
+def test_parse_xmp_rating():
+    """xmp:Rating is parsed as a typed int field."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_RATING_AND_DIMS)
+    assert s.rating == 3
+    assert "{http://ns.adobe.com/xmp/1.0/}Rating" not in s._extra
+
+
+def test_parse_xmp_rejected_rating():
+    """xmp:Rating=-1 (rejected) is parsed correctly."""
+    xml = _SAMPLE_XMP_WITH_RATING_AND_DIMS.replace("xmp:Rating='3'", "xmp:Rating='-1'")
+    assert parse_xmp(xml).rating == -1
+
+
+def test_parse_xmp_width_height():
+    """exif:PixelXDimension / PixelYDimension are parsed as typed int fields."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_RATING_AND_DIMS)
+    assert s.width == 6000
+    assert s.height == 4000
+    assert "{http://ns.adobe.com/exif/1.0/}PixelXDimension" not in s._extra
+    assert "{http://ns.adobe.com/exif/1.0/}PixelYDimension" not in s._extra
+
+
+def test_serialize_xmp_rating_round_trip():
+    """rating survives parse → serialize → parse."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_RATING_AND_DIMS)
+    assert s.rating == 3
+    restored = parse_xmp(serialize_xmp(s))
+    assert restored.rating == 3
+
+
+def test_serialize_xmp_width_height_round_trip():
+    """width and height survive parse → serialize → parse."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_RATING_AND_DIMS)
+    restored = parse_xmp(serialize_xmp(s))
+    assert restored.width == 6000
+    assert restored.height == 4000
+
+
+def test_serialize_xmp_video_fields_round_trip():
+    """Video fields survive serialize → parse."""
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
+
+    s = XmpSidecar(
+        content_hash="KfVidZzA2nBcR8xYvLm1Pw",
+        media_type="video",
+        duration_seconds=12.5,
+        video_codec="hevc",
+        has_audio=True,
+    )
+    restored = parse_xmp(serialize_xmp(s))
+    assert restored.media_type == "video"
+    assert restored.duration_seconds == 12.5
+    assert restored.video_codec == "hevc"
+    assert restored.has_audio is True
+
+
+def test_serialize_xmp_has_audio_false_round_trip():
+    """has_audio=False is distinct from None and round-trips."""
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
+
+    s = XmpSidecar(content_hash="KfVidZzA2nBcR8xYvLm1Pw", media_type="video", has_audio=False)
+    restored = parse_xmp(serialize_xmp(s))
+    assert restored.has_audio is False
+
+
+def test_serialize_xmp_photo_omits_video_fields():
+    """A photo sidecar (default media_type) writes no video attributes."""
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
+
+    s = XmpSidecar(content_hash="KfPhoZzA2nBcR8xYvLm1Pw")
+    xml = serialize_xmp(s)
+    assert "mediaType" not in xml
+    assert "videoCodec" not in xml
+    restored = parse_xmp(xml)
+    assert restored.media_type == "photo"
+    assert restored.has_audio is None
+
+
+def test_serialize_xmp_none_rating_omits_field():
+    """When rating is None, xmp:Rating is not written to XMP."""
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
+
+    s = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx")
+    assert s.rating is None
+    xml = serialize_xmp(s)
+    assert "Rating" not in xml
+
+
+def test_serialize_xmp_none_dims_omit_fields():
+    """When width/height are None, pixel dimensions are not written to XMP."""
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
+
+    s = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx")
+    xml = serialize_xmp(s)
+    assert "PixelXDimension" not in xml
+    assert "PixelYDimension" not in xml
+
+
+_SAMPLE_XMP_WITH_EXTRAS = """\
+<?xpacket begin='\xef\xbb\xbf' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+  <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+    <rdf:Description rdf:about=''
+      xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'
+      xmlns:xmp='http://ns.adobe.com/xmp/1.0/'
+      xmlns:lr='http://ns.adobe.com/lightroom/1.0/'
+      xmlns:darktable='http://darktable.sf.net/'
+      ouestcharlie:contentHash='abc123'
+      ouestcharlie:schemaVersion='1'
+      ouestcharlie:metadataVersion='1'
+      xmp:Rating='4'>
+      <lr:hierarchicalSubject>
+        <rdf:Bag>
+          <rdf:li>Europe|France|Paris</rdf:li>
+        </rdf:Bag>
+      </lr:hierarchicalSubject>
+      <darktable:history>
+        <rdf:Seq>
+          <rdf:li darktable:operation='exposure'/>
+        </rdf:Seq>
+      </darktable:history>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>"""
+
+
+def test_parse_xmp_preserves_unknown_attr():
+    """Unknown simple attributes are stored in _extra;
+    known fields (e.g. xmp:Rating) become typed."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
+    # xmp:Rating is now a known field — stored on the typed attribute, not in _extra.
+    assert s.rating == 4
+    assert "{http://ns.adobe.com/xmp/1.0/}Rating" not in s._extra
+
+
+def test_parse_xmp_preserves_unknown_child_element():
+    """Unknown child elements (e.g. darktable:history) are stored in _extra;
+    lr:hierarchicalSubject is a known field parsed into tags."""
+    s = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
+    key = "{http://darktable.sf.net/}history"
+    assert key in s._extra
+    assert s._extra[key].startswith("<")
+    assert "exposure" in s._extra[key]
+    assert "{http://ns.adobe.com/lightroom/1.0/}hierarchicalSubject" not in s._extra
+    assert s.tags == ["Europe|France|Paris"]
+
+
+def test_serialize_xmp_roundtrip_preserves_extra():
+    """parse → serialize → parse preserves _extra fields.
+
+    Simple attribute values are compared exactly. Child element values are
+    compared by key presence and content, not exact whitespace, because ET
+    normalises indentation on re-serialization.
+    """
+    original = parse_xmp(_SAMPLE_XMP_WITH_EXTRAS)
+    xml2 = serialize_xmp(original)
+    restored = parse_xmp(xml2)
+
+    assert set(restored._extra.keys()) == set(original._extra.keys())
+    # xmp:Rating is a typed field — survives round-trip as sidecar.rating, not in _extra.
+    assert restored.rating == original.rating
+    assert "{http://ns.adobe.com/xmp/1.0/}Rating" not in restored._extra
+    # Child element: content preserved (whitespace may differ after ET round-trip)
+    assert "exposure" in restored._extra["{http://darktable.sf.net/}history"]
+    assert restored.tags == ["Europe|France|Paris"]
+
+
+def test_parse_xmp_minimal():
+    """Minimal XMP with only required OuEstCharlie fields."""
+    xml = (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        "<rdf:Description rdf:about=''"
+        " xmlns:ouestcharlie='http://ouestcharlie.app/ns/1.0/'"
+        " ouestcharlie:contentHash='KfAbc123A2nBcR8xYvLm1P'"
+        " ouestcharlie:schemaVersion='1'"
+        " ouestcharlie:metadataVersion='1'/>"
+        "</rdf:RDF></x:xmpmeta>"
+    )
+    s = parse_xmp(xml)
+    assert s.content_hash == "KfAbc123A2nBcR8xYvLm1P"
+    assert s.date_taken is None
+    assert s.gps is None
+    assert s.tags == []
+
+
+def test_parse_xmp_invalid_xml():
+    """Invalid XML returns a default XmpSidecar without raising."""
+    s = parse_xmp("not valid xml <<<")
+    assert s.content_hash is None
+    assert s._extra == {}
+
+
+# ---------------------------------------------------------------------------
+# serialize_xmp
+# ---------------------------------------------------------------------------
+
+
+def test_serialize_xmp_fresh():
+    """Serialize a fresh XmpSidecar (no _raw_xml) produces valid parseable XMP."""
+    sidecar = XmpSidecar(
+        content_hash="KfDef456A2nBcR8xYvLm1P",
+        schema_version=1,
+        metadata_version=1,
+        date_taken=datetime(2024, 7, 15, 14, 30, 0),
+        camera_make="Nikon",
+        camera_model="Z9",
+        orientation=6,
+        gps=(48.8566, 2.3522),
+        tags=["street", "night"],
+    )
+    xml = serialize_xmp(sidecar)
+
+    assert "<?xpacket" in xml
+    assert "KfDef456A2nBcR8xYvLm1P" in xml
+    assert "Nikon" in xml
+    assert "Z9" in xml
+    assert "street" in xml
+    assert "night" in xml
+
+
+def test_serialize_xmp_emits_correct_utf8_bom():
+    """The xpacket BOM must encode to the 3-byte UTF-8 BOM, not a double-encoded one.
+
+    Regression guard: writing the BOM as three code points ``\\xef\\xbb\\xbf`` in
+    the source string would UTF-8-encode to ``c3af c2bb c2bf`` on disk. The header
+    must use a single U+FEFF code point so it encodes to ``ef bb bf``.
+    """
+    encoded = serialize_xmp(XmpSidecar(content_hash="KfDef456A2nBcR8xYvLm1P")).encode("utf-8")
+    assert encoded.startswith(b"<?xpacket begin='" + codecs.BOM_UTF8)
+    assert b"\xc3\xaf\xc2\xbb\xc2\xbf" not in encoded
+
+
+def test_serialize_xmp_roundtrip():
+    """parse → serialize → parse should produce equivalent fields."""
+    original = parse_xmp(_SAMPLE_XMP)
+    xml2 = serialize_xmp(original)
+    restored = parse_xmp(xml2)
+
+    assert restored.content_hash == original.content_hash
+    assert restored.schema_version == original.schema_version
+    assert restored.date_taken == original.date_taken
+    assert restored.camera_make == original.camera_make
+    assert restored.camera_model == original.camera_model
+    assert restored.orientation == original.orientation
+    assert restored.tags == original.tags
+    assert restored.gps is not None and original.gps is not None
+    assert abs(restored.gps[0] - original.gps[0]) < 1e-4
+    assert abs(restored.gps[1] - original.gps[1]) < 1e-4
+
+
+def test_serialize_xmp_increments_metadata_version():
+    """XmpStore.write increments metadata_version; serialize itself just writes what's set."""
+    s = XmpSidecar(content_hash="KfAaaZzA2nBcR8xYvLm1Pw", metadata_version=3)
+    xml = serialize_xmp(s)
+    restored = parse_xmp(xml)
+    assert restored.metadata_version == 3
+
+
+def test_serialize_xmp_no_optional_fields():
+    """Serializing with None optionals does not emit those attributes/elements."""
+    s = XmpSidecar(content_hash="KfBbbZzA2nBcR8xYvLm1Pw")
+    xml = serialize_xmp(s)
+    assert "GPSLatitude" not in xml
+    assert "DateTimeOriginal" not in xml
+    assert "dc:subject" not in xml or "rdf:li" not in xml
+
+
+def test_serialize_xmp_empty_tags_omits_subject():
+    s = XmpSidecar(content_hash="KfCccZzA2nBcR8xYvLm1Pw", tags=[])
+    xml = serialize_xmp(s)
+    assert "<rdf:li>" not in xml
+
+
+# ---------------------------------------------------------------------------
+# _extra preservation — real reference XMP (001.ref.xmp)
+# ---------------------------------------------------------------------------
+
+_TIFF = "http://ns.adobe.com/tiff/1.0/"
+_EXIF = "http://ns.adobe.com/exif/1.0/"
+_XAP = "http://ns.adobe.com/xap/1.0/"
+_PS = "http://ns.adobe.com/photoshop/1.0/"
+
+
+def _ref_xmp() -> XmpSidecar:
+    return parse_xmp((_SAMPLES / "001.ref.xmp").read_text(encoding="utf-8"))
+
+
+def test_ref_xmp_extra_simple_attrs():
+    """Simple EXIF/TIFF/XMP attributes from Exiv2 land in _extra with correct values
+    (or in typed sidecar fields for shoot-settings attributes)."""
+    sidecar = _ref_xmp()
+    extra = sidecar._extra
+    # Non-shoot-settings attributes still land in _extra
+    assert extra[f"{{{_TIFF}}}Software"] == "A566BXXS8BZA7"
+    assert extra[f"{{{_TIFF}}}ImageWidth"] == "6112"
+    assert extra[f"{{{_TIFF}}}ImageLength"] == "6112"
+    assert extra[f"{{{_XAP}}}CreateDate"] == "2026-02-21T13:03:10.140"
+    assert extra[f"{{{_PS}}}DateCreated"] == "2026-02-21T13:03:10.140"
+    # Shoot-settings are now typed attributes, not in _extra
+    assert sidecar.exposure_time == pytest.approx(20 / 10000)
+    assert sidecar.aperture == pytest.approx(18000 / 10000)
+    assert sidecar.focal_length == pytest.approx(554 / 100)
+    assert sidecar.focal_length_35mm == 23
+    # Verify these keys are NOT in _extra
+    assert f"{{{_EXIF}}}ExposureTime" not in extra
+    assert f"{{{_EXIF}}}FNumber" not in extra
+    assert f"{{{_EXIF}}}FocalLength" not in extra
+    assert f"{{{_EXIF}}}FocalLengthIn35mmFilm" not in extra
+
+
+def test_ref_xmp_extra_structured_elements():
+    """Structured child elements (rdf:Seq, struct) are stored as XML strings in _extra,
+    except for typed child elements like ISOSpeedRatings."""
+    sidecar = _ref_xmp()
+    extra = sidecar._extra
+    flash_key = f"{{{_EXIF}}}Flash"
+
+    # ISOSpeedRatings is now a typed field
+    assert sidecar.iso_speed == 50
+    assert f"{{{_EXIF}}}ISOSpeedRatings" not in extra
+
+    # Flash struct is still in _extra (not typed)
+    assert flash_key in extra
+    assert extra[flash_key].startswith("<")
+    assert "False" in extra[flash_key]  # Flash did not fire
+
+
+def test_ref_xmp_extra_roundtrip():
+    """parse → serialize → parse preserves all _extra keys and typed fields."""
+    original = _ref_xmp()
+    restored = parse_xmp(serialize_xmp(original))
+
+    assert set(restored._extra.keys()) == set(original._extra.keys())
+    # Spot-check non-shoot-settings _extra values
+    for key in [
+        f"{{{_TIFF}}}Software",
+        f"{{{_XAP}}}CreateDate",
+    ]:
+        assert restored._extra[key] == original._extra[key]
+    # Typed shoot-settings survive round-trip
+    assert restored.aperture == pytest.approx(original.aperture)
+    assert restored.exposure_time == pytest.approx(original.exposure_time)
+    assert restored.focal_length == pytest.approx(original.focal_length)
+    assert restored.focal_length_35mm == original.focal_length_35mm
+    assert restored.iso_speed == original.iso_speed
+    # Complex elements: content preserved (ET normalises whitespace)
+    assert "False" in restored._extra[f"{{{_EXIF}}}Flash"]
+
+
+# ---------------------------------------------------------------------------
+# Logging behaviour
+# ---------------------------------------------------------------------------
+
+_XMP_LOGGER = "ouestcharlie_toolkit.xmp"
+
+
+def test_parse_xmp_invalid_xml_logs_warning(caplog):
+    """parse_xmp with malformed XML emits a WARNING with exc_info."""
+    with caplog.at_level(logging.WARNING, logger=_XMP_LOGGER):
+        parse_xmp("not valid xml <<<")
+    assert any("Malformed XMP" in msg for msg in caplog.messages)
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+    assert any(r.exc_info is not None for r in caplog.records)
+
+
+def test_parse_iso_datetime_invalid_logs_debug(caplog):
+    """parse_iso_datetime with a bad string emits a DEBUG message."""
+    with caplog.at_level(logging.DEBUG, logger=_XMP_LOGGER):
+        parse_iso_datetime("not-a-date")
+    assert any("Could not parse XMP datetime" in msg for msg in caplog.messages)
+    assert any(r.levelno == logging.DEBUG for r in caplog.records)
+
+
+def test_parse_xmp_gps_invalid_logs_debug(caplog):
+    """parse_xmp_gps with a malformed coordinate emits a DEBUG message."""
+    with caplog.at_level(logging.DEBUG, logger=_XMP_LOGGER):
+        parse_xmp_gps("not-a-coord", "2,21.132000E")
+    assert any("Could not parse XMP GPS" in msg for msg in caplog.messages)
+    assert any(r.levelno == logging.DEBUG for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical tags — lr:hierarchicalSubject / dc:subject
+# ---------------------------------------------------------------------------
+
+_LR = "http://ns.adobe.com/lightroom/1.0/"
+_DC = "http://purl.org/dc/elements/1.1/"
+_RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+
+
+def _tags_xmp(hierarchical: list[str] | None, subject: list[str] | None, container="Bag") -> str:
+    """Build a sidecar with the given lr:hierarchicalSubject / dc:subject entries."""
+
+    def _bag(tag: str, items: list[str]) -> str:
+        lis = "".join(f"<rdf:li>{i}</rdf:li>" for i in items)
+        return f"<{tag}><rdf:{container}>{lis}</rdf:{container}></{tag}>"
+
+    body = ""
+    if hierarchical is not None:
+        body += _bag("lr:hierarchicalSubject", hierarchical)
+    if subject is not None:
+        body += _bag("dc:subject", subject)
+    return (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        f"<rdf:RDF xmlns:rdf='{_RDF}'>"
+        f"<rdf:Description rdf:about='' xmlns:lr='{_LR}' xmlns:dc='{_DC}'"
+        " xmlns:darktable='http://darktable.sf.net/'>"
+        f"{body}"
+        "<darktable:history><rdf:Seq><rdf:li darktable:operation='exposure'/></rdf:Seq>"
+        "</darktable:history>"
+        "</rdf:Description></rdf:RDF></x:xmpmeta>"
+    )
+
+
+def _li_texts(xml: str, ns: str, local: str) -> list[str] | None:
+    """rdf:li texts of the given element in a serialized sidecar, or None if absent."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(xml.split("?>", 1)[1].rsplit("<?xpacket", 1)[0])
+    desc = root.find(f"{{{_RDF}}}RDF/{{{_RDF}}}Description")
+    assert desc is not None
+    elems = desc.findall(f"{{{ns}}}{local}")
+    if not elems:
+        return None
+    assert len(elems) == 1, f"duplicate {local} element"
+    bag = elems[0].find(f"{{{_RDF}}}Bag")
+    assert bag is not None
+    return [li.text or "" for li in bag.findall(f"{{{_RDF}}}li")]
+
+
+def test_hierarchical_subject_takes_precedence():
+    s = parse_xmp(
+        _tags_xmp(
+            ["Places|Europe|France|Paris", "Family"],
+            ["Places", "Europe", "France", "Paris", "Family"],
+        )
+    )
+    assert s.tags == ["Places|Europe|France|Paris", "Family"]
+
+
+def test_flat_only_dc_subject_terms_kept():
+    """A dc:subject term outside every path was added by a dc:subject-only tool."""
+    s = parse_xmp(_tags_xmp(["Places|Europe"], ["Places", "Europe", "Alpinism"]))
+    assert s.tags == ["Places|Europe", "Alpinism"]
+
+
+def test_darktable_tags_excluded_by_default():
+    s = parse_xmp(
+        _tags_xmp(
+            ["darktable|format|jpg", "darktable|changed", "jpg"],
+            ["darktable", "format", "jpg", "changed", "Alpinism"],
+        )
+    )
+    # "jpg" is a user tag in its own right (own path); "format"/"changed" are only
+    # levels of excluded paths; "Alpinism" is a flat dc:subject-only tag.
+    assert s.tags == ["jpg", "Alpinism"]
+    assert s._excluded_tags == ["darktable|format|jpg", "darktable|changed"]
+
+
+def test_excluded_tag_prefixes_custom():
+    xml = _tags_xmp(["Lightroom|Internal|x", "darktable|format|jpg", "Family"], None)
+    s = parse_xmp(xml, ["Lightroom|Internal"])
+    assert s.tags == ["darktable|format|jpg", "Family"]
+    assert s._excluded_tags == ["Lightroom|Internal|x"]
+    s = parse_xmp(xml, [])
+    assert s.tags == ["Lightroom|Internal|x", "darktable|format|jpg", "Family"]
+    assert s._excluded_tags == []
+
+
+def test_excluded_tag_prefixes_ignore_case():
+    original = parse_xmp(_tags_xmp(["Darktable|format|jpg", "Family"], None))
+    assert original.tags == ["Family"]
+    assert original._excluded_tags == ["Darktable|format|jpg"]
+    # written back unchanged, with its spelling
+    xml = serialize_xmp(original)
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == ["Family", "Darktable|format|jpg"]
+
+
+def test_dc_subject_only_pipe_term_is_hierarchical():
+    s = parse_xmp(_tags_xmp(None, ["Trips|2025|Alps", "Family"]))
+    assert s.tags == ["Trips|2025|Alps", "Family"]
+
+
+def test_dc_subject_only_excluded_term_dropped():
+    s = parse_xmp(_tags_xmp(None, ["darktable", "Family"]))
+    assert s.tags == ["Family"]
+    assert s._excluded_tags == ["darktable"]
+
+
+def test_hierarchical_ancestor_paths_collapsed_to_leaves():
+    s = parse_xmp(_tags_xmp(["Places", "Places|Europe", "Places|Europe|France"], None))
+    assert s.tags == ["Places|Europe|France"]
+
+
+def test_tag_paths_normalized_on_read():
+    s = parse_xmp(_tags_xmp([" Places | Europe ", "", "Places|Europe"], None))
+    assert s.tags == ["Places|Europe"]
+
+
+def test_seq_container_accepted():
+    s = parse_xmp(_tags_xmp(["Places|Europe"], ["Places", "Europe", "Alpinism"], container="Seq"))
+    assert s.tags == ["Places|Europe", "Alpinism"]
+
+
+def test_write_hierarchical_and_flattened_subject():
+    xml = serialize_xmp(XmpSidecar(tags=["Places|Europe|France", "Places|Asia", "Family"]))
+    assert "lr:hierarchicalSubject" in xml
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == [
+        "Places|Europe|France",
+        "Places|Asia",
+        "Family",
+    ]
+    assert _li_texts(xml, _DC, "subject") == ["Places", "Europe", "France", "Asia", "Family"]
+
+
+def test_write_flat_tags_also_in_hierarchical_subject():
+    """darktable reads only lr:hierarchicalSubject when present: flat tags go there too."""
+    xml = serialize_xmp(XmpSidecar(tags=["vacation", "paris"]))
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == ["vacation", "paris"]
+    assert _li_texts(xml, _DC, "subject") == ["vacation", "paris"]
+
+
+def test_excluded_tags_round_trip():
+    original = parse_xmp(
+        _tags_xmp(["darktable|format|jpg", "Family"], ["darktable", "format", "jpg", "Family"])
+    )
+    xml = serialize_xmp(original)
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == ["Family", "darktable|format|jpg"]
+    assert _li_texts(xml, _DC, "subject") == ["Family"]
+    assert "exposure" in xml  # darktable:history kept via _extra
+    restored = parse_xmp(xml)
+    assert restored.tags == ["Family"]
+    assert restored._excluded_tags == ["darktable|format|jpg"]
+
+
+def test_excluded_tags_only_writes_hierarchical_subject_without_dc_subject():
+    s = parse_xmp(_tags_xmp(["darktable|format|jpg"], ["darktable", "format", "jpg"]))
+    xml = serialize_xmp(s)
+    assert _li_texts(xml, _LR, "hierarchicalSubject") == ["darktable|format|jpg"]
+    assert _li_texts(xml, _DC, "subject") is None
+
+
+def test_roundtrip_hierarchical():
+    original = parse_xmp(
+        _tags_xmp(["Places|Europe|France|Paris", "Trips|2025"], None), excluded_tag_prefixes=[]
+    )
+    restored = parse_xmp(serialize_xmp(original))
+    assert restored.tags == original.tags == ["Places|Europe|France|Paris", "Trips|2025"]
+
+
+def test_serialize_xmp_empty_tags_omits_hierarchical_subject():
+    xml = serialize_xmp(XmpSidecar(content_hash="KfCccZzA2nBcR8xYvLm1Pw", tags=[]))
+    assert "hierarchicalSubject" not in xml
+    assert "subject" not in xml
+
+
+@pytest.mark.asyncio
+async def test_store_read_applies_excluded_tag_prefixes():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "a.jpg.xmp").write_text(
+            _tags_xmp(["darktable|format|jpg", "Lightroom|Internal|x", "Family"], None)
+        )
+        default_store = XmpStore(LocalBackend(root=tmpdir))
+        s, _ = await default_store.read("a.jpg")
+        assert s.tags == ["Lightroom|Internal|x", "Family"]
+
+        custom_store = XmpStore(LocalBackend(root=tmpdir), ["Lightroom|Internal"])
+        s, _ = await custom_store.read("a.jpg")
+        assert s.tags == ["darktable|format|jpg", "Family"]
+
+
+# ---------------------------------------------------------------------------
+# darktable interoperability (OEC-63) — fixture 001.darktable.ref.xmp, paired with 001.jpg
+# ---------------------------------------------------------------------------
+
+_DARKTABLE = "http://darktable.sf.net/"
+_XMP_LEGACY = "http://ns.adobe.com/xmp/1.0/"
+
+
+def _darktable_xml() -> str:
+    return (_SAMPLES / "001.darktable.ref.xmp").read_text(encoding="utf-8")
+
+
+def _rating_xmp(ns: str, rating: str) -> str:
+    return (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        f"<rdf:Description rdf:about='' xmlns:xmp='{ns}' xmp:Rating='{rating}'/>"
+        "</rdf:RDF></x:xmpmeta>"
+    )
+
+
+def test_parse_exif_style_date():
+    assert parse_iso_datetime("2025:08:24 06:03:45.314") == datetime(2025, 8, 24, 6, 3, 45, 314000)
+    assert parse_iso_datetime("2025:08:24 06:03:45") == datetime(2025, 8, 24, 6, 3, 45)
+
+
+def test_parse_xmp_partial_dates():
+    assert parse_iso_datetime("2025") == datetime(2025, 1, 1)
+    assert parse_iso_datetime("2025-08") == datetime(2025, 8, 1)
+    assert parse_iso_datetime("2025-08-24") == datetime(2025, 8, 24)
+    assert parse_iso_datetime("2025-08-24T06:03") == datetime(2025, 8, 24, 6, 3)
+
+
+def test_parse_darktable_sidecar():
+    s = parse_xmp(_darktable_xml())
+    assert s.content_hash == "KfAbc123A2nBcR8xYvLm1P"
+    assert s.date_taken == datetime(2026, 2, 21, 13, 3, 10, 140000)
+    assert s.rating == 1
+    assert s.tags == []  # darktable|format|jpg is excluded by default
+
+
+def test_rating_read_from_xap_namespace():
+    s = parse_xmp(_rating_xmp(_XAP, "4"))
+    assert s.rating == 4
+    assert f"{{{_XAP}}}Rating" not in s._extra
+
+
+def test_rating_read_from_legacy_namespace():
+    s = parse_xmp(_rating_xmp(_XMP_LEGACY, "2"))
+    assert s.rating == 2
+    assert f"{{{_XMP_LEGACY}}}Rating" not in s._extra
+
+
+def test_rating_xap_namespace_wins_over_legacy():
+    xml = (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        f"<rdf:Description rdf:about='' xmlns:xmp='{_XAP}' xmlns:old='{_XMP_LEGACY}'"
+        " xmp:Rating='5' old:Rating='2'/>"
+        "</rdf:RDF></x:xmpmeta>"
+    )
+    assert parse_xmp(xml).rating == 5
+
+
+def test_rating_written_in_xap_namespace_only():
+    s = parse_xmp(_rating_xmp(_XMP_LEGACY, "3"))
+    xml = serialize_xmp(s)
+    assert f'xmlns:xmp="{_XAP}"' in xml
+    assert _XMP_LEGACY not in xml
+    assert 'xmp:Rating="3"' in xml
+
+
+def test_xap_extra_fields_share_xmp_prefix_with_rating():
+    """Other XMP Basic fields (Exiv2's xmp:CreateDate) serialize under the same prefix."""
+    s = _ref_xmp()
+    s.rating = 2
+    xml = serialize_xmp(s)
+    assert 'xmp:Rating="2"' in xml
+    assert "xmp:CreateDate=" in xml
+    assert parse_xmp(xml)._extra[f"{{{_XAP}}}CreateDate"] == "2026-02-21T13:03:10.140"
+
+
+def test_gps_read_from_attributes():
+    s = parse_xmp(_darktable_xml())
+    assert s.gps is not None
+    assert s.gps[0] == pytest.approx(48 + 51.396 / 60)
+    assert s.gps[1] == pytest.approx(2 + 21.132 / 60)
+    assert f"{{{_EXIF}}}GPSLatitude" not in s._extra
+    # Rewritten once, as child elements, with no duplicate attribute.
+    xml = serialize_xmp(s)
+    assert xml.count("GPSLatitude") == 2  # opening and closing tag
+    assert parse_xmp(xml).gps == pytest.approx(s.gps)
+
+
+def test_simple_property_read_from_child_element():
+    xml = (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        f"<rdf:Description rdf:about='' xmlns:xmp='{_XAP}' xmlns:exif='{_EXIF}'>"
+        "<xmp:Rating> 4 </xmp:Rating>"
+        "<exif:DateTimeOriginal>2025:08:24 06:03:45</exif:DateTimeOriginal>"
+        "</rdf:Description></rdf:RDF></x:xmpmeta>"
+    )
+    s = parse_xmp(xml)
+    assert s.rating == 4
+    assert s.date_taken == datetime(2025, 8, 24, 6, 3, 45)
+    assert s._extra == {}
+
+
+def test_round_trip_preserves_darktable_history():
+    import xml.etree.ElementTree as ET
+
+    def _canonical(xml: str, local: str) -> str:
+        body = "\n".join(line for line in xml.splitlines() if not line.lstrip().startswith("<?"))
+        desc = ET.fromstring(body).find(f"{{{_RDF}}}RDF/{{{_RDF}}}Description")
+        assert desc is not None
+        elem = desc.find(f"{{{_DARKTABLE}}}{local}")
+        assert elem is not None
+        return ET.canonicalize(ET.tostring(elem, encoding="unicode"), strip_text=True)
+
+    original = _darktable_xml()
+    s = parse_xmp(original)
+    rewritten = serialize_xmp(s)
+
+    for local in ("history", "masks_history"):
+        assert _canonical(rewritten, local) == _canonical(original, local)
+    restored = parse_xmp(rewritten)
+    assert restored._extra[f"{{{_DARKTABLE}}}history_end"] == "1"
+    assert restored._excluded_tags == ["darktable|format|jpg"]
+    assert "xmlns:darktable=" in rewritten
