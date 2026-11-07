@@ -14,7 +14,7 @@ from PIL import Image as PILImage
 from PIL.TiffImagePlugin import IFDRational
 
 from ouestcharlie_toolkit import PHOTO_SUFFIXES, VIDEO_SUFFIXES, Photo
-from ouestcharlie_toolkit.backends.local import LocalBackend
+from ouestcharlie_toolkit.model.entries import XmpSidecar
 from ouestcharlie_toolkit.photo import (
     _decode_undefined_ascii,
     _jxl_display_size,
@@ -23,10 +23,9 @@ from ouestcharlie_toolkit.photo import (
     _parse_exif_gps,
     _raw_size,
 )
-from ouestcharlie_toolkit.schema import XmpSidecar
+from ouestcharlie_toolkit.storage.local import LocalBackend
 from ouestcharlie_toolkit.xmp import _parse_iso_datetime, parse_xmp
-
-from .format_samples import SAMPLES, write_sample
+from tests.format_samples import SAMPLES, write_sample
 
 _SAMPLES = Path(__file__).parent / "sample-images"
 
@@ -105,7 +104,7 @@ async def test_extract_exif_returns_sidecar():
 
 @pytest.mark.asyncio
 async def test_extract_exif_sets_content_hash():
-    from ouestcharlie_toolkit.hashing import content_hash
+    from ouestcharlie_toolkit.storage.hashing import content_hash
 
     expected = content_hash(_MINIMAL_JPEG)
     with tempfile.TemporaryDirectory() as tmpdir:

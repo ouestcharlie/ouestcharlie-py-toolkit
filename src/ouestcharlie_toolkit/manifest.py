@@ -5,13 +5,9 @@ from __future__ import annotations
 import json
 import logging
 
-from .backend import Backend, VersionToken
-from .schema import (
-    RootSummary,
-    deserialize_summary,
-    serialize_summary,
-    summary_path,
-)
+from ouestcharlie_toolkit.model.summary import RootSummary, deserialize_summary, serialize_summary
+from ouestcharlie_toolkit.storage.backend import Backend, VersionToken
+from ouestcharlie_toolkit.storage.layout import summary_path
 
 _log = logging.getLogger(__name__)
 

@@ -9,7 +9,6 @@ import lancedb
 import pyarrow as pa
 import pytest
 
-from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.lance_index import (
     PAGE_SIZE,
     PHOTO_SCHEMA,
@@ -20,7 +19,8 @@ from ouestcharlie_toolkit.lance_index import (
     row_to_photo_entry,
     sql_quote,
 )
-from ouestcharlie_toolkit.schema import PhotoEntry
+from ouestcharlie_toolkit.model.entries import PhotoEntry
+from ouestcharlie_toolkit.storage.local import LocalBackend
 
 # ---------------------------------------------------------------------------
 # Helpers

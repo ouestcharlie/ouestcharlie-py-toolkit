@@ -8,10 +8,10 @@ from typing import Any
 import duckdb
 from lancedb.query import AsyncFTSQuery, AsyncQuery
 
-from .fields import PHOTO_FIELDS, FieldType
-from .lance_index import FtsFilter, LanceIndex
-from .schema import ManifestSummary
-from .tags import TAG_SEPARATOR
+from ouestcharlie_toolkit.lance_index import FtsFilter, LanceIndex
+from ouestcharlie_toolkit.model.fields import PHOTO_FIELDS, FieldType
+from ouestcharlie_toolkit.model.summary import ManifestSummary
+from ouestcharlie_toolkit.model.tags import TAG_SEPARATOR
 
 # Range field types that contribute MIN/MAX summary stats (gated by summary_range),
 # mapped to their emitted stat type.

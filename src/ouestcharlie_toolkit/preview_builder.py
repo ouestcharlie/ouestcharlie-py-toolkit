@@ -17,8 +17,9 @@ from pathlib import Path
 
 from ouestcharlie_imageproc.image_proc import PersistentImageProc
 
-from ouestcharlie_toolkit.backend import Backend
-from ouestcharlie_toolkit.schema import PhotoEntry, preview_jpeg_path
+from ouestcharlie_toolkit.model.entries import PhotoEntry
+from ouestcharlie_toolkit.storage.backend import Backend
+from ouestcharlie_toolkit.storage.layout import preview_jpeg_path
 from ouestcharlie_toolkit.video import VIDEO_SUFFIXES, Video
 
 _log = logging.getLogger(__name__)

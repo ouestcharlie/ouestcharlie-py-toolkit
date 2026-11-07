@@ -6,8 +6,8 @@ import asyncio
 import logging
 import os
 
-from ..backend import VersionToken
-from .local import LocalBackend
+from ouestcharlie_toolkit.storage.backend import VersionToken
+from ouestcharlie_toolkit.storage.local import LocalBackend
 
 _log = logging.getLogger(__name__)
 

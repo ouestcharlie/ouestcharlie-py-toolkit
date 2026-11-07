@@ -22,15 +22,11 @@ from pathlib import Path
 
 from ouestcharlie_imageproc.image_proc import OneTimeImageProc
 
-from ouestcharlie_toolkit.backend import Backend
-from ouestcharlie_toolkit.hashing import content_hash as _hash
-from ouestcharlie_toolkit.schema import (
-    METADATA_DIR,
-    PhotoEntry,
-    ThumbnailChunk,
-    ThumbnailGridLayout,
-    thumbnail_avif_path,
-)
+from ouestcharlie_toolkit.model.entries import PhotoEntry
+from ouestcharlie_toolkit.model.thumbnails import ThumbnailChunk, ThumbnailGridLayout
+from ouestcharlie_toolkit.storage.backend import Backend
+from ouestcharlie_toolkit.storage.hashing import content_hash as _hash
+from ouestcharlie_toolkit.storage.layout import METADATA_DIR, thumbnail_avif_path
 from ouestcharlie_toolkit.video import VIDEO_SUFFIXES, Video
 
 _log = logging.getLogger(__name__)

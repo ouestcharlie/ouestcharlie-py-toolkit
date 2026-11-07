@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from ouestcharlie_toolkit.backend import (
+from ouestcharlie_toolkit.storage.backend import (
     ConfigurationError,
     VersionConflictError,
     backend_from_config,
 )
-from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.hashing import content_hash
+from ouestcharlie_toolkit.storage.hashing import content_hash
+from ouestcharlie_toolkit.storage.local import LocalBackend
 
 # ---------------------------------------------------------------------------
 # Helpers

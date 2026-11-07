@@ -11,9 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .backend import Backend, VersionConflictError, VersionToken
-from .schema import OUESTCHARLIE_NS, SCHEMA_VERSION, XmpSidecar
-from .tags import (
+from ouestcharlie_toolkit.model.entries import XmpSidecar
+from ouestcharlie_toolkit.model.tags import (
     DEFAULT_EXCLUDED_TAG_PREFIXES,
     flatten,
     is_excluded,
@@ -22,9 +21,11 @@ from .tags import (
     normalize_path,
     normalize_paths,
 )
+from ouestcharlie_toolkit.model.version import OUESTCHARLIE_NS, SCHEMA_VERSION
+from ouestcharlie_toolkit.storage.backend import Backend, VersionConflictError, VersionToken
 
 if TYPE_CHECKING:
-    from .photo import Photo
+    from ouestcharlie_toolkit.photo import Photo
 
 _log = logging.getLogger(__name__)
 
@@ -525,8 +526,8 @@ class XmpStore:
             when a new sidecar was written to the backend.
         """
         # Lazy imports — photo.py/video.py do not import xmp.py, so no circular dep.
-        from .photo import Photo
-        from .video import VIDEO_SUFFIXES, Video
+        from ouestcharlie_toolkit.photo import Photo
+        from ouestcharlie_toolkit.video import VIDEO_SUFFIXES, Video
 
         # Select the media handler by extension. Both expose create_identity();
         # extraction differs (extract_exif vs extract_metadata).

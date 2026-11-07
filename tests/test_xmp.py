@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.schema import XmpSidecar
+from ouestcharlie_toolkit.model.entries import XmpSidecar
+from ouestcharlie_toolkit.storage.local import LocalBackend
 from ouestcharlie_toolkit.xmp import (
     XmpStore,
     _decimal_to_xmp_coord,
@@ -312,7 +312,7 @@ def test_serialize_xmp_width_height_round_trip():
 
 def test_serialize_xmp_video_fields_round_trip():
     """Video fields survive serialize → parse."""
-    from ouestcharlie_toolkit.schema import XmpSidecar
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
 
     s = XmpSidecar(
         content_hash="KfVidZzA2nBcR8xYvLm1Pw",
@@ -330,7 +330,7 @@ def test_serialize_xmp_video_fields_round_trip():
 
 def test_serialize_xmp_has_audio_false_round_trip():
     """has_audio=False is distinct from None and round-trips."""
-    from ouestcharlie_toolkit.schema import XmpSidecar
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
 
     s = XmpSidecar(content_hash="KfVidZzA2nBcR8xYvLm1Pw", media_type="video", has_audio=False)
     restored = parse_xmp(serialize_xmp(s))
@@ -339,7 +339,7 @@ def test_serialize_xmp_has_audio_false_round_trip():
 
 def test_serialize_xmp_photo_omits_video_fields():
     """A photo sidecar (default media_type) writes no video attributes."""
-    from ouestcharlie_toolkit.schema import XmpSidecar
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
 
     s = XmpSidecar(content_hash="KfPhoZzA2nBcR8xYvLm1Pw")
     xml = serialize_xmp(s)
@@ -352,7 +352,7 @@ def test_serialize_xmp_photo_omits_video_fields():
 
 def test_serialize_xmp_none_rating_omits_field():
     """When rating is None, xmp:Rating is not written to XMP."""
-    from ouestcharlie_toolkit.schema import XmpSidecar
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
 
     s = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx")
     assert s.rating is None
@@ -362,7 +362,7 @@ def test_serialize_xmp_none_rating_omits_field():
 
 def test_serialize_xmp_none_dims_omit_fields():
     """When width/height are None, pixel dimensions are not written to XMP."""
-    from ouestcharlie_toolkit.schema import XmpSidecar
+    from ouestcharlie_toolkit.model.entries import XmpSidecar
 
     s = XmpSidecar(content_hash="KfXZzA2nBcR8xYvLm1P9wx")
     xml = serialize_xmp(s)

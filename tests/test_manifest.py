@@ -11,13 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from ouestcharlie_toolkit.backend import PartitionLockToken, VersionConflictError
-from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.manifest import ManifestStore
-from ouestcharlie_toolkit.schema import (
-    SCHEMA_VERSION,
-    RootSummary,
-)
+from ouestcharlie_toolkit.model.summary import RootSummary
+from ouestcharlie_toolkit.model.version import SCHEMA_VERSION
+from ouestcharlie_toolkit.storage.backend import PartitionLockToken, VersionConflictError
+from ouestcharlie_toolkit.storage.local import LocalBackend
 
 # ---------------------------------------------------------------------------
 # Fixtures

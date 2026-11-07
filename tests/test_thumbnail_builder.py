@@ -10,15 +10,11 @@ import pytest
 from PIL import Image
 
 from ouestcharlie_toolkit import Photo
-from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.hashing import content_hash as _content_hash
-from ouestcharlie_toolkit.schema import (
-    METADATA_DIR,
-    PhotoEntry,
-    ThumbnailChunk,
-    ThumbnailGridLayout,
-    thumbnail_avif_path,
-)
+from ouestcharlie_toolkit.model.entries import PhotoEntry
+from ouestcharlie_toolkit.model.thumbnails import ThumbnailChunk, ThumbnailGridLayout
+from ouestcharlie_toolkit.storage.hashing import content_hash as _content_hash
+from ouestcharlie_toolkit.storage.layout import METADATA_DIR, thumbnail_avif_path
+from ouestcharlie_toolkit.storage.local import LocalBackend
 from ouestcharlie_toolkit.thumbnail_builder import (
     GRID_MAX_PHOTOS,
     _call_image_proc,
@@ -26,8 +22,7 @@ from ouestcharlie_toolkit.thumbnail_builder import (
     delete_partition_thumbnails,
     generate_partition_thumbnails,
 )
-
-from .format_samples import SAMPLES, write_sample
+from tests.format_samples import SAMPLES, write_sample
 
 # ---------------------------------------------------------------------------
 # Helpers

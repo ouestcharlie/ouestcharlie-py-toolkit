@@ -13,9 +13,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from ..backend import FileInfo, PartitionLockToken, VersionConflictError, VersionToken
-from ..hashing import content_hash as _hash
-from ..schema import METADATA_DIR
+from ouestcharlie_toolkit.storage.backend import (
+    FileInfo,
+    PartitionLockToken,
+    VersionConflictError,
+    VersionToken,
+)
+from ouestcharlie_toolkit.storage.hashing import content_hash as _hash
+from ouestcharlie_toolkit.storage.layout import METADATA_DIR
 
 # ---------------------------------------------------------------------------
 # Platform-specific cross-process locking

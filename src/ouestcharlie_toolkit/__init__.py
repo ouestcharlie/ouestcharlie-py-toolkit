@@ -2,7 +2,14 @@
 
 from importlib.metadata import version
 
-from .backend import (
+from ouestcharlie_toolkit.logging import setup_logging
+from ouestcharlie_toolkit.manifest import ManifestStore
+from ouestcharlie_toolkit.model.entries import PhotoEntry, XmpSidecar
+from ouestcharlie_toolkit.model.fields import PHOTO_FIELDS, FieldDef, FieldType
+from ouestcharlie_toolkit.model.summary import ManifestSummary
+from ouestcharlie_toolkit.photo import PHOTO_SUFFIXES, Photo
+from ouestcharlie_toolkit.server import AgentBase
+from ouestcharlie_toolkit.storage.backend import (
     Backend,
     ConfigurationError,
     FileInfo,
@@ -10,18 +17,8 @@ from .backend import (
     VersionToken,
     backend_from_config,
 )
-from .fields import PHOTO_FIELDS, FieldDef, FieldType
-from .logging import setup_logging
-from .manifest import ManifestStore
-from .photo import PHOTO_SUFFIXES, Photo
-from .schema import (
-    ManifestSummary,
-    PhotoEntry,
-    XmpSidecar,
-)
-from .server import AgentBase
-from .video import VIDEO_SUFFIXES, Video, video_identity_hash
-from .xmp import XmpStore, sidecar_candidates, xmp_path_for
+from ouestcharlie_toolkit.video import VIDEO_SUFFIXES, Video, video_identity_hash
+from ouestcharlie_toolkit.xmp import XmpStore, sidecar_candidates, xmp_path_for
 
 __version__ = version("ouestcharlie-py-toolkit")
 

@@ -1,6 +1,6 @@
 """Tests for hierarchical tag path helpers (tags.py)."""
 
-from ouestcharlie_toolkit.tags import (
+from ouestcharlie_toolkit.model.tags import (
     ancestors,
     flatten,
     fold,

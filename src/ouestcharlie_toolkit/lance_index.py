@@ -18,10 +18,11 @@ import pyarrow as pa
 from lancedb.index import FTS, LabelList
 from lancedb.query import AsyncFTSQuery, AsyncQuery
 
-from .backend import Backend
-from .fields import PHOTO_FIELDS, FieldType
-from .schema import PhotoEntry, lance_index_path
-from .tags import tag_terms
+from ouestcharlie_toolkit.model.entries import PhotoEntry
+from ouestcharlie_toolkit.model.fields import PHOTO_FIELDS, FieldType
+from ouestcharlie_toolkit.model.tags import tag_terms
+from ouestcharlie_toolkit.storage.backend import Backend
+from ouestcharlie_toolkit.storage.layout import lance_index_path
 
 _log = logging.getLogger(__name__)
 

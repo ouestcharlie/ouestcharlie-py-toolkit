@@ -57,7 +57,11 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "TID"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Absolute imports only: modules move between sub-packages without relative-path churn.
+ban-relative-imports = "all"
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

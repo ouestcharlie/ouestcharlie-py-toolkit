@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, FtsFilter, LanceIndex
+from ouestcharlie_toolkit.model.entries import PhotoEntry
 from ouestcharlie_toolkit.partition_summary import compute_summary
-from ouestcharlie_toolkit.schema import PhotoEntry
+from ouestcharlie_toolkit.storage.local import LocalBackend
 
 
 def _entry(idx: int, searchable: dict | None = None) -> PhotoEntry:

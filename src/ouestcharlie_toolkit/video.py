@@ -17,10 +17,10 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import TYPE_CHECKING
 
-from .backend import Backend
-from .filename_time import date_from_filename, datetime_from_filename
-from .hashing import content_hash
-from .schema import XmpSidecar
+from ouestcharlie_toolkit.filename_time import date_from_filename, datetime_from_filename
+from ouestcharlie_toolkit.model.entries import XmpSidecar
+from ouestcharlie_toolkit.storage.backend import Backend
+from ouestcharlie_toolkit.storage.hashing import content_hash
 
 if TYPE_CHECKING:
     from pathlib import Path

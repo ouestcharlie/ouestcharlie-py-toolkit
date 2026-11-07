@@ -8,10 +8,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .backend import Backend
-from .filename_time import date_from_filename, datetime_from_filename
-from .schema import XmpSidecar
-from .tags import normalize_paths
+from ouestcharlie_toolkit.filename_time import date_from_filename, datetime_from_filename
+from ouestcharlie_toolkit.model.entries import XmpSidecar
+from ouestcharlie_toolkit.model.tags import normalize_paths
+from ouestcharlie_toolkit.storage.backend import Backend
 
 _log = logging.getLogger(__name__)
 

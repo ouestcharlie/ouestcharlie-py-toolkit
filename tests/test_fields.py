@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ouestcharlie_toolkit.fields import (
+from ouestcharlie_toolkit.model.fields import (
     PHOTO_FIELDS,
     SORTABLE_FIELD_TYPES,
     FieldType,

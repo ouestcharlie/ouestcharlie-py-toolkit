@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from ouestcharlie_toolkit.backend import ConfigurationError, backend_from_config
-from ouestcharlie_toolkit.backends.cloud_mount import CloudMountedBackend
-from ouestcharlie_toolkit.hashing import content_hash
+from ouestcharlie_toolkit.storage.backend import ConfigurationError, backend_from_config
+from ouestcharlie_toolkit.storage.cloud_mount import CloudMountedBackend
+from ouestcharlie_toolkit.storage.hashing import content_hash
 
 
 @pytest.mark.asyncio

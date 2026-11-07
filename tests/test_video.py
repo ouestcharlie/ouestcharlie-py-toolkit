@@ -10,7 +10,7 @@ import pytest
 from PIL import Image as PILImage
 
 from ouestcharlie_toolkit import VIDEO_SUFFIXES, Video, video_identity_hash
-from ouestcharlie_toolkit.backends.local import LocalBackend
+from ouestcharlie_toolkit.storage.local import LocalBackend
 from ouestcharlie_toolkit.video import (
     _container_tag,
     _display_rotation,

@@ -13,10 +13,10 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 
-from .backend import Backend, ConfigurationError, backend_from_config
-from .manifest import ManifestStore
-from .tags import DEFAULT_EXCLUDED_TAG_PREFIXES, normalize_paths
-from .xmp import XmpStore
+from ouestcharlie_toolkit.manifest import ManifestStore
+from ouestcharlie_toolkit.model.tags import DEFAULT_EXCLUDED_TAG_PREFIXES, normalize_paths
+from ouestcharlie_toolkit.storage.backend import Backend, ConfigurationError, backend_from_config
+from ouestcharlie_toolkit.xmp import XmpStore
 
 _log = logging.getLogger(__name__)
 

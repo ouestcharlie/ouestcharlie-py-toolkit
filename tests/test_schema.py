@@ -2,12 +2,9 @@
 
 from datetime import datetime
 
-from ouestcharlie_toolkit.schema import (
-    SCHEMA_VERSION,
-    ManifestSummary,
-    PhotoEntry,
-    XmpSidecar,
-)
+from ouestcharlie_toolkit.model.entries import PhotoEntry, XmpSidecar
+from ouestcharlie_toolkit.model.summary import ManifestSummary
+from ouestcharlie_toolkit.model.version import SCHEMA_VERSION
 
 # ---------------------------------------------------------------------------
 # Photo entries
@@ -183,7 +180,7 @@ def test_partition_summary_rating_round_trip():
             "rating": {"type": "int_range", "min": 1, "max": 5},
         },
     )
-    from ouestcharlie_toolkit.schema import summary_from_dict, summary_to_dict
+    from ouestcharlie_toolkit.model.summary import summary_from_dict, summary_to_dict
 
     d = summary_to_dict(summary)
     # Verify nested format
@@ -204,7 +201,7 @@ def test_partition_summary_rating_round_trip():
 
 def test_partition_summary_video_stats_round_trip():
     """Video stats (float_range, string_facets, bool_counts) survive round-trip."""
-    from ouestcharlie_toolkit.schema import summary_from_dict, summary_to_dict
+    from ouestcharlie_toolkit.model.summary import summary_from_dict, summary_to_dict
 
     summary = ManifestSummary(
         media_count=4,
@@ -229,7 +226,7 @@ def test_partition_summary_video_stats_round_trip():
 
 def test_partition_summary_gps_bbox_round_trip():
     """gps_bbox stat survives serialize → deserialize (was silently dropped)."""
-    from ouestcharlie_toolkit.schema import summary_from_dict, summary_to_dict
+    from ouestcharlie_toolkit.model.summary import summary_from_dict, summary_to_dict
 
     summary = ManifestSummary(
         media_count=5,

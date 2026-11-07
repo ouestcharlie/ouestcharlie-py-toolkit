@@ -10,11 +10,11 @@ from ouestcharlie_imageproc.image_proc import PersistentImageProc
 from PIL import Image
 
 from ouestcharlie_toolkit import Photo
-from ouestcharlie_toolkit.backends.local import LocalBackend
+from ouestcharlie_toolkit.model.entries import PhotoEntry
 from ouestcharlie_toolkit.preview_builder import PREVIEW_JPEG_MAX_LONG_EDGE, generate_preview_jpeg
-from ouestcharlie_toolkit.schema import PhotoEntry, preview_jpeg_path
-
-from .format_samples import SAMPLES, write_sample
+from ouestcharlie_toolkit.storage.layout import preview_jpeg_path
+from ouestcharlie_toolkit.storage.local import LocalBackend
+from tests.format_samples import SAMPLES, write_sample
 
 # ---------------------------------------------------------------------------
 # Helpers

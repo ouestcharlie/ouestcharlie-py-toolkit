@@ -242,7 +242,7 @@ def backend_from_config(config: dict[str, str]) -> Backend:
     backend_type = config.get("type")
 
     if backend_type == "filesystem":
-        from .backends.local import LocalBackend
+        from ouestcharlie_toolkit.storage.local import LocalBackend
 
         root = config.get("path")
         if not root:
@@ -251,7 +251,7 @@ def backend_from_config(config: dict[str, str]) -> Backend:
         return LocalBackend(root)
 
     if backend_type == "cloud_mount":
-        from .backends.cloud_mount import CloudMountedBackend
+        from ouestcharlie_toolkit.storage.cloud_mount import CloudMountedBackend
 
         root = config.get("path")
         if not root:

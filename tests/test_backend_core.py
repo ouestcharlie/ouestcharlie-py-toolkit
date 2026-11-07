@@ -2,7 +2,7 @@
 
 import pytest
 
-from ouestcharlie_toolkit.backend import (
+from ouestcharlie_toolkit.storage.backend import (
     ConfigurationError,
     FileInfo,
     VersionConflictError,
