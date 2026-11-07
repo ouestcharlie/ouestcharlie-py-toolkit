@@ -1,8 +1,7 @@
-"""Test XMP utilities, parsing, and serialization."""
+"""Tests for XMP parsing and serialization, tags and darktable interop."""
 
 import codecs
 import logging
-import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -15,161 +14,14 @@ from ouestcharlie_toolkit.xmp import (
     XmpStore,
     parse_xmp,
     serialize_xmp,
-    sidecar_candidates,
-    xmp_path_for,
 )
 from ouestcharlie_toolkit.xmp.values import (
-    decimal_to_xmp_coord,
     parse_iso_datetime,
     parse_xmp_gps,
-    xmp_coord_to_decimal,
 )
+from tests.format_samples import SAMPLES_DIR
 
-_SAMPLES = Path(__file__).parent / "sample-images"
-
-# ---------------------------------------------------------------------------
-# Path helpers
-# ---------------------------------------------------------------------------
-
-
-def test_xmp_path_for_simple():
-    """Test XMP path generation for simple filename, both conventions."""
-    assert xmp_path_for("photo.jpg", with_photo_extension=True) == "photo.jpg.xmp"
-    assert xmp_path_for("photo.jpg", with_photo_extension=False) == "photo.xmp"
-
-
-def test_xmp_path_for_with_directory():
-    """Test XMP path generation with directory path, both conventions."""
-    assert xmp_path_for("2024/IMG_001.jpg", with_photo_extension=True) == "2024/IMG_001.jpg.xmp"
-    assert xmp_path_for("2024/IMG_001.jpg", with_photo_extension=False) == "2024/IMG_001.xmp"
-
-
-def test_xmp_path_for_nested():
-    """Test XMP path generation for nested directories, both conventions."""
-    assert (
-        xmp_path_for("2024/2024-07/vacation/IMG_001.jpg", with_photo_extension=True)
-        == "2024/2024-07/vacation/IMG_001.jpg.xmp"
-    )
-    assert (
-        xmp_path_for("2024/2024-07/vacation/IMG_001.jpg", with_photo_extension=False)
-        == "2024/2024-07/vacation/IMG_001.xmp"
-    )
-
-
-def test_xmp_path_for_different_extensions_no_collision():
-    """With with_photo_extension=True, different extensions must not collide."""
-    assert xmp_path_for("photo.JPG", with_photo_extension=True) == "photo.JPG.xmp"
-    assert xmp_path_for("photo.dng", with_photo_extension=True) == "photo.dng.xmp"
-    assert xmp_path_for("photo.cr2", with_photo_extension=True) == "photo.cr2.xmp"
-    assert xmp_path_for("photo.nef", with_photo_extension=True) == "photo.nef.xmp"
-
-
-def test_xmp_path_for_different_extensions_stripped_collide():
-    """With with_photo_extension=False, different extensions collapse to the same sidecar."""
-    assert xmp_path_for("photo.JPG", with_photo_extension=False) == "photo.xmp"
-    assert xmp_path_for("photo.dng", with_photo_extension=False) == "photo.xmp"
-    assert xmp_path_for("photo.cr2", with_photo_extension=False) == "photo.xmp"
-    assert xmp_path_for("photo.nef", with_photo_extension=False) == "photo.xmp"
-
-
-def test_xmp_path_for_no_extension():
-    """Test XMP path generation for files without extension, both conventions."""
-    assert xmp_path_for("photo", with_photo_extension=True) == "photo.xmp"
-    assert xmp_path_for("photo", with_photo_extension=False) == "photo.xmp"
-
-
-def test_xmp_path_for_multiple_dots():
-    """Test XMP path generation for filenames with multiple dots, both conventions."""
-    assert (
-        xmp_path_for("my.photo.backup.jpg", with_photo_extension=True) == "my.photo.backup.jpg.xmp"
-    )
-    assert xmp_path_for("my.photo.backup.jpg", with_photo_extension=False) == "my.photo.backup.xmp"
-
-
-# ---------------------------------------------------------------------------
-# Datetime helpers
-# ---------------------------------------------------------------------------
-
-
-def test_parse_iso_datetime_valid():
-    assert parse_iso_datetime("2024-07-15T14:30:00") == datetime(2024, 7, 15, 14, 30, 0)
-
-
-def test_parse_iso_datetime_preserves_subseconds():
-    assert parse_iso_datetime("2024-07-15T14:30:00.123") == datetime(2024, 7, 15, 14, 30, 0, 123000)
-
-
-def test_parse_iso_datetime_preserves_timezone():
-    from datetime import timedelta, timezone
-
-    dt = parse_iso_datetime("2024-07-15T14:30:00.123+01:00")
-    assert dt == datetime(2024, 7, 15, 14, 30, 0, 123000, tzinfo=timezone(timedelta(hours=1)))
-
-
-def test_parse_iso_datetime_none():
-    assert parse_iso_datetime(None) is None
-
-
-def test_parse_iso_datetime_empty():
-    assert parse_iso_datetime("") is None
-
-
-def test_parse_iso_datetime_invalid():
-    assert parse_iso_datetime("not-a-date") is None
-
-
-# ---------------------------------------------------------------------------
-# GPS helpers
-# ---------------------------------------------------------------------------
-
-
-def test_xmp_coord_to_decimal_north():
-    # 48°30'N = 48.5
-    result = xmp_coord_to_decimal("48,30.000000N")
-    assert abs(result - 48.5) < 1e-6
-
-
-def test_xmp_coord_to_decimal_south():
-    result = xmp_coord_to_decimal("48,30.000000S")
-    assert abs(result - (-48.5)) < 1e-6
-
-
-def test_xmp_coord_to_decimal_east():
-    result = xmp_coord_to_decimal("2,21.132000E")
-    assert result > 0
-
-
-def test_xmp_coord_to_decimal_west():
-    result = xmp_coord_to_decimal("2,21.132000W")
-    assert result < 0
-
-
-def test_decimal_to_xmp_coord_lat():
-    s = decimal_to_xmp_coord(48.5, is_lat=True)
-    assert s.endswith("N")
-    assert s.startswith("48,")
-
-
-def test_decimal_to_xmp_coord_lon_negative():
-    s = decimal_to_xmp_coord(-2.352, is_lat=False)
-    assert s.endswith("W")
-
-
-def test_gps_roundtrip():
-    """Decimal → XMP coord → decimal should be lossless within float precision."""
-    lat, lon = 48.8566, 2.3522
-    lat_s = decimal_to_xmp_coord(lat, is_lat=True)
-    lon_s = decimal_to_xmp_coord(lon, is_lat=False)
-    result = parse_xmp_gps(lat_s, lon_s)
-    assert result is not None
-    assert abs(result[0] - lat) < 1e-5
-    assert abs(result[1] - lon) < 1e-5
-
-
-def test_parse_xmp_gps_none_when_missing():
-    assert parse_xmp_gps(None, "2,21.132000E") is None
-    assert parse_xmp_gps("48,30.000000N", None) is None
-    assert parse_xmp_gps(None, None) is None
+_SAMPLES = SAMPLES_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -656,125 +508,6 @@ def test_parse_xmp_gps_invalid_logs_debug(caplog):
 
 
 # ---------------------------------------------------------------------------
-# XmpStore — dual-convention read/write resolution
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_read_prioritizes_full_extension_sidecar():
-    """When both conventions exist for a photo, read() prefers the full-extension one."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir)
-        (root / "photo.jpg").write_bytes(b"data")
-        (root / "photo.xmp").write_text(serialize_xmp(XmpSidecar(content_hash="stripped-hash")))
-        (root / "photo.jpg.xmp").write_text(serialize_xmp(XmpSidecar(content_hash="full-ext-hash")))
-        store = XmpStore(LocalBackend(root=tmpdir))
-
-        sidecar, _ = await store.read("photo.jpg")
-
-    assert sidecar.content_hash == "full-ext-hash"
-
-
-@pytest.mark.asyncio
-async def test_read_falls_back_to_stripped_extension_sidecar():
-    """When only the stripped-extension sidecar exists, read() falls back to it."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir)
-        (root / "photo.jpg").write_bytes(b"data")
-        (root / "photo.xmp").write_text(serialize_xmp(XmpSidecar(content_hash="stripped-hash")))
-        store = XmpStore(LocalBackend(root=tmpdir))
-
-        sidecar, _ = await store.read("photo.jpg")
-
-    assert sidecar.content_hash == "stripped-hash"
-
-
-def test_sidecar_candidates_order():
-    """Full-extension form first, then the extension-stripped one."""
-    assert sidecar_candidates("2024/IMG_001.cr3") == ("2024/IMG_001.cr3.xmp", "2024/IMG_001.xmp")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "present", [("photo.jpg.xmp",), ("photo.xmp",), ("photo.jpg.xmp", "photo.xmp")]
-)
-async def test_read_resolves_first_existing_candidate(present: tuple[str, ...]):
-    """read() opens the first candidate on disk, so a directory listing can
-    predict which sidecar (and version token) the reader will use."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir)
-        (root / "photo.jpg").write_bytes(b"data")
-        for name in present:
-            (root / name).write_text(serialize_xmp(XmpSidecar(content_hash=name)))
-        store = XmpStore(LocalBackend(root=tmpdir))
-
-        sidecar, version = await store.read("photo.jpg")
-
-        expected = next(c for c in sidecar_candidates("photo.jpg") if c in present)
-        assert sidecar.content_hash == expected
-        assert version.value == (root / expected).stat().st_mtime_ns
-
-
-@pytest.mark.asyncio
-async def test_read_or_create_with_no_sidecar_uses_full_extension_path():
-    """A photo with no sidecar at all gets a new one at the full-extension path."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        shutil.copy(_SAMPLES / "001.jpg", Path(tmpdir) / "001.jpg")
-        store = XmpStore(LocalBackend(root=tmpdir))
-
-        _, _, created = await store.read_or_create_from_picture("001.jpg")
-
-        assert created
-        assert (Path(tmpdir) / "001.jpg.xmp").exists()
-        assert not (Path(tmpdir) / "001.xmp").exists()
-
-
-@pytest.mark.asyncio
-async def test_modifying_stripped_extension_sidecar_updates_in_place():
-    """Modifying a photo whose sidecar exists only in stripped-extension form
-    updates that file in place — no full-extension sidecar is created alongside it.
-
-    Uses the versioned tests/sample-images/001.jpg / 001.ref.xmp fixture pair.
-    """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        shutil.copy(_SAMPLES / "001.jpg", Path(tmpdir) / "001.jpg")
-        shutil.copy(_SAMPLES / "001.ref.xmp", Path(tmpdir) / "001.xmp")
-        store = XmpStore(LocalBackend(root=tmpdir))
-
-        def _bump_rating(sidecar: XmpSidecar) -> XmpSidecar:
-            sidecar.rating = 5
-            return sidecar
-
-        updated = await store.read_modify_write("001.jpg", _bump_rating)
-
-        assert updated.rating == 5
-        assert (Path(tmpdir) / "001.xmp").exists()
-        assert not (Path(tmpdir) / "001.jpg.xmp").exists()
-
-
-@pytest.mark.asyncio
-async def test_same_stem_different_extensions_get_distinct_sidecars():
-    """photo.cr3 and photo.jpg (same stem) get distinct, independently creatable sidecars."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir)
-        root.mkdir(exist_ok=True)
-        (root / "photo.cr3").write_bytes(b"raw-data")
-        (root / "photo.jpg").write_bytes(b"jpeg-data")
-        store = XmpStore(LocalBackend(root=tmpdir))
-
-        await store.create("photo.cr3", XmpSidecar(content_hash="cr3-hash"))
-        await store.create("photo.jpg", XmpSidecar(content_hash="jpg-hash"))
-
-        cr3_sidecar, _ = await store.read("photo.cr3")
-        jpg_sidecar, _ = await store.read("photo.jpg")
-
-        assert cr3_sidecar.content_hash == "cr3-hash"
-        assert jpg_sidecar.content_hash == "jpg-hash"
-        assert (root / "photo.cr3.xmp").exists()
-        assert (root / "photo.jpg.xmp").exists()
-
-
-# ---------------------------------------------------------------------------
 # Hierarchical tags — lr:hierarchicalSubject / dc:subject
 # ---------------------------------------------------------------------------
 
@@ -1094,38 +827,3 @@ def test_round_trip_preserves_darktable_history():
     assert restored._extra[f"{{{_DARKTABLE}}}history_end"] == "1"
     assert restored._excluded_tags == ["darktable|format|jpg"]
     assert "xmlns:darktable=" in rewritten
-
-
-@pytest.mark.asyncio
-async def test_naive_sidecar_date_recovers_offset_from_photo_exif():
-    """001.jpg has EXIF 2026:02:21 13:03:10 with OffsetTimeOriginal=+01:00."""
-    from datetime import timedelta, timezone
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        shutil.copy(_SAMPLES / "001.jpg", Path(tmpdir) / "001.jpg")
-        (Path(tmpdir) / "001.jpg.xmp").write_text(_darktable_xml(), encoding="utf-8")
-        store = XmpStore(LocalBackend(root=tmpdir))
-
-        s, _, created = await store.read_or_create_from_picture("001.jpg")
-
-        assert not created
-        assert s.date_taken == datetime(
-            2026, 2, 21, 13, 3, 10, 140000, tzinfo=timezone(timedelta(hours=1))
-        )
-        # Not written back on read.
-        assert "2026:02:21 13:03:10.140" in (Path(tmpdir) / "001.jpg.xmp").read_text()
-
-
-@pytest.mark.asyncio
-async def test_naive_sidecar_date_different_from_exif_stays_naive():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        shutil.copy(_SAMPLES / "001.jpg", Path(tmpdir) / "001.jpg")
-        (Path(tmpdir) / "001.jpg.xmp").write_text(
-            _darktable_xml().replace("2026:02:21 13:03:10.140", "2026:02:20 09:00:00"),
-            encoding="utf-8",
-        )
-        store = XmpStore(LocalBackend(root=tmpdir))
-
-        s, _, _ = await store.read_or_create_from_picture("001.jpg")
-
-        assert s.date_taken == datetime(2026, 2, 20, 9, 0, 0)
