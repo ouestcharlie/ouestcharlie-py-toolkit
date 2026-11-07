@@ -13,14 +13,16 @@ from ouestcharlie_toolkit.model.entries import XmpSidecar
 from ouestcharlie_toolkit.storage.local import LocalBackend
 from ouestcharlie_toolkit.xmp import (
     XmpStore,
-    _decimal_to_xmp_coord,
-    _parse_iso_datetime,
-    _parse_xmp_gps,
-    _xmp_coord_to_decimal,
     parse_xmp,
     serialize_xmp,
     sidecar_candidates,
     xmp_path_for,
+)
+from ouestcharlie_toolkit.xmp.values import (
+    decimal_to_xmp_coord,
+    parse_iso_datetime,
+    parse_xmp_gps,
+    xmp_coord_to_decimal,
 )
 
 _SAMPLES = Path(__file__).parent / "sample-images"
@@ -90,32 +92,30 @@ def test_xmp_path_for_multiple_dots():
 
 
 def test_parse_iso_datetime_valid():
-    assert _parse_iso_datetime("2024-07-15T14:30:00") == datetime(2024, 7, 15, 14, 30, 0)
+    assert parse_iso_datetime("2024-07-15T14:30:00") == datetime(2024, 7, 15, 14, 30, 0)
 
 
 def test_parse_iso_datetime_preserves_subseconds():
-    assert _parse_iso_datetime("2024-07-15T14:30:00.123") == datetime(
-        2024, 7, 15, 14, 30, 0, 123000
-    )
+    assert parse_iso_datetime("2024-07-15T14:30:00.123") == datetime(2024, 7, 15, 14, 30, 0, 123000)
 
 
 def test_parse_iso_datetime_preserves_timezone():
     from datetime import timedelta, timezone
 
-    dt = _parse_iso_datetime("2024-07-15T14:30:00.123+01:00")
+    dt = parse_iso_datetime("2024-07-15T14:30:00.123+01:00")
     assert dt == datetime(2024, 7, 15, 14, 30, 0, 123000, tzinfo=timezone(timedelta(hours=1)))
 
 
 def test_parse_iso_datetime_none():
-    assert _parse_iso_datetime(None) is None
+    assert parse_iso_datetime(None) is None
 
 
 def test_parse_iso_datetime_empty():
-    assert _parse_iso_datetime("") is None
+    assert parse_iso_datetime("") is None
 
 
 def test_parse_iso_datetime_invalid():
-    assert _parse_iso_datetime("not-a-date") is None
+    assert parse_iso_datetime("not-a-date") is None
 
 
 # ---------------------------------------------------------------------------
@@ -125,51 +125,51 @@ def test_parse_iso_datetime_invalid():
 
 def test_xmp_coord_to_decimal_north():
     # 48°30'N = 48.5
-    result = _xmp_coord_to_decimal("48,30.000000N")
+    result = xmp_coord_to_decimal("48,30.000000N")
     assert abs(result - 48.5) < 1e-6
 
 
 def test_xmp_coord_to_decimal_south():
-    result = _xmp_coord_to_decimal("48,30.000000S")
+    result = xmp_coord_to_decimal("48,30.000000S")
     assert abs(result - (-48.5)) < 1e-6
 
 
 def test_xmp_coord_to_decimal_east():
-    result = _xmp_coord_to_decimal("2,21.132000E")
+    result = xmp_coord_to_decimal("2,21.132000E")
     assert result > 0
 
 
 def test_xmp_coord_to_decimal_west():
-    result = _xmp_coord_to_decimal("2,21.132000W")
+    result = xmp_coord_to_decimal("2,21.132000W")
     assert result < 0
 
 
 def test_decimal_to_xmp_coord_lat():
-    s = _decimal_to_xmp_coord(48.5, is_lat=True)
+    s = decimal_to_xmp_coord(48.5, is_lat=True)
     assert s.endswith("N")
     assert s.startswith("48,")
 
 
 def test_decimal_to_xmp_coord_lon_negative():
-    s = _decimal_to_xmp_coord(-2.352, is_lat=False)
+    s = decimal_to_xmp_coord(-2.352, is_lat=False)
     assert s.endswith("W")
 
 
 def test_gps_roundtrip():
     """Decimal → XMP coord → decimal should be lossless within float precision."""
     lat, lon = 48.8566, 2.3522
-    lat_s = _decimal_to_xmp_coord(lat, is_lat=True)
-    lon_s = _decimal_to_xmp_coord(lon, is_lat=False)
-    result = _parse_xmp_gps(lat_s, lon_s)
+    lat_s = decimal_to_xmp_coord(lat, is_lat=True)
+    lon_s = decimal_to_xmp_coord(lon, is_lat=False)
+    result = parse_xmp_gps(lat_s, lon_s)
     assert result is not None
     assert abs(result[0] - lat) < 1e-5
     assert abs(result[1] - lon) < 1e-5
 
 
 def test_parse_xmp_gps_none_when_missing():
-    assert _parse_xmp_gps(None, "2,21.132000E") is None
-    assert _parse_xmp_gps("48,30.000000N", None) is None
-    assert _parse_xmp_gps(None, None) is None
+    assert parse_xmp_gps(None, "2,21.132000E") is None
+    assert parse_xmp_gps("48,30.000000N", None) is None
+    assert parse_xmp_gps(None, None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -640,17 +640,17 @@ def test_parse_xmp_invalid_xml_logs_warning(caplog):
 
 
 def test_parse_iso_datetime_invalid_logs_debug(caplog):
-    """_parse_iso_datetime with a bad string emits a DEBUG message."""
+    """parse_iso_datetime with a bad string emits a DEBUG message."""
     with caplog.at_level(logging.DEBUG, logger=_XMP_LOGGER):
-        _parse_iso_datetime("not-a-date")
+        parse_iso_datetime("not-a-date")
     assert any("Could not parse XMP datetime" in msg for msg in caplog.messages)
     assert any(r.levelno == logging.DEBUG for r in caplog.records)
 
 
 def test_parse_xmp_gps_invalid_logs_debug(caplog):
-    """_parse_xmp_gps with a malformed coordinate emits a DEBUG message."""
+    """parse_xmp_gps with a malformed coordinate emits a DEBUG message."""
     with caplog.at_level(logging.DEBUG, logger=_XMP_LOGGER):
-        _parse_xmp_gps("not-a-coord", "2,21.132000E")
+        parse_xmp_gps("not-a-coord", "2,21.132000E")
     assert any("Could not parse XMP GPS" in msg for msg in caplog.messages)
     assert any(r.levelno == logging.DEBUG for r in caplog.records)
 
@@ -986,15 +986,15 @@ def _rating_xmp(ns: str, rating: str) -> str:
 
 
 def test_parse_exif_style_date():
-    assert _parse_iso_datetime("2025:08:24 06:03:45.314") == datetime(2025, 8, 24, 6, 3, 45, 314000)
-    assert _parse_iso_datetime("2025:08:24 06:03:45") == datetime(2025, 8, 24, 6, 3, 45)
+    assert parse_iso_datetime("2025:08:24 06:03:45.314") == datetime(2025, 8, 24, 6, 3, 45, 314000)
+    assert parse_iso_datetime("2025:08:24 06:03:45") == datetime(2025, 8, 24, 6, 3, 45)
 
 
 def test_parse_xmp_partial_dates():
-    assert _parse_iso_datetime("2025") == datetime(2025, 1, 1)
-    assert _parse_iso_datetime("2025-08") == datetime(2025, 8, 1)
-    assert _parse_iso_datetime("2025-08-24") == datetime(2025, 8, 24)
-    assert _parse_iso_datetime("2025-08-24T06:03") == datetime(2025, 8, 24, 6, 3)
+    assert parse_iso_datetime("2025") == datetime(2025, 1, 1)
+    assert parse_iso_datetime("2025-08") == datetime(2025, 8, 1)
+    assert parse_iso_datetime("2025-08-24") == datetime(2025, 8, 24)
+    assert parse_iso_datetime("2025-08-24T06:03") == datetime(2025, 8, 24, 6, 3)
 
 
 def test_parse_darktable_sidecar():

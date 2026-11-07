@@ -24,7 +24,8 @@ from ouestcharlie_toolkit.photo import (
     _raw_size,
 )
 from ouestcharlie_toolkit.storage.local import LocalBackend
-from ouestcharlie_toolkit.xmp import _parse_iso_datetime, parse_xmp
+from ouestcharlie_toolkit.xmp import parse_xmp
+from ouestcharlie_toolkit.xmp.values import parse_iso_datetime
 from tests.format_samples import SAMPLES, write_sample
 
 _SAMPLES = Path(__file__).parent / "sample-images"
@@ -408,7 +409,7 @@ async def test_extract_exif_matches_ref(image_path, ref_xmp_path):
     others will not — we do not assert tzinfo presence here.
     """
     ref_sidecar = parse_xmp(ref_xmp_path.read_text(encoding="utf-8"))
-    ref_date = _parse_iso_datetime(ref_sidecar._extra.get(_XMP_CREATE_DATE))
+    ref_date = parse_iso_datetime(ref_sidecar._extra.get(_XMP_CREATE_DATE))
 
     sidecar = await Photo(LocalBackend(root=str(_SAMPLES)), image_path.name).extract_exif()
 
