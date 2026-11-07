@@ -274,7 +274,7 @@ class XmpSidecar:
 # Unknown fields are preserved via the _extra attribute.
 
 
-def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
+def summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
     d: dict[str, Any] = {
         "mediaCount": s.media_count,
     }
@@ -304,7 +304,7 @@ def _summary_to_dict(s: ManifestSummary) -> dict[str, Any]:
     return d
 
 
-def _summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
+def summary_from_dict(d: dict[str, Any]) -> ManifestSummary:
     known_keys = {"mediaCount", "hashes"}
     stats: dict[str, dict[str, Any]] = {}
     for fd in PHOTO_FIELDS:

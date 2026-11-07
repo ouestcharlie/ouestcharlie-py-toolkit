@@ -218,7 +218,7 @@ def row_to_photo_entry(row: dict[str, Any]) -> PhotoEntry:
 # ---------------------------------------------------------------------------
 
 
-def _esc(s: str) -> str:
+def sql_quote(s: str) -> str:
     """Escape single quotes for SQL WHERE clause values."""
     return s.replace("'", "''")
 
@@ -340,7 +340,7 @@ class LanceIndex:
         try:
             rows = await (
                 self._table.query()
-                .where(f"partition = '{_esc(partition)}'")
+                .where(f"partition = '{sql_quote(partition)}'")
                 .select(["content_hash", "thumbnail_avif_hash", "thumbnail_tile_index"])
                 .limit(len(entries) + 1000)
                 .to_list()
@@ -392,13 +392,13 @@ class LanceIndex:
         """Delete specific photos by content hash."""
         if not content_hashes:
             return
-        hash_list = ", ".join(f"'{_esc(h)}'" for h in content_hashes)
-        query = f"partition = '{_esc(partition)}' AND content_hash IN ({hash_list})"
+        hash_list = ", ".join(f"'{sql_quote(h)}'" for h in content_hashes)
+        query = f"partition = '{sql_quote(partition)}' AND content_hash IN ({hash_list})"
         await self._table.delete(query)
 
     async def delete_partition(self, partition: str) -> None:
         """Delete all rows for a partition."""
-        await self._table.delete(f"partition = '{_esc(partition)}'")
+        await self._table.delete(f"partition = '{sql_quote(partition)}'")
 
     async def list_partitions(self) -> set[str]:
         """Return the set of distinct partition values currently in the index.
@@ -436,7 +436,7 @@ class LanceIndex:
                 …
         """
         try:
-            query = self._table.query().where(f"partition = '{_esc(partition)}'").limit(limit)
+            query = self._table.query().where(f"partition = '{sql_quote(partition)}'").limit(limit)
             if columns is not None:
                 query = query.select(columns)
             reader = await query.to_batches()

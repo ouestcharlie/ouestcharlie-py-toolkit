@@ -16,9 +16,9 @@ from ouestcharlie_toolkit.lance_index import (
     PHOTO_TABLE_NAME,
     FtsFilter,
     LanceIndex,
-    _esc,
     photo_entry_to_row,
     row_to_photo_entry,
+    sql_quote,
 )
 from ouestcharlie_toolkit.schema import PhotoEntry
 
@@ -55,24 +55,24 @@ async def _collect_partition(
 
 
 # ---------------------------------------------------------------------------
-# _esc — SQL injection protection
+# sql_quote — SQL injection protection
 # ---------------------------------------------------------------------------
 
 
 def test_esc_clean_string_unchanged():
-    assert _esc("hello") == "hello"
+    assert sql_quote("hello") == "hello"
 
 
 def test_esc_single_quote_doubled():
-    assert _esc("it's") == "it''s"
+    assert sql_quote("it's") == "it''s"
 
 
 def test_esc_multiple_quotes():
-    assert _esc("a'b'c") == "a''b''c"
+    assert sql_quote("a'b'c") == "a''b''c"
 
 
 def test_esc_empty_string():
-    assert _esc("") == ""
+    assert sql_quote("") == ""
 
 
 # ---------------------------------------------------------------------------

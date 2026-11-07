@@ -183,9 +183,9 @@ def test_partition_summary_rating_round_trip():
             "rating": {"type": "int_range", "min": 1, "max": 5},
         },
     )
-    from ouestcharlie_toolkit.schema import _summary_from_dict, _summary_to_dict
+    from ouestcharlie_toolkit.schema import summary_from_dict, summary_to_dict
 
-    d = _summary_to_dict(summary)
+    d = summary_to_dict(summary)
     # Verify nested format
     assert d["dateTaken"] == {
         "type": "date_range",
@@ -195,7 +195,7 @@ def test_partition_summary_rating_round_trip():
     assert d["rating"] == {"type": "int_range", "min": 1, "max": 5}
     assert "dateMin" not in d and "ratingMin" not in d
     # Verify round-trip
-    restored = _summary_from_dict(d)
+    restored = summary_from_dict(d)
     assert restored.rating["min"] == 1
     assert restored.rating["max"] == 5
     assert restored.dateTaken["min"] == datetime(2024, 1, 1)
@@ -204,7 +204,7 @@ def test_partition_summary_rating_round_trip():
 
 def test_partition_summary_video_stats_round_trip():
     """Video stats (float_range, string_facets, bool_counts) survive round-trip."""
-    from ouestcharlie_toolkit.schema import _summary_from_dict, _summary_to_dict
+    from ouestcharlie_toolkit.schema import summary_from_dict, summary_to_dict
 
     summary = ManifestSummary(
         media_count=4,
@@ -215,12 +215,12 @@ def test_partition_summary_video_stats_round_trip():
             "hasAudio": {"type": "bool_counts", "true": 1, "false": 0},
         },
     )
-    d = _summary_to_dict(summary)
+    d = summary_to_dict(summary)
     assert d["durationSeconds"] == {"type": "float_range", "min": 12.5, "max": 48.0, "missing": 1}
     assert d["mediaType"] == {"type": "string_facets", "counts": {"photo": 3, "video": 1}}
     assert d["hasAudio"] == {"type": "bool_counts", "true": 1, "false": 0}
 
-    restored = _summary_from_dict(d)
+    restored = summary_from_dict(d)
     assert restored.durationSeconds == summary.durationSeconds
     assert restored.mediaType == summary.mediaType
     assert restored.videoCodec == summary.videoCodec
@@ -229,7 +229,7 @@ def test_partition_summary_video_stats_round_trip():
 
 def test_partition_summary_gps_bbox_round_trip():
     """gps_bbox stat survives serialize → deserialize (was silently dropped)."""
-    from ouestcharlie_toolkit.schema import _summary_from_dict, _summary_to_dict
+    from ouestcharlie_toolkit.schema import summary_from_dict, summary_to_dict
 
     summary = ManifestSummary(
         media_count=5,
@@ -241,7 +241,7 @@ def test_partition_summary_gps_bbox_round_trip():
             },
         },
     )
-    d = _summary_to_dict(summary)
+    d = summary_to_dict(summary)
     # The bounding box must reach the serialized dict, not be dropped.
     assert d["gps"] == {
         "type": "gps_bbox",
@@ -249,7 +249,7 @@ def test_partition_summary_gps_bbox_round_trip():
         "lon": {"min": -0.1, "max": 2.4},
     }
 
-    restored = _summary_from_dict(d)
+    restored = summary_from_dict(d)
     assert restored.gps == summary.gps
 
 
