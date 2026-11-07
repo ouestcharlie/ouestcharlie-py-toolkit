@@ -4,6 +4,26 @@ Rationale for non-obvious decisions in the toolkit implementation. For the desig
 
 ---
 
+## Sub-packages instead of a flat package (OEC-72)
+
+### Decision
+
+The toolkit is split into seven sub-packages with a fixed layer order (see the LLD, "Package Layout"), checked by a test rather than by an extra tool such as import-linter.
+
+### Why
+
+**Files had grown to several concerns each.** `xmp.py` (~940 lines) mixed paths, namespaces, value parsing, the store, parsing and serialization; `photo.py`, `video.py`, `lance_index.py` and `schema.py` were similar. Splitting by responsibility brings most files under ~300 lines (the largest, `storage/local.py`, was left as is) and makes the pure helpers testable on their own.
+
+**Agents depended on private names.** Wally imported `_esc` and `_summary_to_dict`. Sub-package `__init__` files now define what agents may import; anything else can change without notice.
+
+**Absolute imports.** With nested sub-packages, relative imports turn into `..`/`...` chains that change every time a module moves. Absolute imports also let one codemod rewrite toolkit and agents the same way.
+
+**`renditions` isolated.** It is the only code that needs the native `image-proc` binary. Keeping it apart leaves the option of making `ouestcharlie-imageproc` an optional extra for read-only agents.
+
+**No compatibility shims.** All consumers (Wally, Whitebeard) are released with the toolkit in the same cycle, so the old flat module paths were removed rather than kept as re-exports.
+
+---
+
 ## Thumbnail pipeline: decode+resize+fit in Rust, not Python
 
 ### Decision

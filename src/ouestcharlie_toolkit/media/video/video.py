@@ -1,6 +1,6 @@
 """Video domain object — identity and metadata extraction for a single video file.
 
-Parallels ``photo.py`` rather than extending ``Photo``: video identity and
+Parallels ``media/photo/`` rather than extending ``Photo``: video identity and
 metadata come from container/stream inspection (PyAV) plus a decoded cover
 frame, which differs enough from EXIF-based photo extraction to warrant its own
 class. Both produce an :class:`XmpSidecar`, so downstream indexing/manifest code

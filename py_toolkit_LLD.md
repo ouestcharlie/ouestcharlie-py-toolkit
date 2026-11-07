@@ -8,13 +8,35 @@ The Python toolkit (`ouestcharlie-toolkit`) is a shared library that provides fi
 
 1. **MCP integration** — MCP server lifecycle, tool registration, progress reporting, and logging
 2. **LanceDB columnar index** — schema-validated per-photo store at `.ouestcharlie/index.lance/`, upsert/delete operations, thumbnail location columns; partition-level stats computed by DuckDB aggregate queries over the index
-3. **Manifest read-edit with consistency** — `summary.json` atomic read-modify-write with optimistic concurrency
+3. **Summary marker with consistency** — `summary.json` atomic read-modify-write with optimistic concurrency
 4. **XMP read-edit with consistency** — sidecar read-modify-write with optimistic concurrency and field-level semantics
 5. **Image processing** — thumbnail AVIF grid assembly and on-demand JPEG preview generation, delegated to `ouestcharlie-imageproc`
 
 Agents import the toolkit and focus on their domain logic (indexing, enrichment, search). The toolkit handles protocol, storage, and consistency concerns.
 
-V1 scope: local filesystem backend only. The `backend.py` abstraction enables adding cloud backends (S3, GCS, ADLS Gen2) later without changing agent code.
+V1 scope: local filesystem backend only. The `storage.Backend` abstraction enables adding cloud backends (S3, GCS, ADLS Gen2) later without changing agent code.
+
+## Package Layout
+
+Seven sub-packages, lowest layer first:
+
+| Sub-package | Content |
+|---|---|
+| `storage` | `Backend` protocol, `LocalBackend`, `CloudMountedBackend`, `.ouestcharlie/` paths (`layout.py`), `content_hash` |
+| `model` | `PHOTO_FIELDS`, tag paths, `PhotoEntry`, `XmpSidecar`, summaries, thumbnail grid layout, `SCHEMA_VERSION` |
+| `media` | `Photo` (`photo/`: EXIF, HEIF, AVIF/JXL/RAW display size), `Video` (`video/`: MP4/MOV boxes, capture time), file suffixes |
+| `xmp` | sidecar naming, namespaces, value conversions, `parse_xmp`, `serialize_xmp`, `XmpStore` |
+| `index` | Lance schema and row conversion, migrations, `FtsFilter` / `sql_quote`, `LanceIndex`, `compute_summary`, `SummaryStore` |
+| `renditions` | AVIF thumbnail grids and JPEG previews |
+| `agent` | `AgentBase`, `PerPhotoContext`, `setup_logging` |
+
+Rules, checked by `tests/test_architecture.py`:
+- A module imports only from its own sub-package or a lower one. `xmp` sits above `media` because `XmpStore.read_or_create_from_picture` extracts metadata with `Photo` and `Video`; `media` never imports `xmp`.
+- Inside the toolkit, modules import leaf modules (`ouestcharlie_toolkit.index.query`), never a sub-package `__init__`, which only re-exports for agents. This keeps package initialization free of cycles.
+- Only `renditions` imports `ouestcharlie_imageproc`. Importing `index` or `xmp` does not load it.
+- Imports are absolute (ruff `TID252`, `ban-relative-imports = "all"`).
+
+Agents import from a sub-package `__init__` and never use a `_private` name. The package root re-exports the most used names.
 
 ## Backend Abstraction
 
@@ -26,7 +48,7 @@ V1 scope: local filesystem backend only. The `backend.py` abstraction enables ad
 
 **Cloud-Mounted Backend**: overrides `read()` with an exponential-backoff retry loop — Windows CF API may return partial data for dehydrated placeholder files.
 
-## LanceDB Columnar Index (`lance_index.py`)
+## LanceDB Columnar Index (`index/`)
 
 The LanceDB index replaces per-partition `manifest.json` files as the primary per-photo metadata store (schema version 3+). It is a single columnar table containing one row per photo across all partitions.
 
@@ -42,7 +64,7 @@ GPS and thumbnail columns use **flat nullable columns** rather than structs. Lan
 
 `date_taken` is stored timezone-naive. All comparisons must strip timezone before comparing.
 
-`tags` holds the photo's leaf tag paths (`Places|Europe|France`, see [Hierarchical tags](#hierarchical-tags)). `tag_terms` is derived from it at write time: every ancestor path plus every level name, folded with `tags.fold` (NFC, then lowercase: `places`, `places|europe`, `places|europe|france`, `europe`, `france`). Tag filters fold the value the same way, so matching ignores case while the predicate stays an exact match the index can serve; lowercasing `tag_terms` at query time would bypass the index. `tags` keeps the user's spelling. Tag filters are `array_has(tag_terms, …)`, so one exact-match predicate serves both a subtree query (`Places|Europe`) and a name-at-any-level query (`France`). A `LABEL_LIST` scalar index backs it; only the writer (`open(create_if_missing=True)`) creates it, and `maintain()` brings rows written since then under it. A semi-structured JSON tree column was rejected: the any-level query has no simple JSON-path form, and JSON columns get no scalar index.
+`tags` holds the photo's leaf tag paths (`Places|Europe|France`, see [Hierarchical tags](#hierarchical-tags)). `tag_terms` is derived from it at write time: every ancestor path plus every level name, folded with `model.tags.fold` (NFC, then lowercase: `places`, `places|europe`, `places|europe|france`, `europe`, `france`). Tag filters fold the value the same way, so matching ignores case while the predicate stays an exact match the index can serve; lowercasing `tag_terms` at query time would bypass the index. `tags` keeps the user's spelling. Tag filters are `array_has(tag_terms, …)`, so one exact-match predicate serves both a subtree query (`Places|Europe`) and a name-at-any-level query (`France`). A `LABEL_LIST` scalar index backs it; only the writer (`open(create_if_missing=True)`) creates it, and `maintain()` brings rows written since then under it. A semi-structured JSON tree column was rejected: the any-level query has no simple JSON-path form, and JSON columns get no scalar index.
 
 ### `search_where` pagination
 
@@ -52,11 +74,11 @@ Two queries are issued: a lightweight `select(["tags"])` scan for total count an
 
 DuckDB runs in `asyncio.to_thread` because it is CPU-bound sync. The Lance query before it uses native async — no `to_thread` wrapping needed there.
 
-Tag facets are counted per hierarchy node: each path in `tags` contributes all its ancestors, and a photo counts once per node even when several of its paths share it (`COUNT(DISTINCT rid)`). The `tag_facets` keys are therefore paths, ancestors included; clients rebuild the tree by splitting on `|`. Spellings that differ only by case are one node, grouped by `lower(nfc_normalize(node))` (the SQL twin of `tags.fold`, which is why `fold` uses `lower()` rather than `casefold()`) and shown with the most frequent spelling, ties broken by sort order. Keys are rebuilt top down from the parent's key (`_tag_facet_counts`), so a child never disagrees with its parent's spelling.
+Tag facets are counted per hierarchy node: each path in `tags` contributes all its ancestors, and a photo counts once per node even when several of its paths share it (`COUNT(DISTINCT rid)`). The `tag_facets` keys are therefore paths, ancestors included; clients rebuild the tree by splitting on `|`. Spellings that differ only by case are one node, grouped by `lower(nfc_normalize(node))` (the SQL twin of `model.tags.fold`, which is why `fold` uses `lower()` rather than `casefold()`) and shown with the most frequent spelling, ties broken by sort order. Keys are rebuilt top down from the parent's key (`_tag_facet_counts`), so a child never disagrees with its parent's spelling.
 
-## Manifest Consistency
+## `summary.json` Consistency
 
-Unknown fields in `summary.json` are captured in `_extra: dict` and round-tripped through serialization, following HLD schema evolution rules. Agents must never drop fields they don't recognize.
+`SummaryStore` (formerly `ManifestStore`) reads and writes `summary.json`. Unknown fields in `summary.json` are captured in `_extra: dict` and round-tripped through serialization, following HLD schema evolution rules. Agents must never drop fields they don't recognize.
 
 ## XMP Consistency
 
@@ -72,15 +94,15 @@ Unknown fields in `summary.json` are captured in `_extra: dict` and round-trippe
 
 darktable uses the same sidecar file. It reads it at import, then rewrites it from its database at every sync: it keeps the `ouestcharlie:*` attributes and other unknown fields, but writes dates EXIF-style without offset and adds `darktable:history` and its other data, which OuEstCharlie keeps in `_extra`.
 
-**Simple properties in both forms**: XMP allows a simple property as an attribute of `rdf:Description` (Exiv2/darktable's form, e.g. `exif:GPSLatitude="48,51.396000N"`) or as a child element. `parse_xmp` reads every known simple property (`_SIMPLE_PROPS`) in both forms, and both forms are known, so neither lands in `_extra` and no duplicate is written. `serialize_xmp` keeps its own form (attributes, GPS as child elements).
+**Simple properties in both forms**: XMP allows a simple property as an attribute of `rdf:Description` (Exiv2/darktable's form, e.g. `exif:GPSLatitude="48,51.396000N"`) or as a child element. `parse_xmp` reads every known simple property (`xmp/namespaces.py`, `_SIMPLE_PROPS`) in both forms, and both forms are known, so neither lands in `_extra` and no duplicate is written. `serialize_xmp` keeps its own form (attributes, GPS as child elements).
 
-**Dates**: `_parse_iso_datetime` accepts ISO 8601, darktable's EXIF style `YYYY:MM:DD HH:MM:SS[.fraction]`, and XMP partial dates (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`, rounded to the start of the period). Without an offset the result is naive. `XmpStore.read_or_create_from_picture` then recovers the offset of an existing photo sidecar from the photo's EXIF (`OffsetTimeOriginal`/`OffsetTime`, via `Photo.exif_datetime()`), only when the EXIF local date-time equals the sidecar's to the second; otherwise the sidecar's date, which the user may have corrected, stays naive. The offset is never written back: it is recovered again at each index (only sidecars with a naive date pay the EXIF read), and darktable would strip it at its next sync anyway. `XmpStore.read()`, used by `read_modify_write`, does not recover it.
+**Dates**: `xmp.values.parse_iso_datetime` accepts ISO 8601, darktable's EXIF style `YYYY:MM:DD HH:MM:SS[.fraction]`, and XMP partial dates (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`, rounded to the start of the period). Without an offset the result is naive. `XmpStore.read_or_create_from_picture` then recovers the offset of an existing photo sidecar from the photo's EXIF (`OffsetTimeOriginal`/`OffsetTime`, via `Photo.exif_datetime()`), only when the EXIF local date-time equals the sidecar's to the second; otherwise the sidecar's date, which the user may have corrected, stays naive. The offset is never written back: it is recovered again at each index (only sidecars with a naive date pay the EXIF read), and darktable would strip it at its next sync anyway. `XmpStore.read()`, used by `read_modify_write`, does not recover it.
 
-**XMP Basic namespace**: `xmp:Rating` is in `http://ns.adobe.com/xap/1.0/`, where darktable, Lightroom and digiKam read it. Before OEC-63 OuEstCharlie wrote it in the wrong `http://ns.adobe.com/xmp/1.0/` (`_NS_XMP_LEGACY`): that one is read as a fallback and dropped on write, so existing sidecars switch namespace at their next write. darktable's default rating of 1 at import is read as a real rating.
+**XMP Basic namespace**: `xmp:Rating` is in `http://ns.adobe.com/xap/1.0/`, where darktable, Lightroom and digiKam read it. Before OEC-63 OuEstCharlie wrote it in the wrong `http://ns.adobe.com/xmp/1.0/` (`NS_XMP_LEGACY`): that one is read as a fallback and dropped on write, so existing sidecars switch namespace at their next write. darktable's default rating of 1 at import is read as a real rating.
 
 ### Hierarchical tags
 
-`tags.py` holds the path helpers. A tag is a `|`-separated path (darktable/Lightroom convention); a flat tag is a one-level path. `XmpSidecar.tags` holds the user's leaf paths: an ancestor also present as its own entry is implied and dropped. Paths are normalized on read (levels trimmed, empty levels dropped, duplicates removed). Stored paths keep their case; search, facets and excluded tag prefixes ignore it.
+`model/tags.py` holds the path helpers. A tag is a `|`-separated path (darktable/Lightroom convention); a flat tag is a one-level path. `XmpSidecar.tags` holds the user's leaf paths: an ancestor also present as its own entry is implied and dropped. Paths are normalized on read (levels trimmed, empty levels dropped, duplicates removed). Stored paths keep their case; search, facets and excluded tag prefixes ignore it.
 
 **Read** (`parse_xmp`): `lr:hierarchicalSubject` takes precedence, as in darktable, which reads tags only from it when it exists. A `dc:subject` term that is not a level of any hierarchical path was added by a `dc:subject`-only tool and is kept as a one-level path; the other `dc:subject` terms are just the flattened levels. Without `lr:hierarchicalSubject`, each `dc:subject` term is read as a path. `rdf:Bag` and `rdf:Seq` are both accepted.
 

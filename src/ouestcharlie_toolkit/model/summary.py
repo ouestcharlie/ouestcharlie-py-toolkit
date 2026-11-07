@@ -26,7 +26,7 @@ class ManifestSummary:
     e.g. ``summary.date["min"]``, ``summary.rating["max"]``.
 
     Adding a new summarisable field requires only a ``FieldDef`` entry in
-    ``fields.py`` — no changes needed here.
+    ``model/fields.py`` — no changes needed here.
     """
 
     def __init__(
@@ -64,7 +64,7 @@ class RootSummary:
     indexing session. Its only purpose is letting readers (Wally) detect an
     unindexed library or a stale schema version without opening the LanceDB
     index. Per-partition and library-wide statistics are computed at query
-    time instead (see ``compute_summary`` in ``partition_summary.py``).
+    time instead (see ``compute_summary`` in ``index/partition_summary.py``).
     """
 
     schema_version: int
