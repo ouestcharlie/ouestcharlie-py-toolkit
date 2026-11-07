@@ -7,11 +7,12 @@ import logging
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+from ouestcharlie_toolkit.media.photo import Photo
+from ouestcharlie_toolkit.media.suffixes import VIDEO_SUFFIXES
+from ouestcharlie_toolkit.media.video import Video
 from ouestcharlie_toolkit.model.entries import XmpSidecar
 from ouestcharlie_toolkit.model.tags import DEFAULT_EXCLUDED_TAG_PREFIXES
-from ouestcharlie_toolkit.photo import Photo
 from ouestcharlie_toolkit.storage.backend import Backend, VersionConflictError, VersionToken
-from ouestcharlie_toolkit.video import VIDEO_SUFFIXES, Video
 from ouestcharlie_toolkit.xmp.parse import parse_xmp, split_excluded
 from ouestcharlie_toolkit.xmp.paths import sidecar_candidates, xmp_path_for
 from ouestcharlie_toolkit.xmp.serialize import serialize_xmp

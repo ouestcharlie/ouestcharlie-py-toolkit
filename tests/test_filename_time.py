@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from ouestcharlie_toolkit.filename_time import date_from_filename, datetime_from_filename
+from ouestcharlie_toolkit.media.filename_time import date_from_filename, datetime_from_filename
 
 
 def test_datetime_from_filename():

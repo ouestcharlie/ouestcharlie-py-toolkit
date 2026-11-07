@@ -14,15 +14,14 @@ from PIL import Image as PILImage
 from PIL.TiffImagePlugin import IFDRational
 
 from ouestcharlie_toolkit import PHOTO_SUFFIXES, VIDEO_SUFFIXES, Photo
-from ouestcharlie_toolkit.model.entries import XmpSidecar
-from ouestcharlie_toolkit.photo import (
+from ouestcharlie_toolkit.media.photo.dimensions import _jxl_display_size, raw_size
+from ouestcharlie_toolkit.media.photo.exif import (
     _decode_undefined_ascii,
-    _jxl_display_size,
-    _map_exif_extra,
-    _parse_exif_datetime,
-    _parse_exif_gps,
-    _raw_size,
+    map_exif_extra,
+    parse_exif_datetime,
+    parse_exif_gps,
 )
+from ouestcharlie_toolkit.model.entries import XmpSidecar
 from ouestcharlie_toolkit.storage.local import LocalBackend
 from ouestcharlie_toolkit.xmp import parse_xmp
 from ouestcharlie_toolkit.xmp.values import parse_iso_datetime
@@ -531,7 +530,7 @@ async def test_extract_exif_heic_offset_time_not_swapped():
 @pytest.mark.asyncio
 async def test_extract_exif_heic_description_and_keywords():
     """ImageDescription/XPKeywords/XPSubject are read directly by extract_exif(), not
-    through _map_exif_extra — a field missing from _HEIF_TAG_MAP would silently drop
+    through map_exif_extra — a field missing from _HEIF_TAG_MAP would silently drop
     description/tags for every HEIC photo."""
     xp_keywords = "beach;sunset;".encode("utf-16-le") + b"\x00\x00"
     heic_bytes = _make_heic_bytes(
@@ -694,20 +693,20 @@ async def test_extract_exif_dimensions_pil_fallback_keeps_stored_orientation():
 # Logging behaviour in EXIF helpers
 # ---------------------------------------------------------------------------
 
-_PHOTO_LOGGER = "ouestcharlie_toolkit.photo"
+_PHOTO_LOGGER = "ouestcharlie_toolkit.media.photo"
 
 
 def test_parse_exif_datetime_zero_sentinel_returns_none():
     """'0000:00:00 00:00:00' is written by cameras with no RTC; must return None silently."""
-    result = _parse_exif_datetime({"Exif.Photo.DateTimeOriginal": "0000:00:00 00:00:00"})
+    result = parse_exif_datetime({"Exif.Photo.DateTimeOriginal": "0000:00:00 00:00:00"})
     assert result is None
 
 
 def test_parse_exif_datetime_invalid_logs_debug(caplog):
-    """_parse_exif_datetime with an unparseable string emits a DEBUG message."""
+    """parse_exif_datetime with an unparseable string emits a DEBUG message."""
     bad_exif = {"Exif.Photo.DateTimeOriginal": "not a date"}
     with caplog.at_level(logging.DEBUG, logger=_PHOTO_LOGGER):
-        result = _parse_exif_datetime(bad_exif)
+        result = parse_exif_datetime(bad_exif)
     assert result is None
     assert any("Could not parse EXIF datetime" in msg for msg in caplog.messages)
     assert any(r.levelno == logging.DEBUG for r in caplog.records)
@@ -725,7 +724,7 @@ def test_map_exif_extra_hex_local_name_is_prefixed():
     """Unknown EXIF tags with hex IDs (e.g. 0xea1d) are prefixed with 'proprietary_'.
 
     pyexiv2 uses hex tag IDs for tags it cannot map to a named field.  These
-    are not valid XML NCNames (cannot start with a digit), so _map_exif_extra
+    are not valid XML NCNames (cannot start with a digit), so map_exif_extra
     must rename them to avoid producing unserializable XMP attributes.
     """
     exif = {
@@ -733,7 +732,7 @@ def test_map_exif_extra_hex_local_name_is_prefixed():
         "Exif.Image.0xc6d2": "1 2 3",  # unknown tiff tag — hex id
         "Exif.Photo.Make": "Apple",  # normal key — unchanged
     }
-    extra = _map_exif_extra(exif)
+    extra = map_exif_extra(exif)
 
     exif_ns = "http://ns.adobe.com/exif/1.0/"
     tiff_ns = "http://ns.adobe.com/tiff/1.0/"
@@ -748,7 +747,7 @@ def test_map_exif_extra_hex_local_name_is_prefixed():
 
 
 def test_parse_exif_gps_invalid_logs_debug(caplog):
-    """_parse_exif_gps with malformed rational strings emits a DEBUG message."""
+    """parse_exif_gps with malformed rational strings emits a DEBUG message."""
     bad_exif = {
         "Exif.GPSInfo.GPSLatitudeRef": "N",
         "Exif.GPSInfo.GPSLongitudeRef": "E",
@@ -756,7 +755,7 @@ def test_parse_exif_gps_invalid_logs_debug(caplog):
         "Exif.GPSInfo.GPSLongitude": "2/1",
     }
     with caplog.at_level(logging.DEBUG, logger=_PHOTO_LOGGER):
-        result = _parse_exif_gps(bad_exif)
+        result = parse_exif_gps(bad_exif)
     assert result is None
     assert any("Could not parse EXIF GPS" in msg for msg in caplog.messages)
 
@@ -855,14 +854,14 @@ class _FakeRawImage:
 
 def test_raw_size_prefers_default_crop_size() -> None:
     exif = {"Exif.SubImage1.DefaultCropSize": "3684/1 2758/1"}
-    assert _raw_size(_FakeRawImage(3700, 2774), exif) == (3684, 2758)
+    assert raw_size(_FakeRawImage(3700, 2774), exif) == (3684, 2758)
 
 
 def test_raw_size_ignores_preview_dimension_tags() -> None:
     """NEF IFD0 holds a 160x120 thumbnail: libexiv2's main image size wins."""
     exif = {"Exif.Image.ImageWidth": "160", "Exif.Image.ImageLength": "120"}
-    assert _raw_size(_FakeRawImage(4548, 3030), exif) == (4548, 3030)
+    assert raw_size(_FakeRawImage(4548, 3030), exif) == (4548, 3030)
 
 
 def test_raw_size_unknown_returns_none() -> None:
-    assert _raw_size(_FakeRawImage(0, 0), {"Exif.Image.DefaultCropSize": "bad"}) is None
+    assert raw_size(_FakeRawImage(0, 0), {"Exif.Image.DefaultCropSize": "bad"}) is None

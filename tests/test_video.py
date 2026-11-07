@@ -10,18 +10,16 @@ import pytest
 from PIL import Image as PILImage
 
 from ouestcharlie_toolkit import VIDEO_SUFFIXES, Video, video_identity_hash
-from ouestcharlie_toolkit.storage.local import LocalBackend
-from ouestcharlie_toolkit.video import (
-    _container_tag,
-    _display_rotation,
-    _matrix_rotation,
+from ouestcharlie_toolkit.media.video.mp4 import _matrix_rotation, display_rotation, read_moov_atom
+from ouestcharlie_toolkit.media.video.timing import (
     _offset_from_filename,
     _parse_creation_time,
-    _parse_iso6709,
-    _read_moov_atom,
-    _resolve_video_time,
     _timezone_for,
+    container_tag,
+    parse_iso6709,
+    resolve_video_time,
 )
+from ouestcharlie_toolkit.storage.local import LocalBackend
 
 
 def _write_sample_video(
@@ -137,7 +135,7 @@ def test_read_moov_atom_returns_moov_bytes():
     with tempfile.TemporaryDirectory() as tmpdir:
         local = Path(tmpdir) / "clip.mp4"
         _write_sample_video(local)
-        moov = _read_moov_atom(local)
+        moov = read_moov_atom(local)
     # A moov atom's bytes 4:8 spell "moov".
     assert moov[4:8] == b"moov"
     assert len(moov) >= 8
@@ -148,7 +146,7 @@ def test_read_moov_atom_missing_raises():
         bogus = Path(tmpdir) / "bogus.mp4"
         bogus.write_bytes(b"\x00\x00\x00\x08ftyp")  # one atom, no moov
         with pytest.raises(ValueError, match="No moov atom"):
-            _read_moov_atom(bogus)
+            read_moov_atom(bogus)
 
 
 def test_identity_changes_with_cover_frame():
@@ -165,10 +163,10 @@ def test_identity_changes_with_cover_frame():
 
 
 def test_parse_iso6709():
-    assert _parse_iso6709("+37.7858-122.4064+010.000/") == (37.7858, -122.4064)
-    assert _parse_iso6709("") is None
-    assert _parse_iso6709(None) is None
-    assert _parse_iso6709("garbage") is None
+    assert parse_iso6709("+37.7858-122.4064+010.000/") == (37.7858, -122.4064)
+    assert parse_iso6709("") is None
+    assert parse_iso6709(None) is None
+    assert parse_iso6709("garbage") is None
 
 
 def test_parse_creation_time():
@@ -181,8 +179,8 @@ def test_parse_creation_time():
 
 def test_container_tag_first_non_empty():
     meta = {"com.apple.quicktime.make": " Apple ", "make": "Other"}
-    assert _container_tag(meta, "com.apple.quicktime.make", "make") == "Apple"
-    assert _container_tag({"make": ""}, "com.apple.quicktime.make", "make") is None
+    assert container_tag(meta, "com.apple.quicktime.make", "make") == "Apple"
+    assert container_tag({"make": ""}, "com.apple.quicktime.make", "make") is None
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +202,7 @@ def test_resolve_video_time_apple_creationdate_preferred():
         "com.apple.quicktime.creationdate": "2020-05-03T20:00:00+0200",
         "creation_time": "2020-05-03T18:00:00.000000Z",
     }
-    dt = _resolve_video_time(meta, gps=None)
+    dt = resolve_video_time(meta, gps=None)
     assert dt.replace(tzinfo=None) == datetime(2020, 5, 3, 20, 0, 0)  # local wall-clock
     assert dt.utcoffset().total_seconds() == 2 * 3600
     assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2020, 5, 3, 18, 0, 0)
@@ -213,7 +211,7 @@ def test_resolve_video_time_apple_creationdate_preferred():
 def test_resolve_video_time_gps_derived_offset():
     # UTC creation_time + Paris location -> +02:00 in summer.
     meta = {"creation_time": "2020-07-15T18:00:00.000000Z"}
-    dt = _resolve_video_time(meta, gps=(48.8566, 2.3522))
+    dt = resolve_video_time(meta, gps=(48.8566, 2.3522))
     assert dt.utcoffset().total_seconds() == 2 * 3600
     assert dt.replace(tzinfo=None) == datetime(2020, 7, 15, 20, 0, 0)  # local wall-clock
     assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2020, 7, 15, 18, 0, 0)
@@ -226,7 +224,7 @@ def test_resolve_video_time_samsung_offset_tag():
         "creation_time": "2026-01-11T11:15:45.000000Z",
         "com.samsung.android.utc_offset": "+0100",
     }
-    dt = _resolve_video_time(meta, gps=None)
+    dt = resolve_video_time(meta, gps=None)
     assert dt.utcoffset().total_seconds() == 3600
     assert dt.replace(tzinfo=None) == datetime(2026, 1, 11, 12, 15, 45)  # local wall-clock
     assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2026, 1, 11, 11, 15, 45)
@@ -255,7 +253,7 @@ def test_offset_from_filename_rejects_untrustworthy():
 def test_resolve_video_time_filename_offset():
     # No Apple tag, no offset tag, no GPS — but the filename carries local time.
     meta = {"creation_time": "2026-01-11T11:15:45.000000Z"}
-    dt = _resolve_video_time(meta, gps=None, filename="20260111_121541.mp4")
+    dt = resolve_video_time(meta, gps=None, filename="20260111_121541.mp4")
     assert dt.utcoffset().total_seconds() == 3600
     assert dt.replace(tzinfo=None) == datetime(2026, 1, 11, 12, 15, 45)  # local wall-clock
     assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2026, 1, 11, 11, 15, 45)
@@ -267,46 +265,46 @@ def test_resolve_video_time_vendor_tag_beats_filename():
         "creation_time": "2026-01-11T11:15:45.000000Z",
         "com.samsung.android.utc_offset": "+0100",
     }
-    dt = _resolve_video_time(meta, gps=None, filename="20260111_131541.mp4")  # name says +02:00
+    dt = resolve_video_time(meta, gps=None, filename="20260111_131541.mp4")  # name says +02:00
     assert dt.utcoffset().total_seconds() == 3600  # tag (+01:00) wins
 
 
 def test_resolve_video_time_filename_only_naive():
     # Re-encodes (e.g. Google Photos) strip creation_time but keep the local
     # wall-clock in the name: naive local date_taken, offset unknown.
-    dt = _resolve_video_time({"encoder": "Google"}, gps=None, filename="VID_20220701_123033.mp4")
+    dt = resolve_video_time({"encoder": "Google"}, gps=None, filename="VID_20220701_123033.mp4")
     assert dt.tzinfo is None
     assert dt == datetime(2022, 7, 1, 12, 30, 33)
 
 
 def test_resolve_video_time_date_only_filename():
     # No creation_time, name has a date but no time -> midnight local, offset unknown.
-    dt = _resolve_video_time({"encoder": "Google"}, gps=None, filename="VID-20250317-WA0009.mp4")
+    dt = resolve_video_time({"encoder": "Google"}, gps=None, filename="VID-20250317-WA0009.mp4")
     assert dt.tzinfo is None
     assert dt == datetime(2025, 3, 17, 0, 0, 0)
 
 
 def test_resolve_video_time_none_without_creation_or_name():
-    assert _resolve_video_time({"encoder": "Google"}, gps=None, filename="clip.mp4") is None
+    assert resolve_video_time({"encoder": "Google"}, gps=None, filename="clip.mp4") is None
 
 
 def test_resolve_video_time_fallback_keeps_utc():
     # No Apple tag, no offset tag, no GPS: creation_time is UTC by spec, so the
     # timezone is known (UTC) and kept — even though the true local offset isn't.
     meta = {"creation_time": "2020-07-15T18:00:00.000000Z"}
-    dt = _resolve_video_time(meta, gps=None)
+    dt = resolve_video_time(meta, gps=None)
     assert dt.utcoffset().total_seconds() == 0  # tz-aware UTC, not naive
     assert dt.astimezone(UTC).replace(tzinfo=None) == datetime(2020, 7, 15, 18, 0, 0)
 
 
 def test_resolve_video_time_none_when_no_timestamp():
-    assert _resolve_video_time({}, gps=None) is None
+    assert resolve_video_time({}, gps=None) is None
 
 
 def test_resolve_video_time_france_summer_not_shifted_to_18():
     # Regression: a 20:00 local French clip must not land as 18:00 in date_taken.
     meta = {"creation_time": "2020-07-15T18:00:00.000000Z"}
-    dt = _resolve_video_time(meta, gps=(48.8566, 2.3522))
+    dt = resolve_video_time(meta, gps=(48.8566, 2.3522))
     assert dt.replace(tzinfo=None).hour == 20
 
 
@@ -355,7 +353,7 @@ def _moov(rotation: int, handler: bytes = b"vide") -> bytes:
 
 def test_display_rotation_all_orientations():
     for deg in (0, 90, 180, 270):
-        assert _display_rotation(_moov(deg)) == deg
+        assert display_rotation(_moov(deg)) == deg
 
 
 def test_matrix_rotation_unit_matrices():
@@ -393,11 +391,11 @@ def test_matrix_rotation_snaps_to_nearest_quarter_turn():
 
 def test_display_rotation_ignores_non_video_track():
     # A rotated audio track must not be reported as the video rotation.
-    assert _display_rotation(_moov(90, handler=b"soun")) == 0
+    assert display_rotation(_moov(90, handler=b"soun")) == 0
 
 
 def test_display_rotation_absent_is_zero():
-    assert _display_rotation(b"\x00\x00\x00\x08moov") == 0
+    assert display_rotation(b"\x00\x00\x00\x08moov") == 0
 
 
 @pytest.mark.asyncio
