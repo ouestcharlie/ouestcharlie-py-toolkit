@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from ouestcharlie_toolkit.server import AgentBase
+from ouestcharlie_toolkit.agent import AgentBase
 from ouestcharlie_toolkit.storage.backend import ConfigurationError
 
 

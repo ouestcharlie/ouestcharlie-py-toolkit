@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-from ouestcharlie_toolkit.logging import _default_log_dir, setup_logging
+from ouestcharlie_toolkit.agent import setup_logging
+from ouestcharlie_toolkit.agent.logging import _default_log_dir
 
 
 @pytest.fixture()
@@ -33,7 +34,7 @@ def clean_root_logger():
 
 def test_default_log_dir_darwin():
     with (
-        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Darwin"),
+        patch("ouestcharlie_toolkit.agent.logging.platform.system", return_value="Darwin"),
         patch.object(sys, "platform", "darwin"),
     ):
         assert _default_log_dir() == Path.home() / "Library" / "Logs" / "ouestcharlie"
@@ -41,7 +42,7 @@ def test_default_log_dir_darwin():
 
 def test_default_log_dir_linux():
     with (
-        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Linux"),
+        patch("ouestcharlie_toolkit.agent.logging.platform.system", return_value="Linux"),
         patch.object(sys, "platform", "linux"),
     ):
         assert _default_log_dir() == Path.home() / ".local" / "state" / "ouestcharlie"
@@ -50,7 +51,7 @@ def test_default_log_dir_linux():
 def test_default_log_dir_linux_with_xdg(monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", "/custom/state")
     with (
-        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Linux"),
+        patch("ouestcharlie_toolkit.agent.logging.platform.system", return_value="Linux"),
         patch.object(sys, "platform", "linux"),
     ):
         assert _default_log_dir() == Path("/custom/state/ouestcharlie")
@@ -59,7 +60,7 @@ def test_default_log_dir_linux_with_xdg(monkeypatch):
 def test_default_log_dir_windows(monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", "/win/appdata")
     with (
-        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Windows"),
+        patch("ouestcharlie_toolkit.agent.logging.platform.system", return_value="Windows"),
         patch.object(sys, "platform", "win32"),
     ):
         assert _default_log_dir() == Path("/win/appdata/ouestcharlie/logs")
@@ -74,7 +75,7 @@ def test_default_log_dir_android():
 def test_default_log_dir_shared_folder():
     """All agents share the same ouestcharlie log directory."""
     with (
-        patch("ouestcharlie_toolkit.logging.platform.system", return_value="Darwin"),
+        patch("ouestcharlie_toolkit.agent.logging.platform.system", return_value="Darwin"),
         patch.object(sys, "platform", "darwin"),
     ):
         assert _default_log_dir().name == "ouestcharlie"

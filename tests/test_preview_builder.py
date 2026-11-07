@@ -11,7 +11,8 @@ from PIL import Image
 
 from ouestcharlie_toolkit import Photo
 from ouestcharlie_toolkit.model.entries import PhotoEntry
-from ouestcharlie_toolkit.preview_builder import PREVIEW_JPEG_MAX_LONG_EDGE, generate_preview_jpeg
+from ouestcharlie_toolkit.renditions import generate_preview_jpeg
+from ouestcharlie_toolkit.renditions.previews import PREVIEW_JPEG_MAX_LONG_EDGE
 from ouestcharlie_toolkit.storage.layout import preview_jpeg_path
 from ouestcharlie_toolkit.storage.local import LocalBackend
 from tests.format_samples import SAMPLES, write_sample

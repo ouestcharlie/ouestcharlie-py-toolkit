@@ -12,16 +12,15 @@ from PIL import Image
 from ouestcharlie_toolkit import Photo
 from ouestcharlie_toolkit.model.entries import PhotoEntry
 from ouestcharlie_toolkit.model.thumbnails import ThumbnailChunk, ThumbnailGridLayout
-from ouestcharlie_toolkit.storage.hashing import content_hash as _content_hash
-from ouestcharlie_toolkit.storage.layout import METADATA_DIR, thumbnail_avif_path
-from ouestcharlie_toolkit.storage.local import LocalBackend
-from ouestcharlie_toolkit.thumbnail_builder import (
+from ouestcharlie_toolkit.renditions import (
     GRID_MAX_PHOTOS,
-    _call_image_proc,
-    _stage_photos,
     delete_partition_thumbnails,
     generate_partition_thumbnails,
 )
+from ouestcharlie_toolkit.renditions.thumbnails import _call_image_proc, _stage_photos
+from ouestcharlie_toolkit.storage.hashing import content_hash as _content_hash
+from ouestcharlie_toolkit.storage.layout import METADATA_DIR, thumbnail_avif_path
+from ouestcharlie_toolkit.storage.local import LocalBackend
 from tests.format_samples import SAMPLES, write_sample
 
 # ---------------------------------------------------------------------------
@@ -295,11 +294,11 @@ async def test_generate_partition_thumbnails_returns_chunks(tmp_path: Path) -> N
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
+            "ouestcharlie_toolkit.renditions.thumbnails._stage_photos",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._call_image_proc",
+            "ouestcharlie_toolkit.renditions.thumbnails._call_image_proc",
             new=AsyncMock(return_value=(fake_grid, b"FAKE_AVIF")),
         ),
     ):
@@ -322,11 +321,11 @@ async def test_generate_partition_thumbnails_writes_avif_to_backend(
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
+            "ouestcharlie_toolkit.renditions.thumbnails._stage_photos",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._call_image_proc",
+            "ouestcharlie_toolkit.renditions.thumbnails._call_image_proc",
             new=AsyncMock(return_value=(fake_grid, b"FAKE_AVIF")),
         ),
     ):
@@ -357,11 +356,11 @@ async def test_generate_partition_thumbnails_tiles_sorted_by_hash(
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
+            "ouestcharlie_toolkit.renditions.thumbnails._stage_photos",
             side_effect=capture_stage,
         ),
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._call_image_proc",
+            "ouestcharlie_toolkit.renditions.thumbnails._call_image_proc",
             new=AsyncMock(return_value=(fake_grid, b"FAKE")),
         ),
     ):
@@ -387,11 +386,11 @@ async def test_generate_partition_thumbnails_uses_tier_size(tmp_path: Path) -> N
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
+            "ouestcharlie_toolkit.renditions.thumbnails._stage_photos",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._call_image_proc",
+            "ouestcharlie_toolkit.renditions.thumbnails._call_image_proc",
             side_effect=capture_call,
         ),
     ):
@@ -419,11 +418,11 @@ async def test_generate_partition_thumbnails_photo_order_in_grid(tmp_path: Path)
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
+            "ouestcharlie_toolkit.renditions.thumbnails._stage_photos",
             new=AsyncMock(return_value=staged),
         ),
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._call_image_proc",
+            "ouestcharlie_toolkit.renditions.thumbnails._call_image_proc",
             side_effect=fake_call,
         ),
     ):
@@ -448,11 +447,11 @@ async def test_generate_partition_thumbnails_splits_into_chunks(tmp_path: Path) 
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
+            "ouestcharlie_toolkit.renditions.thumbnails._stage_photos",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._call_image_proc",
+            "ouestcharlie_toolkit.renditions.thumbnails._call_image_proc",
             side_effect=fake_call,
         ),
     ):
@@ -474,11 +473,11 @@ async def test_generate_partition_thumbnails_idempotent(tmp_path: Path) -> None:
 
     with (
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._stage_photos",
+            "ouestcharlie_toolkit.renditions.thumbnails._stage_photos",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "ouestcharlie_toolkit.thumbnail_builder._call_image_proc",
+            "ouestcharlie_toolkit.renditions.thumbnails._call_image_proc",
             new=AsyncMock(return_value=(fake_grid, b"FAKE_AVIF_IDEMPOTENT")),
         ),
     ):
