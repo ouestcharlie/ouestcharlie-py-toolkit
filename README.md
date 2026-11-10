@@ -144,7 +144,7 @@ export WOOF_BACKEND_CONFIG='{"type": "filesystem", "root": "/Users/alice/Photos"
 
 ## Architecture
 
-See [py_toolkit_LLD.md](py_toolkit_LLD.md) for the design and [agent_LLD_rationale.md](../ouestcharlie/agent/agent_LLD_rationale.md) for technology selection rationale.
+See [py_toolkit_LLD.md](py_toolkit_LLD.md) for the design.
 
 Key design principles:
 
@@ -159,7 +159,7 @@ Key design principles:
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 - [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25)
 - [pyexiv2](https://github.com/LeoHsiao1/pyexiv2)
-- [OuEstCharlie HLD](https://github.com/ouestcharlie/ouestcharlie/blob/master/HLD.md)
+- [OuEstCharlie HLD](https://github.com/ouestcharlie/ouestcharlie/blob/master/design/HLD.md)
 
 ## License
 

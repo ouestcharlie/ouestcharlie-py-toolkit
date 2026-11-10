@@ -1,6 +1,6 @@
 # Python Toolkit Low-Level Design
 
-This document details the shared Python toolkit used by all OuEstCharlie agents. For technology selection rationale, see [agent_LLD_rationale.md](../ouestcharlie/agent/agent_LLD_rationale.md). For MCP tool definitions, see [controller_api.json](../ouestcharlie/controller_api.json).
+This document details the shared Python toolkit used by all OuEstCharlie agents. For technology selection rationale, see [agent_LLD_rationale.md](https://github.com/ouestcharlie/ouestcharlie/blob/master/design/agent_LLD_rationale.md).
 
 ## Overview
 
@@ -120,5 +120,5 @@ darktable uses the same sidecar file. It reads it at import, then rewrites it fr
 - [MCP Specification (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25)
 - [pyexiv2](https://github.com/LeoHsiao1/pyexiv2) — EXIF/IPTC/XMP read-write
 - [XMP Specification (ISO 16684)](https://www.iso.org/standard/75163.html)
-- [HLD § Consistency Model](../../HLD.md) — optimistic concurrency design
-- [image-proc LLD](../ouestcharlie-imageproc/imageproc_LLD.md) — Rust coprocessor protocol
+- [HLD § Consistency Model](https://github.com/ouestcharlie/ouestcharlie/blob/master/design/HLD.md#consistency-model) — optimistic concurrency design
+- [image-proc LLD](https://github.com/ouestcharlie/ouestcharlie-imageproc/blob/main/imageproc_LLD.md) — Rust coprocessor protocol
